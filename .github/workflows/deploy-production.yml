@@ -1,0 +1,90 @@
+name: Deploy to Production
+
+# Production deployment workflow
+# Strategy: Deploy promoted version-tagged images
+# Philosophy: Only release-tagged artifacts reach production
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag to deploy (e.g., v1.2.3)"
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Set lowercase image prefix
+        id: image-prefix
+        run: echo "PREFIX=${{ env.REGISTRY }}/${GITHUB_REPOSITORY_OWNER,,}/aptivo-final-v2" >> $GITHUB_OUTPUT
+
+      - name: Determine version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION=${{ github.event.inputs.version }}
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+
+          # Check for pre-release
+          if [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+-.+ ]]; then
+            echo "⚠️  Warning: Deploying pre-release version $VERSION to production"
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Deploying version: $VERSION"
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify image exists in registry
+        run: |
+          VERSION=${{ steps.version.outputs.version }}
+          docker manifest inspect ${{ steps.image-prefix.outputs.PREFIX }}:$VERSION
+          echo "✅ Image verified: $VERSION"
+
+      - name: Deploy to Production (DigitalOcean)
+        uses: digitalocean/app_action/deploy@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+          app_name: aptivo-final-v2-Production
+          print_deploy_logs: true
+        env:
+          IMAGE_TAG_WEB_SERVICE: ${{ steps.version.outputs.version }}
+
+      - name: Summary
+        run: |
+          echo "## Production Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version:** \`${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`${{ steps.image-prefix.outputs.PREFIX }}:${{ steps.version.outputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Time:** $(date -u)" >> $GITHUB_STEP_SUMMARY
+
+# ═══════════════════════════════════════════════════════════
+# Deployment Flow:
+# 1. release-please creates version tag → triggers this workflow
+# 2. publish-docker.yml promotes SHA-tagged image to version tag
+# 3. This workflow deploys the version-tagged image
+#
+# Rollback:
+# - Manual: Actions → Deploy to Production → Enter previous version
+# ═══════════════════════════════════════════════════════════

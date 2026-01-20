@@ -1,0 +1,52 @@
+{
+  "version": 1,
+  "projectName": "aptivo-final-v2",
+  "preset": "docker-app",
+  "packageManager": "pnpm",
+  "releaseStrategy": "release-please",
+  "nodeVersion": "22",
+  "isMonorepo": false,
+  "docker": {
+    "registry": "ghcr",
+    "imageName": "aptivo-final-v2",
+    "dockerfilePath": "./Dockerfile",
+    "buildTargets": []
+  },
+  "deployEnvironments": [
+    {
+      "name": "staging",
+      "enabled": true,
+      "platform": "digitalocean",
+      "digitalocean": {
+        "appName": "aptivo-final-v2-Staging"
+      }
+    },
+    {
+      "name": "preview",
+      "enabled": true,
+      "platform": "digitalocean",
+      "digitalocean": {
+        "appName": "aptivo-final-v2-Preview"
+      }
+    },
+    {
+      "name": "production",
+      "enabled": true,
+      "platform": "digitalocean",
+      "digitalocean": {
+        "appName": "aptivo-final-v2-Production"
+      }
+    }
+  ],
+  "workflows": [
+    "pr-validation",
+    "build",
+    "release-please",
+    "docker",
+    "staging",
+    "preview",
+    "production"
+  ],
+  "npm": null,
+  "createdAt": "2026-01-19"
+}
