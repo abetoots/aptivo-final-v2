@@ -1,49 +1,37 @@
 ---
-title: Observability Architecture & Implementation
-service: Cross-cutting
-stack:
-  - OpenTelemetry
-  - Prometheus
-  - Grafana
-  - Jaeger
-  - Pino
-pattern:
-  - Distributed Tracing
-  - Metrics
-  - Structured Logging
-audience:
-  - Backend Dev
-  - DevOps
-  - SRE
+id: GUIDELINE-MKJP625C
+title: 5.d Observability Architecture & Implementation
 status: Draft
-id: UNKNOWN-MKJP625B
 version: 1.0.0
-owner: '@owner'
-last_updated: '2026-01-18'
+owner: "@owner"
+last_updated: "2026-01-18"
 ---
 
-# 5.e Observability Architecture
+# 5.d Observability Architecture
 
-*Outsourcing Digital Agency – Integrated Internal Systems Ecosystem*
+_Outsourcing Digital Agency – Integrated Internal Systems Ecosystem_
 
-*v2.0.1 – [January 15, 2026]*
+_v2.0.1 – [January 15, 2026]_
 
-*Aligned with: ADD v2.0.0, TSD v3.0.0, Coding Guidelines v3.0.0, Testing Strategies v2.0.0, Deployment Operations v2.0.0, Change Management v2.0.0*
+_Aligned with: ADD v2.0.0, TSD v3.0.0, Coding Guidelines v3.0.0, Testing Strategies v2.0.0, Deployment Operations v2.0.0, Change Management v2.0.0_
 
 ---
 
 ## 1. Introduction
 
 ### 1.1 Purpose
+
 This document defines the observability strategy for the Integrated Internal Systems Ecosystem. It establishes standards for the three pillars of observability—**logs**, **metrics**, and **traces**—using OpenTelemetry (OTel) as the unified collection framework.
 
 ### 1.2 Observability Goals
+
 1. **Detect issues** before users report them (proactive monitoring)
 2. **Diagnose problems** quickly with correlated telemetry (MTTR < 1 hour)
 3. **Validate deployments** automatically using metrics (P95 < 500ms)
 4. **Support risk monitoring** with real-time dashboards (Change Management v2.0.0)
 
 ### 1.3 Related Documents
+
 - **ADD v2.0.0** - Section 8: Observability Architecture requirements
 - **[specs/observability.md](04-specs/observability.md)** - Implementation checklist (quick reference)
 - **Coding Guidelines v3.0.0** - Section 6: Observability integration, ReaderResult wrapper
@@ -57,12 +45,12 @@ This document defines the observability strategy for the Integrated Internal Sys
 
 ### 2.1 Four Pillars of Observability
 
-| Pillar | Tool | Purpose | Backend |
-|--------|------|---------|---------|
-| **Logs** | Pino + Fluent Bit | Structured application logs with trace correlation | Loki |
-| **Metrics** | prom-client + OTel | Application and infrastructure metrics | Prometheus |
-| **Traces** | OpenTelemetry SDK | Distributed request tracing | Jaeger |
-| **Errors** | Sentry | Exception aggregation and alerting | Sentry Cloud |
+| Pillar      | Tool               | Purpose                                            | Backend      |
+| ----------- | ------------------ | -------------------------------------------------- | ------------ |
+| **Logs**    | Pino + Fluent Bit  | Structured application logs with trace correlation | Loki         |
+| **Metrics** | prom-client + OTel | Application and infrastructure metrics             | Prometheus   |
+| **Traces**  | OpenTelemetry SDK  | Distributed request tracing                        | Jaeger       |
+| **Errors**  | Sentry             | Exception aggregation and alerting                 | Sentry Cloud |
 
 ### 2.2 Architecture Diagram
 
@@ -125,6 +113,7 @@ spec:
 ```
 
 **Why Sidecars?**
+
 - Lower network latency for telemetry
 - Isolation: collector failure doesn't affect other pods
 - Simplified configuration per service
@@ -140,7 +129,13 @@ All services expose metrics via the Prometheus client library:
 
 ```typescript
 // lib/observability/metrics.ts
-import { Registry, Counter, Histogram, Gauge, collectDefaultMetrics } from 'prom-client';
+import {
+  Registry,
+  Counter,
+  Histogram,
+  Gauge,
+  collectDefaultMetrics,
+} from "prom-client";
 
 // create a registry for this service
 export const metricsRegistry = new Registry();
@@ -150,40 +145,40 @@ collectDefaultMetrics({ register: metricsRegistry });
 
 // HTTP request metrics
 export const httpRequestDuration = new Histogram({
-  name: 'http_request_duration_seconds',
-  help: 'Duration of HTTP requests in seconds',
-  labelNames: ['method', 'route', 'status_code'],
+  name: "http_request_duration_seconds",
+  help: "Duration of HTTP requests in seconds",
+  labelNames: ["method", "route", "status_code"],
   buckets: [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
   registers: [metricsRegistry],
 });
 
 export const httpRequestsTotal = new Counter({
-  name: 'http_requests_total',
-  help: 'Total number of HTTP requests',
-  labelNames: ['method', 'route', 'status_code'],
+  name: "http_requests_total",
+  help: "Total number of HTTP requests",
+  labelNames: ["method", "route", "status_code"],
   registers: [metricsRegistry],
 });
 
 // Business metrics
 export const candidatesCreatedTotal = new Counter({
-  name: 'aptivo_candidates_created_total',
-  help: 'Total number of candidates created',
-  labelNames: ['source', 'module'],
+  name: "aptivo_candidates_created_total",
+  help: "Total number of candidates created",
+  labelNames: ["source", "module"],
   registers: [metricsRegistry],
 });
 
 export const activeWorkflowsGauge = new Gauge({
-  name: 'aptivo_active_workflows',
-  help: 'Number of currently active workflows',
-  labelNames: ['workflow_type'],
+  name: "aptivo_active_workflows",
+  help: "Number of currently active workflows",
+  labelNames: ["workflow_type"],
   registers: [metricsRegistry],
 });
 
 // Result type error metrics (per Coding Guidelines v3.0.0)
 export const resultErrorsTotal = new Counter({
-  name: 'aptivo_result_errors_total',
-  help: 'Total Result.Err occurrences by error tag',
-  labelNames: ['operation', 'error_tag', 'module'],
+  name: "aptivo_result_errors_total",
+  help: "Total Result.Err occurrences by error tag",
+  labelNames: ["operation", "error_tag", "module"],
   registers: [metricsRegistry],
 });
 ```
@@ -194,14 +189,14 @@ Expose metrics at `/metrics` for Prometheus scraping:
 
 ```typescript
 // app/api/metrics/route.ts
-import { NextResponse } from 'next/server';
-import { metricsRegistry } from '@/lib/observability/metrics';
+import { NextResponse } from "next/server";
+import { metricsRegistry } from "@/lib/observability/metrics";
 
 export async function GET() {
   const metrics = await metricsRegistry.metrics();
   return new NextResponse(metrics, {
     headers: {
-      'Content-Type': metricsRegistry.contentType,
+      "Content-Type": metricsRegistry.contentType,
     },
   });
 }
@@ -211,12 +206,15 @@ export async function GET() {
 
 ```typescript
 // middleware/metrics.ts
-import { NextRequest, NextResponse } from 'next/server';
-import { httpRequestDuration, httpRequestsTotal } from '@/lib/observability/metrics';
+import { NextRequest, NextResponse } from "next/server";
+import {
+  httpRequestDuration,
+  httpRequestsTotal,
+} from "@/lib/observability/metrics";
 
 export async function metricsMiddleware(
   request: NextRequest,
-  handler: () => Promise<NextResponse>
+  handler: () => Promise<NextResponse>,
 ): Promise<NextResponse> {
   const start = performance.now();
   const route = request.nextUrl.pathname;
@@ -227,12 +225,15 @@ export async function metricsMiddleware(
     const duration = (performance.now() - start) / 1000;
     const statusCode = response.status.toString();
 
-    httpRequestDuration.observe({ method, route, status_code: statusCode }, duration);
+    httpRequestDuration.observe(
+      { method, route, status_code: statusCode },
+      duration,
+    );
     httpRequestsTotal.inc({ method, route, status_code: statusCode });
 
     return response;
   } catch (error) {
-    httpRequestsTotal.inc({ method, route, status_code: '500' });
+    httpRequestsTotal.inc({ method, route, status_code: "500" });
     throw error;
   }
 }
@@ -242,13 +243,13 @@ export async function metricsMiddleware(
 
 Per **Deployment Operations v2.0.0**, these metrics power alerts:
 
-| Metric | Type | Labels | Alert Threshold |
-|--------|------|--------|-----------------|
-| `http_request_duration_seconds` | Histogram | method, route, status_code | P95 > 500ms |
-| `http_requests_total` | Counter | method, route, status_code | 5xx rate > 1% |
-| `aptivo_result_errors_total` | Counter | operation, error_tag, module | New error type |
-| `pg_stat_activity_count` | Gauge | state | > 80% of max |
-| `nodejs_heap_size_used_bytes` | Gauge | - | > 85% of limit |
+| Metric                          | Type      | Labels                       | Alert Threshold |
+| ------------------------------- | --------- | ---------------------------- | --------------- |
+| `http_request_duration_seconds` | Histogram | method, route, status_code   | P95 > 500ms     |
+| `http_requests_total`           | Counter   | method, route, status_code   | 5xx rate > 1%   |
+| `aptivo_result_errors_total`    | Counter   | operation, error_tag, module | New error type  |
+| `pg_stat_activity_count`        | Gauge     | state                        | > 80% of max    |
+| `nodejs_heap_size_used_bytes`   | Gauge     | -                            | > 85% of limit  |
 
 ---
 
@@ -260,19 +261,19 @@ Use the shared Node.js SDK bootstrap pattern from **Coding Guidelines v3.0.0**:
 
 ```typescript
 // lib/observability/tracing.ts
-import { NodeSDK } from '@opentelemetry/sdk-node';
-import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
-import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
-import { Resource } from '@opentelemetry/resources';
-import { SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
-import { env } from '@/lib/env';
+import { NodeSDK } from "@opentelemetry/sdk-node";
+import { getNodeAutoInstrumentations } from "@opentelemetry/auto-instrumentations-node";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-grpc";
+import { Resource } from "@opentelemetry/resources";
+import { SemanticResourceAttributes } from "@opentelemetry/semantic-conventions";
+import { env } from "@/lib/env";
 
 const sdk = new NodeSDK({
   resource: new Resource({
     [SemanticResourceAttributes.SERVICE_NAME]: env.SERVICE_NAME,
     [SemanticResourceAttributes.SERVICE_VERSION]: env.npm_package_version,
     [SemanticResourceAttributes.DEPLOYMENT_ENVIRONMENT]: env.NODE_ENV,
-    'service.namespace': 'aptivo',
+    "service.namespace": "aptivo",
   }),
   traceExporter: new OTLPTraceExporter({
     url: env.OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -280,9 +281,9 @@ const sdk = new NodeSDK({
   instrumentations: [
     getNodeAutoInstrumentations({
       // enable HTTP, Express, pg, and other auto-instrumentations
-      '@opentelemetry/instrumentation-fs': { enabled: false }, // disable noisy fs
-      '@opentelemetry/instrumentation-http': {
-        ignoreIncomingPaths: ['/health/live', '/health/ready', '/metrics'],
+      "@opentelemetry/instrumentation-fs": { enabled: false }, // disable noisy fs
+      "@opentelemetry/instrumentation-http": {
+        ignoreIncomingPaths: ["/health/live", "/health/ready", "/metrics"],
       },
     }),
   ],
@@ -291,7 +292,7 @@ const sdk = new NodeSDK({
 sdk.start();
 
 // graceful shutdown
-process.on('SIGTERM', () => {
+process.on("SIGTERM", () => {
   sdk.shutdown().then(() => process.exit(0));
 });
 ```
@@ -301,8 +302,8 @@ process.on('SIGTERM', () => {
 ```typescript
 // instrumentation.ts (Next.js 15.x - no experimental flag needed)
 export async function register() {
-  if (process.env.NEXT_RUNTIME === 'nodejs') {
-    await import('./lib/observability/tracing');
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    await import("./lib/observability/tracing");
   }
 }
 ```
@@ -321,52 +322,48 @@ Per **Coding Guidelines v3.0.0**, wrap ReaderResult operations with spans:
 
 ```typescript
 // lib/observability/traced-reader-result.ts
-import { trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
-import { Result, ReaderResult } from '@/lib/functional/result';
-import { resultErrorsTotal } from './metrics';
+import { trace, SpanKind, SpanStatusCode } from "@opentelemetry/api";
+import { Result, ReaderResult } from "@/lib/functional/result";
+import { resultErrorsTotal } from "./metrics";
 
-const tracer = trace.getTracer('aptivo-app');
+const tracer = trace.getTracer("aptivo-app");
 
 export function traceReaderResult<D, T, E extends { _tag: string }>(
   name: string,
-  operation: ReaderResult<D, T, E>
+  operation: ReaderResult<D, T, E>,
 ): ReaderResult<D, T, E> {
   return (deps: D) =>
-    tracer.startActiveSpan(
-      name,
-      { kind: SpanKind.INTERNAL },
-      async (span) => {
-        try {
-          const result = await operation(deps);
+    tracer.startActiveSpan(name, { kind: SpanKind.INTERNAL }, async (span) => {
+      try {
+        const result = await operation(deps);
 
-          if (result.success) {
-            span.setStatus({ code: SpanStatusCode.OK });
-          } else {
-            // record error in span
-            span.setStatus({
-              code: SpanStatusCode.ERROR,
-              message: result.error._tag,
-            });
-            span.setAttribute('error.tag', result.error._tag);
+        if (result.success) {
+          span.setStatus({ code: SpanStatusCode.OK });
+        } else {
+          // record error in span
+          span.setStatus({
+            code: SpanStatusCode.ERROR,
+            message: result.error._tag,
+          });
+          span.setAttribute("error.tag", result.error._tag);
 
-            // increment error metric
-            resultErrorsTotal.inc({
-              operation: name,
-              error_tag: result.error._tag,
-              module: 'unknown', // override in caller if needed
-            });
-          }
-
-          return result;
-        } catch (error) {
-          span.recordException(error as Error);
-          span.setStatus({ code: SpanStatusCode.ERROR });
-          throw error;
-        } finally {
-          span.end();
+          // increment error metric
+          resultErrorsTotal.inc({
+            operation: name,
+            error_tag: result.error._tag,
+            module: "unknown", // override in caller if needed
+          });
         }
+
+        return result;
+      } catch (error) {
+        span.recordException(error as Error);
+        span.setStatus({ code: SpanStatusCode.ERROR });
+        throw error;
+      } finally {
+        span.end();
       }
-    );
+    });
 }
 ```
 
@@ -376,7 +373,7 @@ export function traceReaderResult<D, T, E extends { _tag: string }>(
 # traefik.yml (Traefik 3.x)
 tracing:
   serviceName: "api-gateway"
-  sampleRate: 1.0  # 100% in dev/staging, reduce in production
+  sampleRate: 1.0 # 100% in dev/staging, reduce in production
   addInternals: true
 
   otlp:
@@ -401,16 +398,28 @@ Use auto-instrumentation for NATS when available, or wrap with context propagati
 
 ```typescript
 // lib/observability/nats-tracing.ts
-import { context, propagation, trace, SpanKind, SpanStatusCode } from '@opentelemetry/api';
-import type { NatsConnection, Msg, MsgHdrs } from 'nats';
+import {
+  context,
+  propagation,
+  trace,
+  SpanKind,
+  SpanStatusCode,
+} from "@opentelemetry/api";
+import type { NatsConnection, Msg, MsgHdrs } from "nats";
 
-const tracer = trace.getTracer('nats');
+const tracer = trace.getTracer("nats");
 
 export function createTracedPublish(nats: NatsConnection) {
   return async (subject: string, data: unknown, headers?: MsgHdrs) => {
     return tracer.startActiveSpan(
       `NATS SEND ${subject}`,
-      { kind: SpanKind.PRODUCER, attributes: { 'messaging.system': 'nats', 'messaging.destination': subject } },
+      {
+        kind: SpanKind.PRODUCER,
+        attributes: {
+          "messaging.system": "nats",
+          "messaging.destination": subject,
+        },
+      },
       async (span) => {
         const hdrs = headers ?? nats.headers();
         propagation.inject(context.active(), hdrs);
@@ -425,14 +434,14 @@ export function createTracedPublish(nats: NatsConnection) {
         } finally {
           span.end();
         }
-      }
+      },
     );
   };
 }
 
 export function wrapMessageHandler(
   subject: string,
-  handler: (msg: Msg) => Promise<void>
+  handler: (msg: Msg) => Promise<void>,
 ): (err: Error | null, msg: Msg) => void {
   return async (err, msg) => {
     if (err) return;
@@ -442,7 +451,10 @@ export function wrapMessageHandler(
     await context.with(parentContext, async () => {
       const span = tracer.startSpan(`NATS RECEIVE ${subject}`, {
         kind: SpanKind.CONSUMER,
-        attributes: { 'messaging.system': 'nats', 'messaging.destination': subject },
+        attributes: {
+          "messaging.system": "nats",
+          "messaging.destination": subject,
+        },
       });
 
       try {
@@ -470,9 +482,9 @@ Per **TSD v3.0.0**, use Pino with automatic trace context injection:
 
 ```typescript
 // lib/observability/logger.ts
-import pino from 'pino';
-import { trace } from '@opentelemetry/api';
-import { env } from '@/lib/env';
+import pino from "pino";
+import { trace } from "@opentelemetry/api";
+import { env } from "@/lib/env";
 
 // custom mixin to inject trace context into every log
 const traceMixin = () => {
@@ -489,7 +501,7 @@ const traceMixin = () => {
 };
 
 export const logger = pino({
-  level: env.LOG_LEVEL || 'info',
+  level: env.LOG_LEVEL || "info",
   mixin: traceMixin,
   formatters: {
     level: (label) => ({ level: label }),
@@ -501,8 +513,14 @@ export const logger = pino({
   },
   // redact sensitive fields
   redact: {
-    paths: ['req.headers.authorization', 'req.headers.cookie', 'password', 'token', 'secret'],
-    censor: '[REDACTED]',
+    paths: [
+      "req.headers.authorization",
+      "req.headers.cookie",
+      "password",
+      "token",
+      "secret",
+    ],
+    censor: "[REDACTED]",
   },
 });
 ```
@@ -557,13 +575,13 @@ Logs are collected from stdout by Fluent Bit and forwarded to Loki:
 
 ### 5.4 Log Levels & Usage
 
-| Level | Usage | Example |
-|-------|-------|---------|
-| `error` | Unrecoverable errors, exceptions | Database connection failed |
-| `warn` | Recoverable issues, degraded state | Retry succeeded after failure |
-| `info` | Business events, state changes | Candidate created, workflow started |
-| `debug` | Detailed debugging (dev only) | Request payload, query results |
-| `trace` | Fine-grained tracing (dev only) | Function entry/exit |
+| Level   | Usage                              | Example                             |
+| ------- | ---------------------------------- | ----------------------------------- |
+| `error` | Unrecoverable errors, exceptions   | Database connection failed          |
+| `warn`  | Recoverable issues, degraded state | Retry succeeded after failure       |
+| `info`  | Business events, state changes     | Candidate created, workflow started |
+| `debug` | Detailed debugging (dev only)      | Request payload, query results      |
+| `trace` | Fine-grained tracing (dev only)    | Function entry/exit                 |
 
 ---
 
@@ -575,8 +593,8 @@ Error tracking provides exception visibility beyond what logs and traces capture
 
 ```typescript
 // lib/observability/sentry.ts
-import * as Sentry from '@sentry/nextjs';
-import { env } from '@/lib/env';
+import * as Sentry from "@sentry/nextjs";
+import { env } from "@/lib/env";
 
 Sentry.init({
   dsn: env.SENTRY_DSN,
@@ -584,7 +602,7 @@ Sentry.init({
   release: `${env.SERVICE_NAME}@${env.npm_package_version}`,
 
   // sample rate (traces handled by OTel, this is for error sampling)
-  tracesSampleRate: env.NODE_ENV === 'production' ? 0.1 : 1.0,
+  tracesSampleRate: env.NODE_ENV === "production" ? 0.1 : 1.0,
 
   // filter sensitive data before sending
   beforeSend(event) {
@@ -598,10 +616,10 @@ Sentry.init({
 
   // ignore expected/handled errors
   ignoreErrors: [
-    'NotFoundError',
-    'ValidationError',
-    'AbortError',
-    'NEXT_NOT_FOUND', // Next.js notFound() calls
+    "NotFoundError",
+    "ValidationError",
+    "AbortError",
+    "NEXT_NOT_FOUND", // Next.js notFound() calls
   ],
 });
 ```
@@ -612,13 +630,13 @@ Per **Coding Guidelines v3.0.0** and **Deployment Operations v2.0.0**, always re
 
 ```typescript
 // lib/observability/error-reporting.ts
-import * as Sentry from '@sentry/nextjs';
-import { logger } from './logger';
-import { resultErrorsTotal } from './metrics';
+import * as Sentry from "@sentry/nextjs";
+import { logger } from "./logger";
+import { resultErrorsTotal } from "./metrics";
 
 export function reportResultError<E extends { _tag: string; message: string }>(
   error: E,
-  context: { operation: string; module: string; input?: unknown }
+  context: { operation: string; module: string; input?: unknown },
 ): void {
   // create a trackable error for Sentry
   const trackableError = new Error(`[${error._tag}] ${error.message}`);
@@ -631,7 +649,7 @@ export function reportResultError<E extends { _tag: string; message: string }>(
       module: context.module,
     });
     if (context.input) {
-      scope.setExtra('input', sanitizeForLogging(context.input));
+      scope.setExtra("input", sanitizeForLogging(context.input));
     }
     Sentry.captureException(trackableError);
   });
@@ -644,15 +662,18 @@ export function reportResultError<E extends { _tag: string; message: string }>(
   });
 
   // log for correlation
-  logger.error({ err: trackableError, ...context }, `Result error: ${error._tag}`);
+  logger.error(
+    { err: trackableError, ...context },
+    `Result error: ${error._tag}`,
+  );
 }
 
 function sanitizeForLogging(input: unknown): unknown {
-  if (typeof input !== 'object' || input === null) return input;
+  if (typeof input !== "object" || input === null) return input;
   const sanitized = { ...input } as Record<string, unknown>;
-  const sensitiveKeys = ['password', 'token', 'secret', 'authorization'];
+  const sensitiveKeys = ["password", "token", "secret", "authorization"];
   for (const key of sensitiveKeys) {
-    if (key in sanitized) sanitized[key] = '[REDACTED]';
+    if (key in sanitized) sanitized[key] = "[REDACTED]";
   }
   return sanitized;
 }
@@ -667,8 +688,8 @@ export async function POST(request: Request) {
 
   if (!result.success) {
     reportResultError(result.error, {
-      operation: 'createCandidate',
-      module: 'candidates',
+      operation: "createCandidate",
+      module: "candidates",
       input,
     });
     return mapErrorToHttpResponse(result.error);
@@ -697,10 +718,10 @@ receivers:
   prometheus:
     config:
       scrape_configs:
-        - job_name: 'app-metrics'
+        - job_name: "app-metrics"
           scrape_interval: 15s
           static_configs:
-            - targets: ['localhost:3000']  # app metrics endpoint
+            - targets: ["localhost:3000"] # app metrics endpoint
 
 processors:
   batch:
@@ -763,13 +784,14 @@ service:
 
 ### 7.2 Sampling Strategy
 
-| Environment | Strategy | Rate | Rationale |
-|-------------|----------|------|-----------|
-| Development | Head-based | 100% | Full visibility for debugging |
-| Staging | Head-based | 100% | Catch issues before production |
-| Production | Tail-based | 10% + all errors | Balance cost vs visibility |
+| Environment | Strategy   | Rate             | Rationale                      |
+| ----------- | ---------- | ---------------- | ------------------------------ |
+| Development | Head-based | 100%             | Full visibility for debugging  |
+| Staging     | Head-based | 100%             | Catch issues before production |
+| Production  | Tail-based | 10% + all errors | Balance cost vs visibility     |
 
 **Tail-based sampling** ensures:
+
 - All error traces are captured (100%)
 - All slow traces (> 500ms) are captured (100%)
 - 10% random sample of successful traces
@@ -780,14 +802,14 @@ service:
 
 ### 8.1 Standard Dashboards
 
-| Dashboard | Purpose | Key Panels |
-|-----------|---------|------------|
-| **Service Overview** | Health at a glance | Request rate, error rate, P95 latency |
-| **API Performance** | Endpoint analysis | Latency by route, status code distribution |
-| **Database** | PostgreSQL health | Connections, query latency, replication lag |
-| **NATS Messaging** | Message flow | Publish/subscribe rates, consumer lag |
-| **Business Metrics** | Domain KPIs | Candidates created, workflows completed |
-| **Risk Monitoring** | Change Management | Risk dashboard links, validation queries |
+| Dashboard            | Purpose            | Key Panels                                  |
+| -------------------- | ------------------ | ------------------------------------------- |
+| **Service Overview** | Health at a glance | Request rate, error rate, P95 latency       |
+| **API Performance**  | Endpoint analysis  | Latency by route, status code distribution  |
+| **Database**         | PostgreSQL health  | Connections, query latency, replication lag |
+| **NATS Messaging**   | Message flow       | Publish/subscribe rates, consumer lag       |
+| **Business Metrics** | Domain KPIs        | Candidates created, workflows completed     |
+| **Risk Monitoring**  | Change Management  | Risk dashboard links, validation queries    |
 
 ### 8.2 Post-Deployment Validation Dashboard
 
@@ -800,28 +822,34 @@ Per **Change Management v2.0.0**, this dashboard validates deployments:
     {
       "title": "Error Rate (5xx)",
       "type": "timeseries",
-      "targets": [{
-        "expr": "sum(rate(http_requests_total{status_code=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))",
-        "legendFormat": "5xx rate"
-      }],
+      "targets": [
+        {
+          "expr": "sum(rate(http_requests_total{status_code=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))",
+          "legendFormat": "5xx rate"
+        }
+      ],
       "thresholds": [{ "value": 0.01, "color": "red" }]
     },
     {
       "title": "P95 Response Time",
       "type": "timeseries",
-      "targets": [{
-        "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
-        "legendFormat": "P95"
-      }],
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))",
+          "legendFormat": "P95"
+        }
+      ],
       "thresholds": [{ "value": 0.5, "color": "red" }]
     },
     {
       "title": "Result Errors",
       "type": "timeseries",
-      "targets": [{
-        "expr": "sum(rate(aptivo_result_errors_total[5m])) by (error_tag)",
-        "legendFormat": "{{error_tag}}"
-      }]
+      "targets": [
+        {
+          "expr": "sum(rate(aptivo_result_errors_total[5m])) by (error_tag)",
+          "legendFormat": "{{error_tag}}"
+        }
+      ]
     }
   ]
 }
@@ -903,12 +931,12 @@ groups:
 
 ### 9.2 Alert Routing
 
-| Alert | Severity | Channel | Escalation |
-|-------|----------|---------|------------|
-| HighErrorRate | Critical | PagerDuty P1 | On-call SRE → Engineering Manager |
-| HighLatency | Warning | Slack #ops-alerts | On-call SRE |
-| DatabaseConnectionsHigh | Warning | PagerDuty P2 | On-call SRE |
-| NewResultErrorType | Info | Slack #ops-errors | On-call Support |
+| Alert                   | Severity | Channel           | Escalation                        |
+| ----------------------- | -------- | ----------------- | --------------------------------- |
+| HighErrorRate           | Critical | PagerDuty P1      | On-call SRE → Engineering Manager |
+| HighLatency             | Warning  | Slack #ops-alerts | On-call SRE                       |
+| DatabaseConnectionsHigh | Warning  | PagerDuty P2      | On-call SRE                       |
+| NewResultErrorType      | Info     | Slack #ops-errors | On-call Support                   |
 
 ---
 
@@ -925,9 +953,9 @@ services:
     volumes:
       - ./config/otel-collector-dev.yaml:/etc/otel-collector-config.yaml
     ports:
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
-      - "8889:8889"   # Prometheus metrics
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+      - "8889:8889" # Prometheus metrics
 
   prometheus:
     image: prom/prometheus:v2.50.0
@@ -939,8 +967,8 @@ services:
   jaeger:
     image: jaegertracing/all-in-one:1.54
     ports:
-      - "16686:16686"  # UI
-      - "4317"         # OTLP gRPC (internal)
+      - "16686:16686" # UI
+      - "4317" # OTLP gRPC (internal)
 
   loki:
     image: grafana/loki:2.9.4
@@ -973,46 +1001,46 @@ LOG_LEVEL=debug
 
 ### 11.1 Data Classification
 
-| Data Type | Allowed in Telemetry | Handling |
-|-----------|---------------------|----------|
-| Request IDs | ✅ Yes | Include in all signals |
-| User IDs | ✅ Yes (hashed) | Hash before logging |
-| Error messages | ✅ Yes | Sanitize PII |
-| Request bodies | ⚠️ Conditional | Only non-sensitive fields |
-| Passwords/tokens | ❌ Never | Redact completely |
-| PII (names, emails) | ❌ Never | Redact completely |
+| Data Type           | Allowed in Telemetry | Handling                  |
+| ------------------- | -------------------- | ------------------------- |
+| Request IDs         | ✅ Yes               | Include in all signals    |
+| User IDs            | ✅ Yes (hashed)      | Hash before logging       |
+| Error messages      | ✅ Yes               | Sanitize PII              |
+| Request bodies      | ⚠️ Conditional       | Only non-sensitive fields |
+| Passwords/tokens    | ❌ Never             | Redact completely         |
+| PII (names, emails) | ❌ Never             | Redact completely         |
 
 ### 11.2 Redaction Configuration
 
 ```typescript
 // ensure sensitive data is never logged
 const redactPaths = [
-  'req.headers.authorization',
-  'req.headers.cookie',
-  'password',
-  'token',
-  'secret',
-  'apiKey',
-  'creditCard',
-  'ssn',
+  "req.headers.authorization",
+  "req.headers.cookie",
+  "password",
+  "token",
+  "secret",
+  "apiKey",
+  "creditCard",
+  "ssn",
 ];
 ```
 
 ### 11.3 Access Control
 
-| Role | Grafana Access | Data Access |
-|------|---------------|-------------|
-| Developer | Viewer | Own service dashboards |
-| SRE | Editor | All dashboards, alerts |
-| Security | Admin | Full access, audit logs |
+| Role      | Grafana Access | Data Access             |
+| --------- | -------------- | ----------------------- |
+| Developer | Viewer         | Own service dashboards  |
+| SRE       | Editor         | All dashboards, alerts  |
+| Security  | Admin          | Full access, audit logs |
 
 ### 11.4 Retention Policies
 
-| Signal | Hot Storage | Warm Storage | Archive |
-|--------|-------------|--------------|---------|
-| Traces | 7 days | 30 days | None |
-| Metrics | 15 days | 90 days | 1 year |
-| Logs | 30 days | 90 days | 1 year |
+| Signal  | Hot Storage | Warm Storage | Archive |
+| ------- | ----------- | ------------ | ------- |
+| Traces  | 7 days      | 30 days      | None    |
+| Metrics | 15 days     | 90 days      | 1 year  |
+| Logs    | 30 days     | 90 days      | 1 year  |
 
 ---
 
@@ -1022,30 +1050,30 @@ Audit logging provides compliance and security visibility for sensitive operatio
 
 ### 12.1 Audit Events
 
-| Event | When | Retention |
-|-------|------|-----------|
-| User login | Authentication | 2 years |
-| Data access | PII viewed | 2 years |
-| Data modification | Entity CRUD | 7 years |
-| Permission change | Role assignment | 7 years |
-| Export | Data export | 7 years |
+| Event             | When            | Retention |
+| ----------------- | --------------- | --------- |
+| User login        | Authentication  | 2 years   |
+| Data access       | PII viewed      | 2 years   |
+| Data modification | Entity CRUD     | 7 years   |
+| Permission change | Role assignment | 7 years   |
+| Export            | Data export     | 7 years   |
 
 ### 12.2 Audit Log Schema
 
 ```typescript
 // lib/observability/audit.ts
 interface AuditEvent {
-  id: string;                // ULID for ordering
-  timestamp: string;         // ISO 8601
+  id: string; // ULID for ordering
+  timestamp: string; // ISO 8601
   actor: {
     id: string;
     email: string;
     ip: string;
     userAgent: string;
   };
-  action: string;            // e.g., "candidate.status.update"
+  action: string; // e.g., "candidate.status.update"
   resource: {
-    type: string;            // e.g., "candidate"
+    type: string; // e.g., "candidate"
     id: string;
   };
   changes?: {
@@ -1086,11 +1114,11 @@ Audit events are written to a separate PostgreSQL table with immutable append-on
 
 ```typescript
 // lib/observability/audit-writer.ts
-import { db } from '@/lib/db';
-import { ulid } from 'ulid';
+import { db } from "@/lib/db";
+import { ulid } from "ulid";
 
 export async function writeAuditEvent(
-  event: Omit<AuditEvent, 'id' | 'timestamp'>
+  event: Omit<AuditEvent, "id" | "timestamp">,
 ): Promise<void> {
   await db.auditLog.create({
     data: {
@@ -1116,6 +1144,7 @@ export async function writeAuditEvent(
 
 **Problem:** Missing traces between services
 **Checklist:**
+
 1. Verify trace headers propagate: `curl -v http://service/endpoint | grep traceparent`
 2. Check collector is receiving: `kubectl logs -l app=otel-collector`
 3. Ensure service names match in configuration
@@ -1123,14 +1152,16 @@ export async function writeAuditEvent(
 
 **Problem:** Logs not correlating with traces
 **Solution:** Verify Pino mixin is injecting trace context:
+
 ```typescript
 // check logger output includes traceId
-logger.info('test message');
+logger.info("test message");
 // should output: {"traceId":"abc123",...}
 ```
 
 **Problem:** High cardinality causing storage issues
 **Solution:** Normalize high-cardinality labels (don't filter histogram buckets!):
+
 ```yaml
 processors:
   metricstransform:
@@ -1139,7 +1170,7 @@ processors:
         action: update
         operations:
           - action: aggregate_labels
-            label_set: [method, status_code]  # remove route
+            label_set: [method, status_code] # remove route
             aggregation_type: sum
 ```
 
@@ -1159,9 +1190,9 @@ processors:
 
 ## **Revision History**
 
-| Version | Date | Author | Changes |
-|---------|------|--------|---------|
-| v1.0.0 | 2025-02-18 | Abe Caymo | Initial version |
-| v1.0.1 | 2025-06-13 | Abe Caymo | Added manual instrumentation examples |
-| v2.0.0 | 2026-01-15 | Document Review Panel | Major rewrite: aligned with Prometheus/Grafana/Jaeger stack, removed security vulnerabilities, added prom-client metrics, Pino logging, ReaderResult wrapper, tail-based sampling, risk monitoring dashboards |
-| v2.0.1 | 2026-01-15 | Document Review Panel | Consolidation: Added Section 6 (Sentry Error Tracking), Section 12 (Audit Logging), updated pillars table, cross-referenced specs/observability.md checklist |
+| Version | Date       | Author                | Changes                                                                                                                                                                                                       |
+| ------- | ---------- | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| v1.0.0  | 2025-02-18 | Abe Caymo             | Initial version                                                                                                                                                                                               |
+| v1.0.1  | 2025-06-13 | Abe Caymo             | Added manual instrumentation examples                                                                                                                                                                         |
+| v2.0.0  | 2026-01-15 | Document Review Panel | Major rewrite: aligned with Prometheus/Grafana/Jaeger stack, removed security vulnerabilities, added prom-client metrics, Pino logging, ReaderResult wrapper, tail-based sampling, risk monitoring dashboards |
+| v2.0.1  | 2026-01-15 | Document Review Panel | Consolidation: Added Section 6 (Sentry Error Tracking), Section 12 (Audit Logging), updated pillars table, cross-referenced specs/observability.md checklist                                                  |
