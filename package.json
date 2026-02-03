@@ -1,6 +1,7 @@
 {
   "name": "aptivo",
   "private": true,
+  "packageManager": "pnpm@10.11.0",
   "scripts": {
     "build": "turbo run build",
     "dev": "turbo run dev",
