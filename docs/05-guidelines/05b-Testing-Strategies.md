@@ -1,5 +1,5 @@
 ---
-id: GUIDELINE-MKJP625C
+id: GUIDELINE-TESTING
 title: 5.b Test Plans & QA Strategies
 status: Draft
 version: 1.0.0
@@ -16,7 +16,7 @@ Last updated time: January 15, 2026
 
 # **Testing Practices & Strategies**
 
-*Outsourcing Digital Agency – Integrated Internal Systems Ecosystem*
+*Aptivo Agentic Platform*
 
 *v2.0.0 – [January 15, 2026]*
 
@@ -27,14 +27,14 @@ Last updated time: January 15, 2026
 ## **1. Introduction**
 
 ### 1.1 Purpose
-This document outlines the official testing methodologies, management processes, and quality metrics for the Integrated Internal Systems Ecosystem. The goal is to ensure a high-quality, reliable, secure, and performant application through a structured and collaborative testing approach that aligns with our functional architecture principles.
+This document outlines the official testing methodologies, management processes, and quality metrics for Aptivo. The goal is to ensure a high-quality, reliable, secure, and performant application through a structured and collaborative testing approach that aligns with our functional architecture principles.
 
 ### 1.2 Scope
 These strategies apply to all code and infrastructure changes across all modules of the project, following the Domain-Driven Design modular structure:
-- `src/modules/*/domain/` - Pure business logic
-- `src/modules/*/application/` - Service orchestration
-- `src/modules/*/infrastructure/` - External integrations
-- `src/modules/*/interface/` - API routes and UI components
+- `apps/web/src/modules/*/domain/` - Pure business logic
+- `apps/web/src/modules/*/application/` - Service orchestration
+- `apps/web/src/modules/*/infrastructure/` - External integrations
+- `apps/web/src/modules/*/interface/` - API routes and UI components
 
 ### 1.3 Audience
 This document is intended for all Developers and Quality Assurance (QA) Engineers involved in the project.
@@ -43,6 +43,18 @@ This document is intended for all Developers and Quality Assurance (QA) Engineer
 - **Coding Guidelines v3.0.0** - Testing patterns and coverage requirements
 - **TSD v3.0.0** - Technical specifications and API contracts
 - **FRD v2.0.0** - Functional requirements with acceptance criteria
+
+---
+
+## Traceability
+
+| Requirement | Source | How Addressed |
+|-------------|--------|---------------|
+| Quality targets | FRD §5.2 | Coverage targets per architectural layer |
+| Acceptance testing | FRD acceptance criteria | E2E tests with Playwright |
+| Security testing | ADD §6 | Auth/authz test patterns, Zero Trust validation |
+| Performance targets | FRD §6.1 | P95 < 500ms via k6 load tests |
+| Result type testing | TSD §4.2 | Tagged union discrimination in assertions |
 
 ---
 
@@ -78,16 +90,16 @@ A multi-layered testing approach ensures comprehensive coverage aligned with the
 ### 3.1 Unit Testing (Domain Layer)
 
 - **Description:** Testing of pure functions in the domain layer in complete isolation. No mocks required for pure functions.
-- **Tools:** Vitest 3.x
+- **Tools:** Vitest 4.x (see [project-structure.md](../04-specs/project-structure.md) for canonical versions)
 - **Responsibility:** Developers
 - **Coverage:** **100% required**
 - **Scope:**
-  - `src/modules/*/domain/` - Business logic, calculations, validations
-  - `src/lib/functional/` - Utility functions
+  - `apps/web/src/modules/*/domain/` - Business logic, calculations, validations
+  - `packages/domain/` - Functional utility functions
   - Zod schema validation logic
 
 ```typescript
-// src/modules/candidate-management/tests/domain/candidate.test.ts
+// apps/web/src/modules/candidate-management/tests/domain/candidate.test.ts
 import { describe, it, expect } from 'vitest';
 import { validateCandidateStatus, calculateExperience } from '../../domain/candidate';
 import { CandidateStatusSchema } from '../../domain/validations';
@@ -132,13 +144,13 @@ describe('Candidate Domain Logic', () => {
 ### 3.2 Integration Testing (Application Layer)
 
 - **Description:** Testing service orchestration with mocked dependencies using the ReaderResult pattern. Verifies that application services correctly compose domain logic with infrastructure.
-- **Tools:** Vitest 3.x
+- **Tools:** Vitest 4.x (see [project-structure.md](../04-specs/project-structure.md) for canonical versions)
 - **Responsibility:** Developers
 - **Coverage:** **80% required**
-- **Scope:** `src/modules/*/application/` - Service composition, event publishing
+- **Scope:** `apps/web/src/modules/*/application/` - Service composition, event publishing
 
 ```typescript
-// src/modules/candidate-management/tests/application/candidate-service.test.ts
+// apps/web/src/modules/candidate-management/tests/application/candidate-service.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createCandidate, updateCandidateStatus } from '../../application/candidate-service';
 import type { CandidateDeps } from '../../application/types';
@@ -232,13 +244,13 @@ describe('CandidateService', () => {
 ### 3.3 Interface Testing (API & UI)
 
 - **Description:** Testing API routes and UI components for correct request/response handling and RFC 7807 compliance.
-- **Tools:** Vitest 3.x (API), Playwright Component Testing (UI)
+- **Tools:** Vitest 4.x (see [project-structure.md](../04-specs/project-structure.md) for canonical versions) (API), Playwright Component Testing (UI)
 - **Responsibility:** Developers
 - **Coverage:** **60% required**
-- **Scope:** `src/modules/*/interface/` - API routes, React components
+- **Scope:** `apps/web/src/modules/*/interface/` - API routes, React components
 
 ```typescript
-// src/modules/candidate-management/tests/interface/api.test.ts
+// apps/web/src/modules/candidate-management/tests/interface/api.test.ts
 import { describe, it, expect, vi } from 'vitest';
 import { POST } from '../../interface/api/candidates/route';
 import { NextRequest } from 'next/server';
@@ -333,7 +345,7 @@ describe('Candidate API Routes', () => {
 
 ---
 
-## **4. Vitest 3.x Patterns & Best Practices**
+## **4. Vitest Patterns & Best Practices**
 
 ### 4.1 Modern Mocking with vi.hoisted()
 
@@ -373,7 +385,7 @@ describe('CandidateRepository', () => {
 Use `test.extend()` to create reusable test fixtures for common setup patterns.
 
 ```typescript
-// src/test/fixtures/candidate.fixture.ts
+// apps/web/src/test/fixtures/candidate.fixture.ts
 import { test as base } from 'vitest';
 import type { CandidateDeps } from '@/modules/candidate-management/application/types';
 
@@ -418,7 +430,7 @@ test('should create candidate', async ({ mockDeps, sampleCandidate }) => {
 All Zod schemas require comprehensive testing at the domain layer.
 
 ```typescript
-// src/modules/candidate-management/tests/domain/validations.test.ts
+// apps/web/src/modules/candidate-management/tests/domain/validations.test.ts
 import { describe, it, expect } from 'vitest';
 import {
   CandidateSchema,
@@ -495,9 +507,9 @@ describe('Candidate Validation Schemas', () => {
 Test both success and error branches of Result-returning functions.
 
 ```typescript
-// src/modules/candidate-management/tests/application/result-patterns.test.ts
+// apps/web/src/modules/candidate-management/tests/application/result-patterns.test.ts
 import { describe, it, expect } from 'vitest';
-import { Result } from '@/lib/functional/result';
+import { Result } from '@aptivo/domain';
 import { processCandidate } from '../../application/candidate-processor';
 
 describe('Result Type Testing Patterns', () => {
@@ -571,9 +583,9 @@ describe('Result Type Testing Patterns', () => {
 Test service composition with the ReaderResult pattern.
 
 ```typescript
-// src/modules/candidate-management/tests/application/composition.test.ts
+// apps/web/src/modules/candidate-management/tests/application/composition.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { pipe } from '@/lib/functional/composition';
+import { pipe } from '@aptivo/domain';
 import {
   findCandidate,
   updateStatus,
@@ -884,7 +896,7 @@ All API error responses must conform to RFC 7807 Problem Details format. This se
 ### 6.1 Problem Details Schema Validation
 
 ```typescript
-// src/test/utils/problem-details.ts
+// apps/web/src/test/utils/problem-details.ts
 import { z } from 'zod';
 
 export const ProblemDetailsSchema = z.object({
@@ -914,7 +926,7 @@ export function assertProblemDetails(response: unknown): asserts response is Pro
 ### 6.2 API Error Response Testing
 
 ```typescript
-// src/modules/candidate-management/tests/interface/error-responses.test.ts
+// apps/web/src/modules/candidate-management/tests/interface/error-responses.test.ts
 import { describe, it, expect } from 'vitest';
 import { assertProblemDetails } from '@/test/utils/problem-details';
 
@@ -1023,21 +1035,21 @@ export default defineConfig({
       ],
       thresholds: {
         // domain layer: 100% coverage required
-        'src/modules/**/domain/**/*.ts': {
+        'apps/web/src/modules/**/domain/**/*.ts': {
           statements: 100,
           branches: 100,
           functions: 100,
           lines: 100,
         },
         // application layer: 80% coverage required
-        'src/modules/**/application/**/*.ts': {
+        'apps/web/src/modules/**/application/**/*.ts': {
           statements: 80,
           branches: 80,
           functions: 80,
           lines: 80,
         },
         // interface layer: 60% coverage required
-        'src/modules/**/interface/**/*.ts': {
+        'apps/web/src/modules/**/interface/**/*.ts': {
           statements: 60,
           branches: 60,
           functions: 60,
@@ -1318,7 +1330,7 @@ The following metrics will be tracked to measure the effectiveness of our testin
 
 Metrics are automatically collected and reported via:
 - GitHub Actions workflow summaries
-- Grafana dashboards (see 05e-Observability.md)
+- Grafana dashboards (see [05d-Observability.md](./05d-Observability.md))
 - Weekly QA reports to stakeholders
 
 ### 10.2 Quality Gates

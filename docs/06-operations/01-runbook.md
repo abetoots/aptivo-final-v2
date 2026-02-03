@@ -1,13 +1,14 @@
 ---
-id: RUNBOOK-MKJP625C
+id: RUNBOOK-DEPLOYMENT
 title: 6.a Deployment & Operations
 status: Draft
-version: 1.0.0
+version: 2.1.0
 owner: "@owner"
-last_updated: "2026-01-18"
+last_updated: "2026-02-03"
+parent: ../03-architecture/platform-core-add.md
 ---
 
-# 5.c Deployment & Operations
+# 6.a Deployment & Operations
 
 Created by: Abe Caymo
 Created time: February 18, 2025 5:24 PM
@@ -17,9 +18,9 @@ Last updated time: January 15, 2026
 
 # **Deployment & Operations Guide**
 
-_Outsourcing Digital Agency – Integrated Internal Systems Ecosystem_
+_Aptivo Agentic Platform_
 
-_v2.0.0 – [January 15, 2026]_
+_v2.1.0 – [February 3, 2026]_
 
 _Aligned with: TSD v3.0.0, ADD v2.0.0, Coding Guidelines v3.0.0, Testing Strategies v2.0.0_
 
@@ -29,7 +30,7 @@ _Aligned with: TSD v3.0.0, ADD v2.0.0, Coding Guidelines v3.0.0, Testing Strateg
 
 ### 1.1 Purpose
 
-This document is the central operational runbook for the Integrated Internal Systems Ecosystem. It defines the standard operating procedures (SOPs) for deployment, monitoring, maintenance, and incident response.
+This document is the central operational runbook for Aptivo. It defines the standard operating procedures (SOPs) for deployment, monitoring, maintenance, and incident response.
 
 ### 1.2 Scope
 
@@ -49,7 +50,7 @@ This guide covers the operational lifecycle of all modules and shared services. 
 - **ADD v2.0.0** - Architecture, HA/DR requirements (RTO/RPO targets)
 - **Coding Guidelines v3.0.0** - OpenTelemetry, RFC 7807, Result types
 - **Testing Strategies v2.0.0** - CI/CD pipeline, security scans, performance targets
-- **05e-Observability.md** - Detailed observability architecture
+- **[05d-Observability.md](../05-guidelines/05d-Observability.md)** - Detailed observability architecture
 
 ---
 
@@ -65,13 +66,27 @@ The system uses a container-based deployment model with progressive delivery:
 | Database Migrations  | Forward-only with rollback scripts | < 15 minutes  |
 | Feature Releases     | Feature flags (instant toggle)     | Immediate     |
 
-### 2.2 Environments
+### 2.2 Environments (Trunk-Based Development)
 
-| Environment     | Branch     | Deployment     | Purpose                                           |
-| --------------- | ---------- | -------------- | ------------------------------------------------- |
-| **Development** | feature/\* | Manual         | Local developer environments using Docker Compose |
-| **Staging**     | develop    | Automatic      | Production-like environment for final testing     |
-| **Production**  | main       | Manual (gated) | Live environment after QA sign-off                |
+> **Strategy**: Build Once, Deploy Many. A single SHA-tagged artifact progresses through environments.
+
+| Environment     | Source     | Trigger             | Purpose                                        |
+| --------------- | ---------- | ------------------- | ---------------------------------------------- |
+| **Development** | any branch | Local Docker        | Local developer environments                   |
+| **Preview**     | any branch | Manual dispatch     | Stakeholder demos from any branch              |
+| **Staging**     | main SHA   | Manual dispatch     | Production-like testing of validated artifacts |
+| **Production**  | main tag   | Version tag push    | Live environment via release-please            |
+
+**Artifact Flow**:
+```
+PR → pr-validation.yml → Merge → build.yml → SHA-tagged image
+                                      ↓
+                              Manual: Deploy Staging
+                                      ↓
+                              QA Validation
+                                      ↓
+                              release-please PR → Merge → Production
+```
 
 ### 2.3 Standard Deployment Checklist
 
@@ -83,11 +98,11 @@ The system uses a container-based deployment model with progressive delivery:
   - [ ] Unit tests with tiered coverage (Domain 100%, Application 80%, Interface 60%)
   - [ ] Integration tests passed
   - [ ] Security scans passed:
-    - [ ] SAST (CodeQL/Semgrep)
-    - [ ] SCA (npm audit, Snyk)
-    - [ ] Secrets scanning (TruffleHog)
+    - [ ] SAST (eslint-plugin-security) - Implementing
+    - [ ] SCA (pnpm audit --audit-level=critical)
+    - [ ] Secrets scanning (gitleaks)
     - [ ] Container image scanning (Trivy)
-  - [ ] SBOM generated (CycloneDX format)
+  - [ ] SBOM generated (BuildKit attestation)
 - [ ] Performance tests confirm P95 response time < 500ms
 - [ ] E2E test suite passed against staging (> 98% pass rate)
 - [ ] QA sign-off obtained
@@ -100,7 +115,7 @@ The system uses a container-based deployment model with progressive delivery:
 - [ ] Trigger "Deploy to Production" workflow in GitHub Actions
 - [ ] Monitor deployment progress via:
   - [ ] GitHub Actions logs
-  - [ ] Container orchestrator dashboard
+  - [ ] DigitalOcean App Platform dashboard
   - [ ] OpenTelemetry traces for deployment spans
 - [ ] Verify health check endpoints return healthy status:
   - [ ] `/health/live` - Liveness probe
@@ -111,7 +126,7 @@ The system uses a container-based deployment model with progressive delivery:
 
 #### Post-Deployment Validation
 
-- [ ] Confirm all pods/containers are running
+- [ ] Confirm all containers are running (DO App Platform dashboard)
 - [ ] Verify no spike in error rates (Sentry, OpenTelemetry)
 - [ ] Check P95 response times remain < 500ms
 - [ ] Validate feature flags are functioning correctly
@@ -150,145 +165,110 @@ aptivo-cli feature status user-dashboard-v2
 
 ---
 
-## **3. Container Orchestration & Infrastructure**
+## **3. Infrastructure Architecture**
 
-### 3.1 Production Architecture
+> **Multi-Model Consensus (2026-02-03)**: DigitalOcean App Platform selected over Kubernetes. K8s operational overhead is not justified for a 3-developer, self-funded team. See ADD Section 10.3 for rationale and upgrade triggers.
+
+### 3.1 Production Architecture (DigitalOcean App Platform)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                        Load Balancer                            │
-│                    (Traefik Ingress)                            │
-└─────────────────────────┬───────────────────────────────────────┘
-                          │
-┌─────────────────────────▼───────────────────────────────────────┐
-│                   Kubernetes Cluster                            │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
-│  │ App Pod 1   │  │ App Pod 2   │  │ App Pod N   │             │
-│  │ ┌─────────┐ │  │ ┌─────────┐ │  │ ┌─────────┐ │             │
-│  │ │ App     │ │  │ │ App     │ │  │ │ App     │ │             │
-│  │ └─────────┘ │  │ └─────────┘ │  │ └─────────┘ │             │
-│  │ ┌─────────┐ │  │ ┌─────────┐ │  │ ┌─────────┐ │             │
-│  │ │ OTel    │ │  │ │ OTel    │ │  │ │ OTel    │ │             │
-│  │ │ Sidecar │ │  │ │ Sidecar │ │  │ │ Sidecar │ │             │
-│  │ └─────────┘ │  │ └─────────┘ │  │ └─────────┘ │             │
-│  └─────────────┘  └─────────────┘  └─────────────┘             │
+│                   DigitalOcean App Platform                      │
+│  ┌───────────────────────────────────────────────────────────┐  │
+│  │                    Load Balancer (managed)                 │  │
+│  │                    TLS termination, routing                │  │
+│  └─────────────────────────┬─────────────────────────────────┘  │
+│                            │                                     │
+│  ┌─────────────────────────▼─────────────────────────────────┐  │
+│  │                    App Service                             │  │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │  │
+│  │  │ Container 1 │  │ Container 2 │  │ Container N │        │  │
+│  │  │ (auto-scale)│  │ (auto-scale)│  │ (auto-scale)│        │  │
+│  │  └─────────────┘  └─────────────┘  └─────────────┘        │  │
+│  │  Health checks: /health/live, /health/ready               │  │
+│  └───────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
-                          │
-        ┌─────────────────┼─────────────────┐
-        ▼                 ▼                 ▼
-┌───────────────┐ ┌───────────────┐ ┌───────────────┐
-│  PostgreSQL   │ │    Redis      │ │    Minio      │
-│  (Managed)    │ │   (Cluster)   │ │   (Cluster)   │
-└───────────────┘ └───────────────┘ └───────────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+┌───────────────┐   ┌───────────────┐   ┌───────────────┐
+│  PostgreSQL   │   │    Redis      │   │ DigitalOcean  │
+│  (DO Managed) │   │  (DO Managed) │   │    Spaces     │
+│               │   │               │   │ (S3-compat)   │
+└───────────────┘   └───────────────┘   └───────────────┘
 ```
 
 ### 3.2 Resource Specifications
 
-| Service            | vCPUs | RAM   | Storage   | Scaling             | Notes                          |
-| ------------------ | ----- | ----- | --------- | ------------------- | ------------------------------ |
-| **App Services**   | 2-4   | 4-8GB | 50GB SSD  | HPA (2-10 replicas) | CPU > 70% triggers scale       |
-| **PostgreSQL**     | 4     | 16GB  | 500GB SSD | Vertical            | Managed service (RDS/CloudSQL) |
-| **Redis**          | 2     | 4GB   | -         | Cluster (3 nodes)   | In-memory caching              |
-| **Minio**          | 2     | 8GB   | 1TB       | Cluster (4 nodes)   | S3-compatible object storage   |
-| **OTel Collector** | 1     | 2GB   | 10GB      | DaemonSet           | One per node                   |
+| Service            | Size          | Scaling           | Notes                                 |
+| ------------------ | ------------- | ----------------- | ------------------------------------- |
+| **App Service**    | Basic ($12/mo)| 1-3 containers    | CPU/memory auto-scale                 |
+| **PostgreSQL**     | Basic ($15/mo)| Vertical          | DO Managed Database                   |
+| **Redis**          | Basic ($15/mo)| Single node       | DO Managed Redis                      |
+| **Spaces**         | $5/mo + usage | N/A               | S3-compatible object storage          |
 
-### 3.3 Kubernetes Deployment Configuration
+**Cost Estimate**: ~$50-100/mo for staging + production (vs. $200-400/mo for managed K8s)
 
-```yaml
-# k8s/deployment.yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: aptivo-app
-  labels:
-    app: aptivo
-spec:
-  replicas: 3
-  strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
-  selector:
-    matchLabels:
-      app: aptivo
-  template:
-    metadata:
-      labels:
-        app: aptivo
-    spec:
-      containers:
-        - name: app
-          image: registry.aptivo.com/app:${VERSION}
-          ports:
-            - containerPort: 3000
-          env:
-            - name: NODE_ENV
-              value: "production"
-          envFrom:
-            - secretRef:
-                name: aptivo-secrets
-            - configMapRef:
-                name: aptivo-config
-          resources:
-            requests:
-              cpu: "500m"
-              memory: "1Gi"
-            limits:
-              cpu: "2000m"
-              memory: "4Gi"
-          livenessProbe:
-            httpGet:
-              path: /health/live
-              port: 3000
-            initialDelaySeconds: 10
-            periodSeconds: 10
-            failureThreshold: 3
-          readinessProbe:
-            httpGet:
-              path: /health/ready
-              port: 3000
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            failureThreshold: 3
-          startupProbe:
-            httpGet:
-              path: /health/live
-              port: 3000
-            initialDelaySeconds: 0
-            periodSeconds: 5
-            failureThreshold: 30
-```
-
-### 3.4 Horizontal Pod Autoscaler
+### 3.3 App Platform Configuration
 
 ```yaml
-# k8s/hpa.yaml
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: aptivo-app-hpa
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: aptivo-app
-  minReplicas: 2
-  maxReplicas: 10
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: Utilization
-          averageUtilization: 80
+# .do/app.yaml
+name: aptivo
+region: nyc
+services:
+  - name: api
+    github:
+      repo: aptivo/aptivo-final-v2
+      branch: main
+      deploy_on_push: false  # manual promotion from staging
+    dockerfile_path: Dockerfile
+    instance_count: 2
+    instance_size_slug: basic-xxs
+    http_port: 8080
+    health_check:
+      http_path: /health/live
+      initial_delay_seconds: 10
+      period_seconds: 10
+    envs:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_URL
+        scope: RUN_TIME
+        type: SECRET
+      - key: REDIS_URL
+        scope: RUN_TIME
+        type: SECRET
+
+databases:
+  - name: aptivo-db
+    engine: PG
+    version: "16"
+    size: db-s-1vcpu-1gb
+
+  - name: aptivo-redis
+    engine: REDIS
+    version: "7"
+    size: db-s-1vcpu-1gb
 ```
+
+### 3.4 K8s Upgrade Triggers
+
+**Current Decision**: DigitalOcean App Platform (PaaS)
+
+**When to Reconsider Kubernetes** (document these criteria explicitly):
+
+| Trigger | Threshold | Rationale |
+|---------|-----------|-----------|
+| Custom networking/sidecars required | Service mesh, custom ingress | PaaS cannot accommodate |
+| Fine-grained autoscaling | Beyond CPU/memory metrics | K8s HPA with custom metrics |
+| Multi-tenant isolation | Compliance mandates | K8s namespace isolation |
+| Cost inflection | PaaS > K8s + ops overhead | ~$500/mo+ with dedicated ops |
+| Team growth | 5+ engineers with K8s experience | Can absorb operational burden |
+
+**Not Triggers**:
+- "We might need it someday" - YAGNI
+- "Other companies use K8s" - Different scale/team
+- "It looks more professional" - Premature optimization
 
 ---
 
@@ -331,27 +311,28 @@ export const env = createEnv({
 
 Priority order (highest to lowest):
 
-1. Kubernetes Secrets (for sensitive values)
-2. Kubernetes ConfigMaps (for non-sensitive config)
+1. App Platform encrypted environment variables (for sensitive values)
+2. App Platform environment variables (for non-sensitive config)
 3. Environment variables in container spec
 4. `.env` file (development only)
 
 ### 4.3 Secrets Management
 
-All secrets must be managed through a secrets manager:
+All secrets managed via DigitalOcean App Platform encrypted environment variables:
 
-| Secret Type          | Storage                               | Rotation              |
-| -------------------- | ------------------------------------- | --------------------- |
-| Database credentials | HashiCorp Vault / AWS Secrets Manager | 90 days               |
-| API keys             | HashiCorp Vault / AWS Secrets Manager | 90 days               |
-| JWT signing keys     | HashiCorp Vault / AWS Secrets Manager | 180 days              |
-| TLS certificates     | cert-manager (auto-renewal)           | 30 days before expiry |
+| Secret Type          | Storage                            | Rotation              |
+| -------------------- | ---------------------------------- | --------------------- |
+| Database credentials | DO App Platform (encrypted)        | 90 days               |
+| API keys             | DO App Platform (encrypted)        | 90 days               |
+| JWT signing keys     | DO App Platform (encrypted)        | 180 days              |
+| TLS certificates     | DO Managed (auto-renewal)          | Automatic             |
 
 ```bash
-# example: create secret in Kubernetes from Vault
-vault kv get -format=json secret/aptivo/database | \
-  jq -r '.data.data | to_entries | map("\(.key)=\(.value)") | .[]' | \
-  kubectl create secret generic aptivo-db-credentials --from-env-file=/dev/stdin
+# example: update secret via doctl CLI
+doctl apps update-env <app-id> --env DATABASE_URL=<new-value> --type SECRET
+
+# or via GitHub Actions with DIGITALOCEAN_ACCESS_TOKEN
+# secrets are never stored in git
 ```
 
 ---
@@ -360,18 +341,21 @@ vault kv get -format=json secret/aptivo/database | \
 
 ### 5.1 OpenTelemetry Architecture
 
-All services emit telemetry via OpenTelemetry SDK, collected by OTel Collector sidecars.
+All services emit telemetry via OpenTelemetry SDK with direct OTLP export (App Platform compatible).
 
 ```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│ Application │────▶│    OTel     │────▶│   Backend   │
-│   (SDK)     │     │  Collector  │     │  (Jaeger/   │
-│             │     │  (Sidecar)  │     │  Prometheus)│
-└─────────────┘     └─────────────┘     └─────────────┘
-      │                                        │
-      │         Traces, Metrics, Logs          │
-      └────────────────────────────────────────┘
+┌─────────────┐                         ┌─────────────┐
+│ Application │────── OTLP/HTTP ───────▶│   Backend   │
+│   (SDK)     │                         │  (Grafana   │
+│             │                         │   Cloud /   │
+│ OTel SDK    │                         │  Honeycomb) │
+└─────────────┘                         └─────────────┘
+      │
+      │  Traces, Metrics, Logs (direct export)
+      └────────────────────────────────────────
 ```
+
+> **Note**: App Platform does not support sidecars. Services export directly to observability backend via OTLP/HTTP.
 
 ### 5.2 Key Metrics & Alerts
 
@@ -384,7 +368,7 @@ All services emit telemetry via OpenTelemetry SDK, collected by OTel Collector s
 | **Memory Utilization**       | Prometheus      | > 85% for 10 min   | PagerDuty P2      | On-Call SRE     |
 | **Database Connections**     | Prometheus      | > 80% of max       | PagerDuty P2      | On-Call SRE     |
 | **Database Replication Lag** | Prometheus      | > 30 seconds       | PagerDuty P1      | On-Call SRE     |
-| **Health Check Failures**    | Kubernetes      | Pod unhealthy 3x   | PagerDuty P1      | On-Call SRE     |
+| **Health Check Failures**    | App Platform    | Container unhealthy 3x | PagerDuty P1  | On-Call SRE     |
 | **Application Errors**       | Sentry/OTel     | New error type     | Slack #ops-errors | On-Call Support |
 | **Feature Flag Errors**      | Custom metric   | Any toggle failure | Slack #ops-alerts | DevOps Team     |
 
@@ -438,7 +422,7 @@ All logs must be structured JSON with OpenTelemetry correlation:
 
 #### Log Aggregation
 
-- **Collection:** Fluent Bit DaemonSet on each node
+- **Collection:** App Platform built-in log forwarding
 - **Storage:** Elasticsearch / Loki
 - **Visualization:** Grafana dashboards
 - **Retention:** 30 days (hot), 90 days (warm), 1 year (cold/archived)
@@ -566,31 +550,40 @@ pnpm run task -- generate-report --date 2026-01-15
 
 ### 6.1 Pipeline Architecture
 
+> **Strategy**: Build Once, Deploy Many with SHA-tagged immutable artifacts.
+
 ```mermaid
 graph LR
-    A[Push/PR] --> B[Lint & Type Check]
-    B --> C[Unit Tests]
-    C --> D[Integration Tests]
-    D --> E[Security Scans]
-    E --> F[Build & Push Image]
-    F --> G{Branch?}
-    G -->|develop| H[Deploy Staging]
-    H --> I[E2E Tests]
-    I --> J[Performance Tests]
-    G -->|main| K[Deploy Production]
-    K --> L[Smoke Tests]
-    L --> M[Monitor 15min]
+    A[PR to main] --> B[pr-validation.yml]
+    B --> C{Merge}
+    C --> D[build.yml]
+    D --> E[SHA-tagged image]
+    E --> F[Manual: Deploy Staging]
+    F --> G[QA Validation]
+    G --> H[release-please PR]
+    H --> I[Merge release PR]
+    I --> J[publish-docker.yml]
+    J --> K[deploy-production.yml]
 ```
+
+**Workflow Files**:
+
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `pr-validation.yml` | PR to main | Lint, typecheck, unit tests, security scans |
+| `build.yml` | Push to main | Build SHA-tagged Docker image, container scan |
+| `publish-docker.yml` | Version tag | Retag SHA image with version, publish |
+| `deploy-production.yml` | After publish | Deploy to production via DO App Platform |
 
 ### 6.2 Security Scan Requirements
 
-| Scan Type     | Tool                  | Failure Threshold   | Frequency            |
-| ------------- | --------------------- | ------------------- | -------------------- |
-| **SAST**      | CodeQL / Semgrep      | Any high/critical   | Every PR             |
-| **SCA**       | npm audit / Snyk      | Any high/critical   | Every PR             |
-| **Secrets**   | TruffleHog / GitLeaks | Any detected secret | Every commit         |
-| **Container** | Trivy                 | Any critical CVE    | Before registry push |
-| **SBOM**      | Syft / CycloneDX      | Generate always     | Every release        |
+| Scan Type     | Tool                     | Status         | Failure Threshold   | Frequency            |
+| ------------- | ------------------------ | -------------- | ------------------- | -------------------- |
+| **SAST**      | eslint-plugin-security   | Implementing   | Any high/critical   | Every PR             |
+| **SCA**       | pnpm audit               | Active         | Critical only       | Every PR             |
+| **Secrets**   | gitleaks                 | Active         | Any detected secret | Every PR             |
+| **Container** | Trivy (v0.28.0)          | Active         | Critical/High CVE   | Before registry push |
+| **SBOM**      | BuildKit attestation     | Active         | Generate always     | Every release        |
 
 ### 6.3 Deployment Gates
 
@@ -737,8 +730,8 @@ Alert Received
 **Manual Failover (if required):**
 
 1. Promote standby to primary
-2. Update connection strings (via Kubernetes secret update)
-3. Restart application pods to pick up new connection
+2. Update connection strings (via App Platform encrypted env vars)
+3. Redeploy application to pick up new connection
 
 **Recovery Validation:**
 
@@ -781,57 +774,46 @@ Alert Received
 
 ## **9. Infrastructure as Code**
 
-### 9.1 GitOps Workflow
+### 9.1 App Spec Workflow
 
-All infrastructure changes follow GitOps principles:
+Infrastructure changes follow App Spec-based GitOps:
 
 ```
-Developer PR → Review → Merge → ArgoCD Sync → Apply to Cluster
+Developer PR (.do/app.yaml) → Review → Merge → GitHub Actions → doctl apps update
 ```
 
 ### 9.2 Infrastructure Repository Structure
 
 ```
-infrastructure/
-├── terraform/
-│   ├── modules/
-│   │   ├── kubernetes/
-│   │   ├── database/
-│   │   ├── networking/
-│   │   └── observability/
-│   ├── environments/
-│   │   ├── staging/
-│   │   │   └── main.tf
-│   │   └── production/
-│   │       └── main.tf
-│   └── backend.tf
-├── kubernetes/
-│   ├── base/
-│   │   ├── deployment.yaml
-│   │   ├── service.yaml
-│   │   └── hpa.yaml
-│   └── overlays/
-│       ├── staging/
-│       └── production/
-└── argocd/
-    └── applications/
+.do/
+├── app.yaml              # Main app specification
+├── app.staging.yaml      # Staging overrides (optional)
+└── README.md             # Infrastructure documentation
+
+.github/workflows/
+├── pr-validation.yml     # PR checks
+├── build.yml             # Build SHA-tagged images
+├── deploy-staging.yml    # Manual staging deploy
+├── publish-docker.yml    # Tag release images
+└── deploy-production.yml # Production deploy
 ```
 
-### 9.3 Drift Detection
+### 9.3 Configuration Management
 
-Terraform drift detection runs daily:
+App Platform configuration is version-controlled in `.do/app.yaml`:
 
 ```bash
-# automated drift check (runs in CI)
-terraform plan -detailed-exitcode
+# validate app spec
+doctl apps spec validate .do/app.yaml
 
-# exit codes:
-# 0 = no changes
-# 1 = error
-# 2 = changes detected (drift)
+# apply changes (via GitHub Actions, not manual)
+doctl apps update <app-id> --spec .do/app.yaml
+
+# view current deployment
+doctl apps list-deployments <app-id>
 ```
 
-Drift alerts are sent to #ops-infrastructure channel with detailed diff.
+Changes to infrastructure trigger PR review process before deployment.
 
 ---
 
@@ -866,3 +848,4 @@ Drift alerts are sent to #ops-infrastructure channel with detailed diff.
 | v1.0.0  | 2025-02-18 | Abe Caymo             | Initial version                                                                                                                                                                                        |
 | v1.0.1  | 2025-06-04 | Abe Caymo             | Added Result-based error reporting section                                                                                                                                                             |
 | v2.0.0  | 2026-01-15 | Document Review Panel | Major rewrite: aligned with TSD v3.0.0, ADD v2.0.0; added OpenTelemetry, health checks, feature flags, container orchestration (K8s), RFC 7807 operations, severity model, RTO/RPO targets, GitOps/IaC |
+| v2.1.0  | 2026-02-03 | Multi-Model Consensus | Aligned with ADD: replaced K8s with DigitalOcean App Platform, TBD environments, Build Once Deploy Many pipeline, added security scan status |

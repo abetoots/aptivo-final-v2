@@ -1,21 +1,20 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-CORE-OBSERVABILITY
 title: Observability Implementation Checklist
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-18'
+parent: ../03-architecture/platform-core-add.md
 ---
 # Observability Implementation Checklist
-
-**Parent:** [04-Technical-Specifications.md](index.md)
-**Full Guide:** [05e-Observability.md](../05e-Observability.md)
+**Full Guide:** [05d-Observability.md](../05-guidelines/05d-Observability.md)
 
 *v2.0.0 – January 15, 2026*
 
 ---
 
-This document serves as a quick reference checklist for implementing observability. For complete architecture, patterns, and code examples, see **[05e-Observability.md](../05e-Observability.md)**.
+This document serves as a quick reference checklist for implementing observability. For complete architecture, patterns, and code examples, see **[05d-Observability.md](../05-guidelines/05d-Observability.md)**.
 
 ---
 
@@ -55,7 +54,7 @@ interface RequiredLogFields {
 - [ ] Include service name and version in base config
 - [ ] Never log PII (names, emails, addresses) - use IDs instead
 
-**See:** [05e-Observability.md Section 5](../05e-Observability.md#5-structured-logging) for full implementation.
+**See:** [05d-Observability.md Section 5](../05-guidelines/05d-Observability.md#5-structured-logging) for full implementation.
 
 ---
 
@@ -80,7 +79,7 @@ interface RequiredLogFields {
 - [ ] Never filter `.*_bucket` metrics (breaks P95/P99)
 - [ ] Increment `aptivo_result_errors_total` on every `Result.Err`
 
-**See:** [05e-Observability.md Section 3](../05e-Observability.md#3-metrics-implementation) for full implementation.
+**See:** [05d-Observability.md Section 3](../05-guidelines/05d-Observability.md#3-metrics-implementation) for full implementation.
 
 ---
 
@@ -103,7 +102,7 @@ interface RequiredLogFields {
 | Staging | Head-based | 100% |
 | Production | Tail-based | 10% + all errors + all slow (>500ms) |
 
-**See:** [05e-Observability.md Section 4](../05e-Observability.md#4-distributed-tracing) for full implementation.
+**See:** [05d-Observability.md Section 4](../05-guidelines/05d-Observability.md#4-distributed-tracing) for full implementation.
 
 ---
 
@@ -130,7 +129,7 @@ if (!result.success) {
 }
 ```
 
-**See:** [05e-Observability.md Section 6](../05e-Observability.md#6-error-tracking-sentry) for full implementation.
+**See:** [05d-Observability.md Section 6](../05-guidelines/05d-Observability.md#6-error-tracking-sentry) for full implementation.
 
 ---
 
@@ -153,7 +152,7 @@ if (!result.success) {
 | Warning | Slack #ops-alerts |
 | Info | Slack #ops-errors |
 
-**See:** [05e-Observability.md Section 9](../05e-Observability.md#9-alerting-configuration) for full implementation.
+**See:** [05d-Observability.md Section 9](../05-guidelines/05d-Observability.md#9-alerting-configuration) for full implementation.
 
 ---
 
@@ -178,7 +177,7 @@ if (!result.success) {
 - [ ] Include changes (before/after) for modifications
 - [ ] Never delete audit records
 
-**See:** [05e-Observability.md Section 12](../05e-Observability.md#12-audit-logging) for full implementation.
+**See:** [05d-Observability.md Section 12](../05-guidelines/05d-Observability.md#12-audit-logging) for full implementation.
 
 ---
 
@@ -203,7 +202,7 @@ if (!result.success) {
 - [ ] Hash user IDs before logging
 - [ ] Review telemetry data for PII leakage
 
-**See:** [05e-Observability.md Section 11](../05e-Observability.md#11-security--privacy) for full implementation.
+**See:** [05d-Observability.md Section 11](../05-guidelines/05d-Observability.md#11-security--privacy) for full implementation.
 
 ---
 
@@ -233,4 +232,23 @@ if (!result.success) {
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | v1.0.0 | 2025-02-18 | Abe Caymo | Initial version |
-| v2.0.0 | 2026-01-15 | Document Review Panel | Converted to implementation checklist, added cross-references to 05e-Observability.md |
+| v2.0.0 | 2026-01-15 | Document Review Panel | Converted to implementation checklist, added cross-references to 05d-Observability.md |
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| Observability requirements | [platform-core-frd.md](../../02-requirements/platform-core-frd.md) | Section 7 (Observability) |
+| SLO definitions | [platform-core-add.md](../../03-architecture/platform-core-add.md) | Section 8 (Observability Architecture) |
+| Audit log requirements | [platform-core-frd.md](../../02-requirements/platform-core-frd.md) | Section 7.4 |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| Full observability guide | [05d-Observability.md](../05-guidelines/05d-Observability.md) | All Sections |
+| Alert response procedures | [01-runbook.md](../06-operations/01-runbook.md) | Incident Response |

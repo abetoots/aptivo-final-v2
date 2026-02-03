@@ -1,17 +1,20 @@
 ---
-id: TSD-MKJP625C
+id: TSD-PLATFORM-CORE
 title: Technical Specifications Document (TSD)
 status: Draft
-version: 1.0.0
+version: 4.1.0
 owner: '@owner'
-last_updated: '2026-01-18'
+last_updated: '2026-02-02'
+parent: ../03-architecture/platform-core-add.md
 ---
 # Technical Specifications Document (TSD)
 
-**Outsourcing Digital Agency – Integrated Internal Systems Ecosystem**
+**Aptivo Agentic Platform – Shared Infrastructure & Domain Applications**
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| v4.1.0 | 2026-02-02 | Document Review | Added Crypto Domain specs: database, api, mcp-servers, workflow-engine |
+| v4.0.0 | 2026-02-02 | Multi-Model Review | Platform Core ADD alignment: added HITL Gateway, LLM Gateway, Notification Bus specs |
 | v3.0.0 | 2025-01-15 | Document Review Panel | Major restructure: modular split, Phase 1 alignment, migration queue incorporation |
 | v2.0.0 | 2025-06-04 | Abe Caymo | Functional implementation details |
 | v1.0.0 | 2025-02-18 | Abe Caymo | Initial draft |
@@ -22,7 +25,7 @@ last_updated: '2026-01-18'
 
 ### 1.1 Purpose
 
-This document provides the detailed technical specifications required to implement the Integrated Internal Systems Ecosystem. It serves as the **index and root document** for a modular specification suite organized by domain.
+This document provides the detailed technical specifications required to implement Aptivo. It serves as the **index and root document** for a modular specification suite organized by domain.
 
 ### 1.2 Audience
 
@@ -45,10 +48,17 @@ Implementation specifications for **Phase 1 MVP** modules as defined in BRD v2.0
 
 | Document | Purpose |
 |----------|---------|
-| [01-Business-Requirements.md](../01-strategy/brd.md) | Business goals, phased approach, success metrics |
-| [02-Functional-Requirements.md](../02-requirements/frd.md) | Detailed functional requirements with acceptance criteria |
-| [03-Application-Design.md](../03-architecture/add.md) | Architecture, data flow, integration patterns |
-| [05a-Coding-Guidelines.md](../05-guidelines/05a-Coding-Guidelines.md) | Code style, naming conventions |
+| **Platform Core (Shared Infrastructure)** | |
+| [Platform Core BRD](../01-strategy/platform-core-brd.md) | Core business requirements |
+| [Platform Core FRD](../02-requirements/platform-core-frd.md) | Core functional requirements |
+| [Platform Core ADD](../03-architecture/platform-core-add.md) | Core architecture (parent of this TSD) |
+| **Domain Addendums** | |
+| [Crypto Domain BRD](../01-strategy/crypto-domain-addendum.md) | Trading domain business requirements |
+| [HR Domain BRD](../01-strategy/hr-domain-addendum.md) | HR domain business requirements |
+| [Crypto Domain FRD](../02-requirements/crypto-domain-frd.md) | Trading domain functional requirements |
+| [HR Domain FRD](../02-requirements/hr-domain-frd.md) | HR domain functional requirements |
+| **Development Guidelines** | |
+| [Coding Guidelines](../05-guidelines/05a-Coding-Guidelines.md) | Code style, naming conventions |
 
 ---
 
@@ -57,19 +67,44 @@ Implementation specifications for **Phase 1 MVP** modules as defined in BRD v2.0
 The TSD is organized into focused specification documents:
 
 ```
-docs/
-├── 04-Technical-Specifications.md     ← You are here (root index)
-└── specs/
-    ├── project-structure.md           ← Monorepo structure, Turborepo config, package boundaries
-    ├── common-patterns.md             ← Error types, event bus, caching
-    ├── database.md                    ← Schema conventions, entity definitions
-    ├── api.md                         ← REST standards, OpenAPI, error responses
-    ├── authentication.md              ← IdP integration, JWT, RBAC, Zero Trust
-    ├── candidate-management.md        ← CM module specifications
-    ├── workflow-automation.md         ← WA module specifications
-    ├── file-storage.md                ← FS module specifications
-    ├── configuration.md               ← Environment, secrets, health checks
-    ├── observability.md               ← Logging, metrics, tracing
+docs/04-specs/
+├── index.md                           ← You are here (root index)
+│
+├── # Platform Core Services (Build - Unique Differentiators)
+├── platform-core/
+│   ├── index.md                       ← Platform core services index
+│   ├── mcp-layer.md                   ← MCP tool consumption, AgentKit, resilience
+│   ├── hitl-gateway.md                ← HITL approval tokens, Inngest integration
+│   └── llm-gateway.md                 ← Provider abstraction, cost tracking, budgets
+│
+├── # Notification Service (Buy - Novu SaaS)
+├── notification-bus.md                ← Novu integration spec
+│
+├── # Foundational Infrastructure
+├── project-structure.md               ← Monorepo structure, Turborepo config, package boundaries
+├── common-patterns.md                 ← Error types, event bus, caching
+├── database.md                        ← Schema conventions, entity definitions (updated)
+├── api.md                             ← REST standards, OpenAPI, error responses
+├── authentication.md                  ← IdP integration, JWT, RBAC, Zero Trust
+├── file-storage.md                    ← S3-compatible storage, retention, malware scanning
+├── configuration.md                   ← Environment, secrets, health checks
+├── observability.md                   ← Logging, metrics, tracing
+│
+├── # HR Domain Modules
+├── hr/
+│   ├── index.md                       ← HR domain index
+│   ├── candidate-management.md        ← CM module specifications
+│   └── workflow-automation.md         ← WA module specifications (HR-specific)
+│
+├── # Crypto Domain Modules
+├── crypto/
+│   ├── index.md                       ← Crypto domain index
+│   ├── database.md                    ← 8 trading tables, DuckDB analytics (Phase 2+)
+│   ├── api.md                         ← 21 REST endpoints, WebSocket events
+│   ├── mcp-servers.md                 ← 13 MCP integrations (blockchain, market data)
+│   └── workflow-engine.md             ← 6 LangGraph.js trading workflows
+│
+└── # Future Domains
     └── deferred-contracts.md          ← Interface contracts for Phase 1+ modules
 ```
 
@@ -121,11 +156,11 @@ docs/
 
 | Capability | Reference Implementation | Notes |
 |------------|-------------------------|-------|
-| **Identity Provider** | Keycloak or Authentik | OIDC/OAuth 2.0, SAML |
-| **Session Management** | Auth.js (NextAuth) | Frontend session handling |
-| **MFA** | TOTP, WebAuthn | Second factor authentication |
+| **Identity Provider** | Supabase Auth | Managed, 50K MAU free, magic links |
+| **Session Management** | Supabase Auth SDK | Automatic token refresh |
+| **MFA** | TOTP (Phase 1), WebAuthn (Phase 2) | Second factor authentication |
 
-> **Note:** Auth.js handles frontend session management and OIDC client flows. The IdP (Keycloak/Authentik) is the authoritative identity source. See [specs/authentication.md](authentication.md) for integration details.
+> **Note:** Per ADD v2.0.0 (Multi-Model Consensus 2026-02-02), Supabase Auth is selected for Phase 1. It provides passwordless authentication (magic links) per BRD requirement with standard OIDC/JWT tokens for future migration flexibility. See [specs/authentication.md](authentication.md) for integration details.
 
 ---
 
@@ -159,22 +194,11 @@ type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
 
 ### 4.3 API Error Responses (RFC 7807)
 
-All API endpoints return errors following RFC 7807 Problem Details:
+All API endpoints return errors following RFC 7807 Problem Details format.
 
-```typescript
-interface ProblemDetails {
-  type: string;        // URI reference identifying error type
-  title: string;       // Short human-readable summary
-  status: number;      // HTTP status code
-  detail?: string;     // Human-readable explanation
-  instance?: string;   // URI reference to specific occurrence
-  // extension members
-  field?: string;      // For validation errors
-  traceId?: string;    // For debugging
-}
-```
+**Canonical Reference:** See [common-patterns.md](common-patterns.md#4-api-error-mapping-rfc-7807) for the complete `ProblemDetails` interface definition, error type URIs, and error-to-HTTP status mapping.
 
-See [specs/api.md](api.md) for complete API standards.
+See [api.md](api.md) for additional API standards.
 
 ---
 
@@ -233,17 +257,34 @@ Per ADD v2.0.0 Section 6:
 
 | Document | Primary Content |
 |----------|----------------|
-| [specs/project-structure.md](project-structure.md) | Monorepo structure, Turborepo config, package boundaries |
-| [specs/common-patterns.md](common-patterns.md) | Error types, Result wrapper, event bus patterns |
-| [specs/database.md](database.md) | Schema conventions, entity definitions, indexes |
-| [specs/api.md](api.md) | REST standards, OpenAPI generation, rate limiting |
-| [specs/authentication.md](authentication.md) | IdP integration, JWT structure, RBAC mapping |
-| [specs/candidate-management.md](candidate-management.md) | CM module: entities, APIs, workflows |
-| [specs/workflow-automation.md](workflow-automation.md) | WA module: triggers, actions, saga patterns |
-| [specs/file-storage.md](file-storage.md) | S3 integration, upload flows, retention |
-| [specs/configuration.md](configuration.md) | Environment variables, secrets, health checks |
-| [specs/observability.md](observability.md) | Logging standards, metrics, tracing |
-| [specs/deferred-contracts.md](deferred-contracts.md) | Interface contracts for Financial, Ticketing, PM, CRM |
+| **Platform Core Services (Build)** | |
+| [platform-core/index.md](platform-core/index.md) | Platform core services overview |
+| [platform-core/mcp-layer.md](platform-core/mcp-layer.md) | MCP tool consumption via AgentKit |
+| [platform-core/hitl-gateway.md](platform-core/hitl-gateway.md) | HITL approval tokens, Inngest integration, policy engine |
+| [platform-core/llm-gateway.md](platform-core/llm-gateway.md) | Provider abstraction, cost tracking, budgets, observability |
+| **Notification Service (Buy)** | |
+| [notification-bus.md](notification-bus.md) | Novu SaaS integration |
+| **Foundational Infrastructure** | |
+| [project-structure.md](project-structure.md) | Monorepo structure, Turborepo config, package boundaries |
+| [common-patterns.md](common-patterns.md) | Error types, Result wrapper, event bus patterns |
+| [database.md](database.md) | Schema conventions, entity definitions, indexes |
+| [api.md](api.md) | REST standards, OpenAPI generation, rate limiting |
+| [authentication.md](authentication.md) | IdP integration, JWT structure, RBAC mapping |
+| [file-storage.md](file-storage.md) | S3 integration, upload flows, retention |
+| [configuration.md](configuration.md) | Environment variables, secrets, health checks |
+| [observability.md](observability.md) | Logging standards, metrics, tracing |
+| **HR Domain Modules** | |
+| [hr/index.md](hr/index.md) | HR domain index and overview |
+| [hr/candidate-management.md](hr/candidate-management.md) | CM module: entities, APIs, workflows |
+| [hr/workflow-automation.md](hr/workflow-automation.md) | WA module: triggers, actions, saga patterns |
+| **Crypto Domain Modules** | |
+| [crypto/index.md](crypto/index.md) | Crypto domain index and overview |
+| [crypto/database.md](crypto/database.md) | 8 trading tables, DuckDB analytics (Phase 2+) |
+| [crypto/api.md](crypto/api.md) | 21 REST endpoints, WebSocket events |
+| [crypto/mcp-servers.md](crypto/mcp-servers.md) | 13 MCP integrations (blockchain, market data) |
+| [crypto/workflow-engine.md](crypto/workflow-engine.md) | 6 LangGraph.js trading workflows |
+| **Future Domains** | |
+| [deferred-contracts.md](deferred-contracts.md) | Interface contracts for Financial, Ticketing, PM, CRM |
 
 ### 7.2 External Service Timeouts
 

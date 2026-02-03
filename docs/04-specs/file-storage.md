@@ -1,14 +1,13 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-CORE-FILE-STORAGE
 title: File Storage Module Specification
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-18'
+parent: ../03-architecture/platform-core-add.md
 ---
 # File Storage Module Specification
-
-**Parent:** [04-Technical-Specifications.md](index.md)
 
 **FRD Reference:** FS1-FS2 (Section 3.4)
 
@@ -438,3 +437,22 @@ const processExpiredFiles = async () => {
 - **Durability:** 99.999999999% (11 nines) with erasure coding
 - **Availability:** 99.9% uptime SLO
 - **Replication:** 3 copies across availability zones
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| File storage requirements | [platform-core-frd.md](../../02-requirements/platform-core-frd.md) | Section 11 (File Storage Service) |
+| Resume/document uploads | [hr-domain-frd.md](../../02-requirements/hr-domain-frd.md) | FR-HR-CM-001 (Candidate Repository) |
+| Data retention requirements | [platform-core-add.md](../../03-architecture/platform-core-add.md) | Section 9.2 (Data Retention) |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| File upload patterns | [05a-Coding-Guidelines.md](../05-guidelines/05a-Coding-Guidelines.md) | File Handling |
+| Virus scanning operations | [01-runbook.md](../06-operations/01-runbook.md) | Security Operations |

@@ -1,5 +1,5 @@
 ---
-id: GUIDELINE-MKJP625C
+id: GUIDELINE-READER-RESULT
 title: 5.c ReaderResult Quick-Start Guide
 status: Draft
 version: 1.0.0
@@ -10,6 +10,17 @@ last_updated: "2026-01-21"
 # 5.c ReaderResult Quick-Start Guide
 
 **Parent:** [05-guidelines/index.md](./index.md)
+
+---
+
+## Traceability
+
+| Requirement | Source | How Addressed |
+|-------------|--------|---------------|
+| Dependency injection | ADD §4.1 | Reader pattern for explicit deps |
+| Error handling | TSD §4.2 | Result types, no exceptions |
+| Testability | ADD §4.1 | Pure functions, mock-free testing |
+| Functional core | ADD §4.1 | Imperative shell with ReaderResult |
 
 ---
 

@@ -1,14 +1,13 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-CORE-API
 title: API Standards Specification
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-18'
+parent: ../03-architecture/platform-core-add.md
 ---
 # API Standards Specification
-
-**Parent:** [04-Technical-Specifications.md](index.md)
 
 ---
 
@@ -105,58 +104,13 @@ interface CollectionResponse<T> {
 
 ### 2.3 Error Response Format (RFC 7807)
 
-```typescript
-interface ProblemDetails {
-  type: string;        // URI reference identifying the problem type
-  title: string;       // Short, human-readable summary
-  status: number;      // HTTP status code
-  detail?: string;     // Human-readable explanation specific to this occurrence
-  instance?: string;   // URI reference identifying the specific occurrence
-  // extension members
-  traceId?: string;    // For debugging/support
-  errors?: Array<{     // For validation errors
-    field: string;
-    message: string;
-    code?: string;
-  }>;
-}
-```
+All API errors follow RFC 7807 Problem Details format.
 
-Example error responses:
-
-```json
-// 400 Validation Error
-{
-  "type": "/errors/validation",
-  "title": "Validation Failed",
-  "status": 400,
-  "detail": "One or more fields failed validation",
-  "traceId": "abc123",
-  "errors": [
-    { "field": "email", "message": "Invalid email format", "code": "INVALID_FORMAT" },
-    { "field": "phone", "message": "Phone number is required", "code": "REQUIRED" }
-  ]
-}
-
-// 404 Not Found
-{
-  "type": "/errors/not-found",
-  "title": "Resource Not Found",
-  "status": 404,
-  "detail": "Candidate with ID '01HXYZ123' was not found",
-  "instance": "/api/v1/candidates/01HXYZ123",
-  "traceId": "def456"
-}
-
-// 500 Internal Error
-{
-  "type": "/errors/internal",
-  "title": "Internal Server Error",
-  "status": 500,
-  "detail": "An unexpected error occurred. Please try again later.",
-  "traceId": "ghi789"
-}
-```
+**Canonical Reference:** See [common-patterns.md](common-patterns.md#4-api-error-mapping-rfc-7807) for:
+- ProblemDetails interface definition
+- Error type URIs
+- Error-to-HTTP status mapping
+- Full implementation examples
 
 ---
 
@@ -363,7 +317,7 @@ export const openApiDocument = generator.generateDocument({
   info: {
     title: 'Aptivo API',
     version: '1.0.0',
-    description: 'Integrated Internal Systems API',
+    description: 'Aptivo Agentic Platform API',
   },
   servers: [
     { url: 'https://api.aptivo.com', description: 'Production' },
@@ -488,3 +442,22 @@ const corsConfig = {
   maxAge: 86400, // 24 hours
 };
 ```
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| REST API Standards | platform-core-frd.md | Section 11.1 (FR-CORE-INT-001) |
+| Error Handling | platform-core-frd.md | Section 8.5 (FR-CORE-BLOB-001) |
+| Rate Limiting | platform-core-frd.md | Section 5.3 (FR-CORE-MCP-003) |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| API Patterns | 05a-Coding-Guidelines.md | API Layer Patterns |
+| Error Response Implementation | common-patterns.md | Section 4 |

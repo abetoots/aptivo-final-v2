@@ -1,14 +1,13 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-CORE-DATABASE
 title: Database Specification
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-18'
+parent: ../03-architecture/platform-core-add.md
 ---
 # Database Specification
-
-**Parent:** [04-Technical-Specifications.md](index.md)
 
 ---
 
@@ -412,34 +411,181 @@ export const workflowExecutions = pgTable('workflow_executions', {
 
 ---
 
-## 4. Audit Tables
+## 4. Platform Core Tables
 
-### 4.1 Audit Log
+> **Note:** These tables support the shared Platform Core services (HITL, LLM, Notifications, Audit). For detailed specifications, see:
+> - [hitl-gateway.md](hitl-gateway.md) - HITL requests, decisions, policies
+> - [llm-gateway.md](llm-gateway.md) - LLM usage logs, budget configs
+> - [notification-bus.md](notification-bus.md) - Templates, logs, preferences
+
+### 4.1 Audit Log (Tamper-Evident)
 
 ```typescript
 export const auditLogs = pgTable('audit_logs', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   // actor
   userId: uuid('user_id').references(() => users.id),
-  userEmail: varchar('user_email', { length: 255 }),
+  actorType: varchar('actor_type', { length: 50 }).notNull(), // 'user', 'system', 'workflow'
   ipAddress: varchar('ip_address', { length: 45 }),
   userAgent: text('user_agent'),
   // action
   action: varchar('action', { length: 100 }).notNull(),
-  entityType: varchar('entity_type', { length: 100 }).notNull(),
-  entityId: uuid('entity_id'),
+  resourceType: varchar('resource_type', { length: 100 }).notNull(),
+  resourceId: uuid('resource_id'),
+  // domain context
+  domain: varchar('domain', { length: 50 }), // 'hr', 'crypto', 'core'
   // details
-  previousState: jsonb('previous_state'),
-  newState: jsonb('new_state'),
   metadata: jsonb('metadata'),
+  // tamper-evidence chain (ADD Section 9.3)
+  previousHash: varchar('previous_hash', { length: 64 }),
+  currentHash: varchar('current_hash', { length: 64 }).notNull(),
   // timing
-  occurredAt: timestamp('occurred_at', { withTimezone: true }).defaultNow().notNull(),
+  timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  userIdx: index('audit_logs_user_id_idx').on(table.userId),
-  entityIdx: index('audit_logs_entity_idx').on(table.entityType, table.entityId),
-  occurredAtIdx: index('audit_logs_occurred_at_idx').on(table.occurredAt),
+  actorIdx: index('audit_logs_user_id_idx').on(table.userId),
+  resourceIdx: index('audit_logs_resource_idx').on(table.resourceType, table.resourceId),
+  timestampIdx: index('audit_logs_timestamp_idx').on(table.timestamp),
+  domainIdx: index('audit_logs_domain_idx').on(table.domain),
+}));
+
+// NOTE: audit_logs table has NO UPDATE/DELETE permissions granted
+// Partitioned by month for retention management
+```
+
+### 4.2 LLM Usage Logs
+
+```typescript
+export const llmUsageLogs = pgTable('llm_usage_logs', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  // workflow context
+  workflowId: uuid('workflow_id'),
+  domain: varchar('domain', { length: 50 }).notNull(),
+  // provider details
+  provider: varchar('provider', { length: 50 }).notNull(),
+  model: varchar('model', { length: 100 }).notNull(),
+  // token counts
+  promptTokens: integer('prompt_tokens').notNull(),
+  completionTokens: integer('completion_tokens').notNull(),
+  totalTokens: integer('total_tokens').notNull(),
+  // cost (USD)
+  costUsd: numeric('cost_usd', { precision: 10, scale: 6 }).notNull(),
+  // metadata
+  latencyMs: integer('latency_ms'),
+  wasFallback: boolean('was_fallback').default(false),
+  // timing
+  timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  workflowIdx: index('llm_usage_logs_workflow_id_idx').on(table.workflowId),
+  domainIdx: index('llm_usage_logs_domain_idx').on(table.domain),
+  timestampIdx: index('llm_usage_logs_timestamp_idx').on(table.timestamp),
 }));
 ```
+
+### 4.3 HITL Requests
+
+```typescript
+export const hitlStatusEnum = pgEnum('hitl_status', [
+  'pending', 'approved', 'rejected', 'expired', 'canceled',
+]);
+
+export const hitlRequests = pgTable('hitl_requests', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  workflowId: uuid('workflow_id').notNull(),
+  status: hitlStatusEnum('status').default('pending').notNull(),
+  token: varchar('token', { length: 2048 }).notNull().unique(),
+  tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }).notNull(),
+  actionType: varchar('action_type', { length: 100 }).notNull(),
+  summary: text('summary').notNull(),
+  details: jsonb('details'),
+  domain: varchar('domain', { length: 50 }).notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  resolvedAt: timestamp('resolved_at', { withTimezone: true }),
+}, (table) => ({
+  workflowIdx: index('hitl_requests_workflow_id_idx').on(table.workflowId),
+  statusIdx: index('hitl_requests_status_idx').on(table.status),
+  tokenIdx: uniqueIndex('hitl_requests_token_idx').on(table.token),
+}));
+```
+
+### 4.4 HITL Decisions
+
+```typescript
+export const hitlDecisionEnum = pgEnum('hitl_decision', [
+  'approved', 'rejected', 'request_changes',
+]);
+
+export const hitlDecisions = pgTable('hitl_decisions', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  requestId: uuid('request_id').references(() => hitlRequests.id, { onDelete: 'cascade' }).notNull(),
+  approverId: uuid('approver_id').references(() => users.id).notNull(),
+  decision: hitlDecisionEnum('decision').notNull(),
+  comment: text('comment'),
+  channel: varchar('channel', { length: 50 }).notNull(),
+  decidedAt: timestamp('decided_at', { withTimezone: true }).defaultNow().notNull(),
+}, (table) => ({
+  requestIdx: index('hitl_decisions_request_id_idx').on(table.requestId),
+}));
+```
+
+### 4.5 Notification Templates
+
+```typescript
+export const notificationTemplates = pgTable('notification_templates', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  slug: varchar('slug', { length: 100 }).notNull().unique(),
+  name: varchar('name', { length: 255 }).notNull(),
+  domain: varchar('domain', { length: 50 }),
+  version: integer('version').default(1).notNull(),
+  isActive: boolean('is_active').default(true).notNull(),
+  emailTemplate: jsonb('email_template'),
+  telegramTemplate: jsonb('telegram_template'),
+  pushTemplate: jsonb('push_template'),
+  ...timestamps,
+});
+```
+
+### 4.6 Sessions (Platform Core Identity)
+
+```typescript
+export const sessions = pgTable('sessions', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  token: varchar('token', { length: 512 }).notNull().unique(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  lastActiveAt: timestamp('last_active_at', { withTimezone: true }).defaultNow().notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+  deviceInfo: jsonb('device_info'),
+  revoked: boolean('revoked').default(false).notNull(),
+}, (table) => ({
+  userIdx: index('sessions_user_id_idx').on(table.userId),
+  tokenIdx: uniqueIndex('sessions_token_idx').on(table.token),
+  expiresIdx: index('sessions_expires_at_idx').on(table.expiresAt),
+}));
+```
+
+### 4.7 Authenticators (WebAuthn)
+
+```typescript
+export const authenticators = pgTable('authenticators', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  credentialId: varchar('credential_id', { length: 512 }).notNull().unique(),
+  publicKey: text('public_key').notNull(),
+  counter: integer('counter').default(0).notNull(),
+  deviceName: varchar('device_name', { length: 255 }),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  lastUsedAt: timestamp('last_used_at', { withTimezone: true }),
+}, (table) => ({
+  userIdx: index('authenticators_user_id_idx').on(table.userId),
+  credentialIdx: uniqueIndex('authenticators_credential_id_idx').on(table.credentialId),
+}));
+```
+
+---
+
+## 5. HR Domain Tables
+
+> **Note:** The following tables are in the `aptivo_hr` schema for domain isolation.
 
 ---
 
@@ -488,3 +634,22 @@ const pendingWorkflowsIdx = index('workflow_executions_pending_idx')
 3. **Reversible** - include `down` migration when possible
 4. **Data preservation** - migrate data before dropping columns
 5. **Index separately** - create indexes in separate migrations for large tables
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| Data model requirements | [platform-core-frd.md](../../02-requirements/platform-core-frd.md) | Section 8 (Data Model) |
+| Candidate data model | [hr-domain-frd.md](../../02-requirements/hr-domain-frd.md) | Section 3 (Candidate Management) |
+| Audit logging requirements | [platform-core-add.md](../../03-architecture/platform-core-add.md) | Section 9.3 (Tamper-Evident Logs) |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| Schema implementation | [05a-Coding-Guidelines.md](../05-guidelines/05a-Coding-Guidelines.md) | Database Patterns |
+| Migration procedures | [01-runbook.md](../06-operations/01-runbook.md) | Database Migrations |

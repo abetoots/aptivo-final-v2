@@ -1,14 +1,13 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-HR-CANDIDATE-MGMT
 title: Candidate Management Module Specification
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-18'
+parent: ../../03-architecture/platform-core-add.md
 ---
 # Candidate Management Module Specification
-
-**Parent:** [04-Technical-Specifications.md](index.md)
 
 **FRD Reference:** CM1-CM5 (Section 3.1)
 
@@ -495,3 +494,23 @@ Send contract to candidate for signing.
 - **Active candidates:** Retained indefinitely
 - **Rejected/withdrawn:** 90 days → soft delete → 24 months → purge
 - **Audit logs:** 7 years (compliance)
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| Candidate management requirements | [hr-domain-frd.md](../../02-requirements/hr-domain-frd.md) | FR-HR-CM-001 through FR-HR-CM-005 |
+| Time-to-hire success metric | [brd.md](../../01-strategy/brd.md) | Section 2.2 (HR Domain) |
+| Data privacy requirements | [hr-domain-frd.md](../../02-requirements/hr-domain-frd.md) | FR-HR-CM-005 |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| Candidate database schema | [database.md](../database.md) | Section 2.2 (Candidates Table) |
+| Interview scheduling | [workflow-automation.md](workflow-automation.md) | Section 5 (Built-in Actions) |
+| File storage for resumes | [file-storage.md](../file-storage.md) | Section 2.2 (Bucket Structure) |

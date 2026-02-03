@@ -1,14 +1,13 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-CORE-PATTERNS
 title: Common Patterns Specification
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-18'
+parent: ../03-architecture/platform-core-add.md
 ---
 # Common Patterns Specification
-
-**Parent:** [04-Technical-Specifications.md](index.md)
 
 ---
 
@@ -451,3 +450,24 @@ timeout: 300s  # 5 minutes total saga timeout
 | `compensating` | Rolling back due to failure | → `compensated`, `failed` |
 | `compensated` | All compensations succeeded | (terminal) |
 | `failed` | Unrecoverable failure | (terminal, requires manual intervention) |
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| Result Types | platform-core-frd.md | Section 4.2 (Error Handling Philosophy) |
+| Event Bus | platform-core-frd.md | FR-CORE-WFE-004 (Trigger Types) |
+| Saga Pattern | platform-core-frd.md | FR-CORE-WFE-005 (Failure Handling) |
+| Caching | platform-core-add.md | Section 5 (Infrastructure) |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| Result Usage | 05a-Coding-Guidelines.md | Error Handling |
+| Result Testing | 05c-ReaderResult-Guide.md | Full Guide |
+| Event Patterns | hr/workflow-automation.md | Event Catalog |

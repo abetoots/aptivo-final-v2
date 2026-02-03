@@ -1,14 +1,13 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-CORE-CONFIG
 title: Configuration Specification
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-18'
+parent: ../03-architecture/platform-core-add.md
 ---
 # Configuration Specification
-
-**Parent:** [04-Technical-Specifications.md](index.md)
 
 ---
 
@@ -472,3 +471,22 @@ export const serviceUrls = {
 # service-name.namespace.svc.cluster.local
 CANDIDATE_SERVICE_URL=http://candidate-service.aptivo.svc.cluster.local:3000
 ```
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| Environment configuration | [platform-core-frd.md](../../02-requirements/platform-core-frd.md) | Section 10 (Configuration Service) |
+| Secret management | [platform-core-add.md](../../03-architecture/platform-core-add.md) | Section 7 (Security Architecture) |
+| Feature flags | [platform-core-frd.md](../../02-requirements/platform-core-frd.md) | Section 10.3 |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| Environment variable patterns | [05a-Coding-Guidelines.md](../05-guidelines/05a-Coding-Guidelines.md) | Environment Configuration |
+| Health check implementation | [01-runbook.md](../06-operations/01-runbook.md) | Health Monitoring |

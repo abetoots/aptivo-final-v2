@@ -1,14 +1,13 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-HR-WORKFLOW
 title: Workflow Automation Module Specification
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-18'
+parent: ../../03-architecture/platform-core-add.md
 ---
 # Workflow Automation Module Specification
-
-**Parent:** [04-Technical-Specifications.md](index.md)
 
 **FRD Reference:** WA1-WA3 (Section 3.2)
 
@@ -571,3 +570,23 @@ Cancel running execution.
 - Execution traces linked to OpenTelemetry
 - Step-level metrics (duration, success rate)
 - Alert on execution failure rate > 5%
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| Workflow automation requirements | [hr-domain-frd.md](../../02-requirements/hr-domain-frd.md) | FR-HR-WA-001 through FR-HR-WA-003 |
+| Administrative task automation goal | [brd.md](../../01-strategy/brd.md) | Section 2.2 (HR Domain) |
+| Event-driven architecture | [platform-core-add.md](../../03-architecture/platform-core-add.md) | Section 10.1 |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| Workflow database schema | [database.md](../database.md) | Section 3 (Workflow Tables) |
+| Event patterns | [common-patterns.md](../common-patterns.md) | Section 5 (Event Patterns) |
+| Worker process architecture | [project-structure.md](../project-structure.md) | Section 7 (Worker App) |

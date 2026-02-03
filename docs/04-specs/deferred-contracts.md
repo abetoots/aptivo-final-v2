@@ -1,14 +1,13 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-CORE-DEFERRED
 title: Deferred Module Interface Contracts
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-18'
+parent: ../03-architecture/platform-core-add.md
 ---
 # Deferred Module Interface Contracts
-
-**Parent:** [04-Technical-Specifications.md](index.md)
 
 ---
 
@@ -550,3 +549,22 @@ When selecting Build vs Buy for each module:
 | Customization | 20% | Does it support our specific workflows? |
 | Integration | 15% | API quality? Event support? |
 | Vendor risk | 10% | Open-source viability? Vendor stability? |
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| Financial module requirements | [platform-core-frd.md](../../02-requirements/platform-core-frd.md) | Section 12 (Deferred Modules) |
+| CRM requirements | [platform-core-frd.md](../../02-requirements/platform-core-frd.md) | Section 12.3 |
+| Ticketing requirements | [platform-core-frd.md](../../02-requirements/platform-core-frd.md) | Section 12.2 |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| Integration patterns | [common-patterns.md](common-patterns.md) | Section 5 (Event Patterns) |
+| Build vs Buy decisions | [02-change-risk-management.md](../06-operations/02-change-risk-management.md) | Vendor Evaluation |

@@ -1,13 +1,14 @@
 ---
-id: RUNBOOK-MKJP625C
+id: RUNBOOK-CHANGE-MGMT
 title: 6.b Change Management & Risk Mitigation
 status: Draft
 version: 1.0.0
 owner: "@owner"
 last_updated: "2026-01-18"
+parent: ../03-architecture/platform-core-add.md
 ---
 
-# 5.d Change Management & Risk Mitigation
+# 6.b Change Management & Risk Mitigation
 
 Created by: Abe Caymo
 Created time: February 18, 2025 5:27 PM
@@ -17,7 +18,7 @@ Last updated time: January 15, 2026
 
 # **Change Management & Risk Mitigation**
 
-_Outsourcing Digital Agency – Integrated Internal Systems Ecosystem_
+_Aptivo Agentic Platform_
 
 _v2.0.0 – [January 15, 2026]_
 
@@ -29,7 +30,7 @@ _Aligned with: ADD v2.0.0, TSD v3.0.0, Coding Guidelines v3.0.0, Testing Strateg
 
 ### 1.1 Purpose
 
-This document establishes the official framework for managing changes to and mitigating risks for the Integrated Internal Systems Ecosystem. It provides a structured process aligned with modern DevOps practices, ensuring that all modifications are controlled, observable, and strategically aligned while maintaining the velocity benefits of CI/CD and GitOps workflows.
+This document establishes the official framework for managing changes to and mitigating risks for Aptivo. It provides a structured process aligned with modern DevOps practices, ensuring that all modifications are controlled, observable, and strategically aligned while maintaining the velocity benefits of CI/CD and GitOps workflows.
 
 ### 1.2 Scope
 
@@ -591,7 +592,7 @@ sum(trivy_vulnerability_count{severity="CRITICAL"}) > 0
 
 ### **3.8 Common Risks Baseline**
 
-Initial risk register for the Integrated Internal Systems Ecosystem:
+Initial risk register for Aptivo:
 
 | ID       | Risk                           | Category    | L   | I   | Score | Mitigation                            |
 | -------- | ------------------------------ | ----------- | --- | --- | ----- | ------------------------------------- |

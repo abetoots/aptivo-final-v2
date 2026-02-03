@@ -1,5 +1,5 @@
 ---
-id: GUIDELINE-MKJP625C
+id: GUIDELINE-CODING
 title: 5.a Coding Guidelines
 status: Draft
 version: 1.0.0
@@ -16,8 +16,20 @@ last_updated: '2026-01-18'
 
 ## 1. Introduction
 
-- **Purpose:** This document defines the mandatory coding standards, patterns, and best practices for the Integrated Internal Systems Ecosystem. Its goal is to ensure consistency, maintainability, and high code quality across all modules using our functional architecture.
+- **Purpose:** This document defines the mandatory coding standards, patterns, and best practices for Aptivo. Its goal is to ensure consistency, maintainability, and high code quality across all modules using our functional architecture.
 - **Audience:** All developers, code reviewers, and technical leads working on the system. Adherence to these guidelines is required for all code contributions.
+
+---
+
+## Traceability
+
+| Requirement | Source | How Addressed |
+|-------------|--------|---------------|
+| Functional architecture | ADD §4.1 | ReaderResult pattern, pure domain functions |
+| Zero Trust security | ADD §6 | Validation at boundaries, explicit auth |
+| Type safety | TSD §4.1 | TypeScript strict mode, Zod validation |
+| Error handling | TSD §4.2 | Result types, RFC 7807 Problem Details |
+| Observability | ADD §8 | OpenTelemetry tracing, structured logging |
 
 ---
 
@@ -48,45 +60,23 @@ Following ADD v2.0.0, we implement Zero Trust principles throughout the codebase
 
 ### 3.1 Folder Structure
 
-All code follows a layered architecture with clear separation of concerns:
+The project uses a monorepo structure with Turborepo + pnpm workspaces.
+
+**Canonical Reference:** See [04-specs/project-structure.md](../04-specs/project-structure.md) for:
+- Complete directory layout
+- Package boundaries and dependencies
+- Build pipeline configuration
+
+**Key Convention:** All module code follows the vertical slice pattern:
+`apps/web/src/modules/{module}/` with `domain/`, `application/`, `infrastructure/`, `interface/` layers.
 
 ```
-src/
-├── lib/
-│   ├── functional/             # core functional utilities
-│   │   ├── result.ts
-│   │   ├── reader-result.ts
-│   │   ├── composition.ts
-│   │   └── pipeline.ts
-│   ├── validation/             # zod schemas and validators
-│   │   ├── schemas/
-│   │   └── problem-details.ts  # RFC 7807 implementation
-│   ├── observability/          # telemetry utilities
-│   │   ├── tracing.ts
-│   │   └── logger.ts
-│   └── env.ts                  # environment validation
-└── modules/
-    └── candidate-management/
-        ├── domain/             # pure business logic (no side effects)
-        │   ├── candidate.ts    # domain types and pure functions
-        │   ├── validations.ts  # zod schemas for domain
-        │   └── errors.ts       # domain-specific error types
-        ├── infrastructure/     # external integrations & data access
-        │   ├── candidate-repository.ts
-        │   ├── email-service.ts
-        │   └── cache-decorator.ts
-        ├── application/        # service layer using ReaderResult
-        │   └── candidate-service.ts
-        ├── interface/          # API endpoints & UI components
-        │   ├── api/
-        │   │   ├── route.ts
-        │   │   └── schemas.ts  # API-specific zod schemas
-        │   └── components/
-        │       └── candidate-list.tsx
-        └── tests/              # test files organized by layer
-            ├── domain/
-            ├── application/
-            └── interface/
+apps/web/src/modules/{module}/
+├── domain/           # pure business logic (no side effects)
+├── application/      # service layer using ReaderResult
+├── infrastructure/   # external integrations & data access
+├── interface/        # API endpoints & UI components
+└── tests/            # test files organized by layer
 ```
 
 ### 3.2 Naming Conventions
@@ -161,7 +151,7 @@ export const zodValidationError = (error: ZodError): CandidateError => ({
 
 ```typescript
 // domain/candidate.ts
-import { Result } from '@/lib/functional/result';
+import { Result } from '@aptivo/domain';
 import { CreateCandidateInputSchema, type Candidate, type CreateCandidateInput } from './validations';
 import type { CandidateError } from './errors';
 import { zodValidationError } from './errors';
@@ -211,106 +201,42 @@ export const validateStatusTransition = (
 
 ### 4.2 ReaderResult Pattern for Dependency Injection
 
-Use ReaderResult to compose operations with explicit dependencies:
+ReaderResult combines dependency injection with explicit error handling. It enables:
+
+- **Explicit dependencies:** No hidden global state
+- **Composable operations:** Chain with `pipe` and automatic error short-circuiting
+- **Testability:** Provide mock dependencies directly, no module-level mocking
+
+**Full Guide:** See [05c-ReaderResult-Guide.md](./05c-ReaderResult-Guide.md) for complete patterns and examples.
+
+**Key Rules:**
+
+1. Define dependencies in an interface extending `BaseDependencies`
+2. Use `pipe` with Do notation for multi-step workflows
+3. Use `ReaderResult.bind` for critical operations (DB, auth)
+4. Use `ReaderResult.tap` only for non-critical side effects (logging)
+5. Use `ReaderResult.tryCatch` for async operations that may throw
 
 ```typescript
-// application/candidate-service.ts
-import { pipe } from '@/lib/functional/composition';
-import { ReaderResult } from '@/lib/functional/reader-result';
-import { Result } from '@/lib/functional/result';
-import { createCandidate } from '../domain/candidate';
-import type { CandidateRepository } from '../infrastructure/candidate-repository';
-import type { EmailService } from '../infrastructure/email-service';
-import type { EventBus } from '../infrastructure/event-bus';
-import type { Tracer, Span } from '@opentelemetry/api';
-import type { Logger } from 'pino';
+// minimal example - see 05c-ReaderResult-Guide.md for full patterns
+import { pipe, ReaderResult } from '@aptivo/domain';
 
-// define service dependencies explicitly
-export interface CandidateServiceDeps {
-  candidateRepo: CandidateRepository;
-  emailService: EmailService;
-  eventBus: EventBus;
-  logger: Logger;
-  tracer: Tracer;
-  // zero trust: identity context required
-  currentUser: {
-    id: string;
-    permissions: string[];
-  };
-}
-
-// helper to check permissions (zero trust)
-const requirePermission = (
-  permission: string
-): ReaderResult<CandidateServiceDeps, CandidateError, void> =>
-  ReaderResult.asks((deps: CandidateServiceDeps) => {
-    if (!deps.currentUser.permissions.includes(permission)) {
-      throw new Error(`Missing permission: ${permission}`);
-    }
-  });
-
-// service operations using ReaderResult with tracing
-export const createNewCandidate = (
+export const createEntity = (
   data: unknown
-): ReaderResult<CandidateServiceDeps, CandidateError, Candidate> =>
+): ReaderResult<ServiceDeps, DomainError, Entity> =>
   pipe(
-    ReaderResult.Do<CandidateServiceDeps, CandidateError>(),
-    // zero trust: verify permission first
-    ReaderResult.tap(() => requirePermission('candidate:create')),
-    // create span for observability
-    ReaderResult.tap(() => ReaderResult.asks((deps: CandidateServiceDeps) => {
-      deps.logger.info({ userId: deps.currentUser.id }, 'Creating candidate');
-    })),
-    // validate and create candidate (pure domain logic)
-    ReaderResult.bind('candidate', () => ReaderResult.fromResult(createCandidate(data))),
-    // persist (infrastructure)
-    ReaderResult.bind('saved', ({ candidate }) =>
+    ReaderResult.Do<ServiceDeps, DomainError>(),
+    ReaderResult.bind('_perm', () => requirePermission('entity:manage')),
+    ReaderResult.bind('entity', () => ReaderResult.fromResult(createEntityDomain(data))),
+    ReaderResult.bind('saved', ({ entity }) =>
       ReaderResult.tryCatch(
-        (deps: CandidateServiceDeps) => deps.candidateRepo.save(candidate).then(res => {
-          if (!res.success) throw res.error;
-          return res.data;
-        }),
-        (error) => ({ _tag: 'PersistenceError', operation: 'save', cause: error as Error } as CandidateError)
+        (deps) => deps.repo.save(entity),
+        (e) => persistenceError('save', e as Error)
       )
     ),
-    // non-critical: send welcome email
-    ReaderResult.tap(({ saved }) => {
-      const sendEmail = ReaderResult.tryCatch(
-        (deps: CandidateServiceDeps) => deps.emailService.sendWelcomeEmail(saved),
-        (error) => ({ _tag: 'EmailError', message: 'Failed to send email', cause: error as Error } as CandidateError)
-      );
-
-      const logEmailError = (error: CandidateError) => ReaderResult.asks(
-        (deps: CandidateServiceDeps) => {
-          deps.logger.warn({ error, candidateId: saved.id }, 'Non-critical: email failed');
-        }
-      );
-
-      return ReaderResult.orElse(logEmailError)(sendEmail);
-    }),
-    // non-critical: publish event
-    ReaderResult.tap(({ saved }) => {
-      const publishEvent = ReaderResult.tryCatch(
-        (deps: CandidateServiceDeps) => deps.eventBus.publish('candidate.created', {
-          candidateId: saved.id,
-          timestamp: new Date(),
-        }),
-        (error) => ({ _tag: 'EventError', message: 'Failed to publish', cause: error as Error } as CandidateError)
-      );
-
-      const logEventError = (error: CandidateError) => ReaderResult.asks(
-        (deps: CandidateServiceDeps) => {
-          deps.logger.warn({ error, candidateId: saved.id }, 'Non-critical: event publish failed');
-        }
-      );
-
-      return ReaderResult.orElse(logEventError)(publishEvent);
-    }),
     ReaderResult.map(({ saved }) => saved)
   );
 ```
-
-> **Note on `tap`:** Use `tap` exclusively for **non-critical** side effects. For critical operations (database updates, authorization checks), use `ReaderResult.bind` and explicitly handle the result.
 
 ### 4.3 RFC 7807 Problem Details Error Handling
 
@@ -628,146 +554,31 @@ export const getPermissionsForRole = pMemoize(
 
 ### 4.7 Testing Patterns
 
-Follow the testing pyramid with focus on pure functions:
+**Full Guide:** See [05b-Testing-Strategies.md](./05b-Testing-Strategies.md) for comprehensive patterns, examples, and CI/CD integration.
 
-#### Domain Layer Tests (Unit - 100% Coverage Required)
+**Coverage Requirements:**
 
-```typescript
-// tests/domain/candidate.test.ts
-import { describe, it, expect } from 'vitest';
-import { createCandidate, validateStatusTransition } from '../domain/candidate';
+| Layer | Target | Rationale |
+|-------|--------|-----------|
+| Domain | **100%** | Pure functions are easy to test |
+| Application | **80%** | Service composition with mocked deps |
+| Interface | **60%** | API contracts and UI behavior |
 
-describe('Candidate Domain', () => {
-  describe('createCandidate', () => {
-    it('should create candidate with valid data', () => {
-      const result = createCandidate({
-        name: 'John Doe',
-        email: 'john@example.com',
-        status: 'new'
-      });
+**Key Rules:**
 
-      expect(result.success).toBe(true);
-      if (result.success) {
-        expect(result.data.name).toBe('John Doe');
-        expect(result.data.id).toBeDefined();
-      }
-    });
-
-    it('should return ZodValidationError for invalid email', () => {
-      const result = createCandidate({
-        name: 'John Doe',
-        email: 'invalid-email',
-        status: 'new'
-      });
-
-      expect(result.success).toBe(false);
-      if (!result.success) {
-        expect(result.error._tag).toBe('ZodValidationError');
-        expect(result.error.cause.errors[0].path).toContain('email');
-      }
-    });
-  });
-
-  describe('validateStatusTransition', () => {
-    it.each([
-      ['new', 'interviewing', true],
-      ['new', 'rejected', true],
-      ['new', 'hired', false],
-      ['interviewing', 'hired', true],
-      ['hired', 'rejected', false],
-    ])('from %s to %s should be %s', (from, to, expected) => {
-      const result = validateStatusTransition(from, to);
-      expect(result.success).toBe(expected);
-    });
-  });
-});
-```
-
-#### Application Layer Tests (Integration)
-
-```typescript
-// tests/application/candidate-service.test.ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { createNewCandidate } from '../application/candidate-service';
-import { Result } from '@/lib/functional/result';
-
-describe('Candidate Service', () => {
-  const mockCandidate = {
-    id: '123',
-    name: 'John Doe',
-    email: 'john@example.com',
-    status: 'new' as const,
-    createdAt: new Date(),
-    updatedAt: new Date(),
-  };
-
-  const createMockDeps = () => ({
-    candidateRepo: {
-      save: vi.fn().mockResolvedValue(Result.ok(mockCandidate)),
-      findById: vi.fn().mockResolvedValue(Result.ok(mockCandidate)),
-    },
-    emailService: {
-      sendWelcomeEmail: vi.fn().mockResolvedValue(undefined),
-    },
-    eventBus: {
-      publish: vi.fn().mockResolvedValue(undefined),
-    },
-    logger: {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-      child: vi.fn().mockReturnThis(),
-    },
-    tracer: {
-      startActiveSpan: vi.fn((name, fn) => fn({ end: vi.fn(), setAttributes: vi.fn() })),
-    },
-    currentUser: {
-      id: 'user-1',
-      permissions: ['candidate:create', 'candidate:read'],
-    },
-  });
-
-  it('should create candidate and send welcome email', async () => {
-    const mockDeps = createMockDeps();
-    const candidateData = { name: 'John Doe', email: 'john@example.com', status: 'new' };
-
-    const result = await createNewCandidate(candidateData)(mockDeps);
-
-    expect(result.success).toBe(true);
-    expect(mockDeps.candidateRepo.save).toHaveBeenCalled();
-    expect(mockDeps.emailService.sendWelcomeEmail).toHaveBeenCalled();
-    expect(mockDeps.eventBus.publish).toHaveBeenCalledWith(
-      'candidate.created',
-      expect.objectContaining({ candidateId: expect.any(String) })
-    );
-  });
-
-  it('should succeed even if non-critical email fails', async () => {
-    const mockDeps = createMockDeps();
-    mockDeps.emailService.sendWelcomeEmail.mockRejectedValue(new Error('SMTP timeout'));
-
-    const result = await createNewCandidate({
-      name: 'John Doe',
-      email: 'john@example.com',
-      status: 'new'
-    })(mockDeps);
-
-    expect(result.success).toBe(true);
-    expect(mockDeps.logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ candidateId: expect.any(String) }),
-      expect.stringContaining('email failed')
-    );
-  });
-});
-```
+1. Test Result types explicitly: check `result.success`, then `result.data` or `result.error._tag`
+2. Use `vi.hoisted()` for mock state (vi.mock is hoisted)
+3. Test Zod schemas at domain layer boundaries
+4. Provide mock dependencies directly to `ReaderResult.run(deps)`
+5. Use table-driven tests (`it.each`) for edge cases
 
 ### 4.8 Pipeline Pattern for Data Transformations
 
 Use Pipeline for synchronous, multi-step data transformations:
 
 ```typescript
-import { Pipeline } from '@/lib/functional/pipeline';
-import { Result } from '@/lib/functional/result';
+import { Pipeline } from '@aptivo/domain';
+import { Result } from '@aptivo/domain';
 
 // simple transformation pipeline
 const processUserData = (rawData: unknown) =>

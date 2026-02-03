@@ -1,5 +1,5 @@
 ---
-id: GUIDELINE-MKJP625C
+id: GUIDELINE-OBSERVABILITY
 title: 5.d Observability Architecture & Implementation
 status: Draft
 version: 1.0.0
@@ -9,7 +9,7 @@ last_updated: "2026-01-18"
 
 # 5.d Observability Architecture
 
-_Outsourcing Digital Agency – Integrated Internal Systems Ecosystem_
+_Aptivo Agentic Platform_
 
 _v2.0.1 – [January 15, 2026]_
 
@@ -21,7 +21,7 @@ _Aligned with: ADD v2.0.0, TSD v3.0.0, Coding Guidelines v3.0.0, Testing Strateg
 
 ### 1.1 Purpose
 
-This document defines the observability strategy for the Integrated Internal Systems Ecosystem. It establishes standards for the three pillars of observability—**logs**, **metrics**, and **traces**—using OpenTelemetry (OTel) as the unified collection framework.
+This document defines the observability strategy for Aptivo. It establishes standards for the three pillars of observability—**logs**, **metrics**, and **traces**—using OpenTelemetry (OTel) as the unified collection framework.
 
 ### 1.2 Observability Goals
 
@@ -33,11 +33,23 @@ This document defines the observability strategy for the Integrated Internal Sys
 ### 1.3 Related Documents
 
 - **ADD v2.0.0** - Section 8: Observability Architecture requirements
-- **[specs/observability.md](04-specs/observability.md)** - Implementation checklist (quick reference)
+- **[specs/observability.md](../04-specs/observability.md)** - Implementation checklist (quick reference)
 - **Coding Guidelines v3.0.0** - Section 6: Observability integration, ReaderResult wrapper
 - **Testing Strategies v2.0.0** - Performance testing with P95 < 500ms targets
 - **Deployment Operations v2.0.0** - Metrics/alerts table, health checks, OTel sidecars
 - **Change Management v2.0.0** - Risk monitoring dashboards, validation queries
+
+---
+
+## Traceability
+
+| Requirement | Source | How Addressed |
+|-------------|--------|---------------|
+| Observability pillars | ADD §8 | Logs, metrics, traces, errors |
+| SLA monitoring | FRD §6.1 | P95 < 500ms, error rate < 1% |
+| Audit requirements | TSD §6 | Compliance-ready audit logging |
+| Security logging | ADD §6 | Redaction, access control, retention |
+| Result error tracking | TSD §4.2 | Sentry integration with tagged errors |
 
 ---
 
@@ -323,7 +335,7 @@ Per **Coding Guidelines v3.0.0**, wrap ReaderResult operations with spans:
 ```typescript
 // lib/observability/traced-reader-result.ts
 import { trace, SpanKind, SpanStatusCode } from "@opentelemetry/api";
-import { Result, ReaderResult } from "@/lib/functional/result";
+import { Result, ReaderResult } from "@aptivo/domain";
 import { resultErrorsTotal } from "./metrics";
 
 const tracer = trace.getTracer("aptivo-app");

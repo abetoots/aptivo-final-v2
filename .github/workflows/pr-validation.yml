@@ -50,6 +50,18 @@ jobs:
         env:
           NODE_ENV: test
 
+      # ═══════════════════════════════════════════════════════════
+      # Security Scans
+      # ═══════════════════════════════════════════════════════════
+      - name: Scan for secrets with gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run npm audit
+        run: pnpm audit --audit-level=critical
+        continue-on-error: false  # block on critical vulnerabilities
+
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -66,8 +78,10 @@ jobs:
   # ═══════════════════════════════════════════════════════════
   # ✅ Code quality (lint, types)
   # ✅ Business logic (unit tests)
+  # ✅ Security (secrets scanning, dependency audit)
   #
   # Benefits:
   # - Fast feedback for most failures
   # - Developers stay in flow
+  # - Security issues caught early
   # - Only validated code proceeds to main branch

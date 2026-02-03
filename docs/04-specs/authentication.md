@@ -1,14 +1,13 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-CORE-AUTH
 title: Authentication Specification
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-18'
+parent: ../03-architecture/platform-core-add.md
 ---
 # Authentication Specification
-
-**Parent:** [04-Technical-Specifications.md](index.md)
 
 ---
 
@@ -25,14 +24,15 @@ last_updated: '2026-01-18'
 
 ### 1.2 Reference Implementation
 
-**Supported IdPs:** Keycloak or Authentik (OIDC-compliant)
+**Selected Provider:** Supabase Auth (managed)
 
-The IdP selection is a deployment-time decision. Both support:
-- OIDC/OAuth 2.0
-- SAML 2.0 (for enterprise SSO)
-- User federation (LDAP, Active Directory)
-- MFA (TOTP, WebAuthn)
-- Self-service password reset
+Per ADD v2.0.0 (Multi-Model Consensus 2026-02-02), Supabase Auth is selected for Phase 1:
+- 50K MAU free tier
+- Magic links (passwordless) per BRD requirement
+- Social login (OAuth)
+- Standard OIDC/JWT tokens (exit strategy to Keycloak/Authentik if needed)
+
+**Phase 2+:** WebAuthn/Passkeys when Supabase roadmap includes passkey support.
 
 ---
 
@@ -204,7 +204,7 @@ async function validateJWT(token: string): Promise<JWTValidationResult> {
 
 ### 4.1 Role Definitions
 
-Per FRD v2.0.0 Section 5.1:
+Per platform-core-frd.md Section 9 (Identity Service):
 
 | Role | Description | Key Permissions |
 |------|-------------|-----------------|
@@ -397,9 +397,9 @@ const validateServiceToken = async (token: string): Promise<ServiceToken | null>
 | **TOTP** | Secondary | Authenticator apps |
 | **SMS OTP** | Fallback | Less secure, discouraged |
 
-### 6.3 IdP MFA Configuration
+### 6.3 MFA Configuration
 
-MFA policies are configured in the IdP (Keycloak/Authentik). The application checks the `acr` (Authentication Context Class Reference) claim:
+MFA policies are configured in Supabase Auth. The application checks the `acr` (Authentication Context Class Reference) claim:
 
 ```typescript
 // verify strong authentication was used
@@ -479,3 +479,24 @@ interface AuthAuditLog {
   metadata?: Record<string, unknown>;
 }
 ```
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| Passwordless Authentication | platform-core-frd.md | FR-CORE-ID-001 |
+| Role-Based Access Control | platform-core-frd.md | FR-CORE-ID-002 |
+| Session Management | platform-core-frd.md | FR-CORE-ID-003 |
+| Audit Logging | platform-core-frd.md | FR-CORE-AUD-001 |
+| Zero Trust | platform-core-add.md | Section 6 |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| Auth Middleware | 05a-Coding-Guidelines.md | Middleware Patterns |
+| Security Testing | 05b-Testing-Strategies.md | Security Testing |

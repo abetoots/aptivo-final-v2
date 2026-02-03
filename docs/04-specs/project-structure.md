@@ -1,14 +1,13 @@
 ---
-id: SPEC-MKJP625C
+id: TSD-CORE-PROJECT-STRUCTURE
 title: Project Structure Specification
 status: Draft
 version: 1.0.0
 owner: '@owner'
 last_updated: '2026-01-19'
+parent: ../03-architecture/platform-core-add.md
 ---
 # Project Structure Specification
-
-**Parent:** [04-Technical-Specifications.md](index.md)
 
 ---
 
@@ -578,3 +577,22 @@ pnpm add @aptivo/new-package --filter=@aptivo/web --workspace
 | [BRD Section 2.1.1](../01-strategy/brd.md) | SaaS commercialization requirements |
 | [Coding Guidelines](../05-guidelines/05a-Coding-Guidelines.md) | Folder structure patterns |
 | [Turborepo Documentation](https://turbo.build/repo/docs) | Official tooling docs |
+
+---
+
+## Traceability
+
+### Upstream References
+
+| Requirement | Source Document | Section |
+|-------------|-----------------|---------|
+| Modular ecosystem | [platform-core-frd.md](../../02-requirements/platform-core-frd.md) | Section 2 (Architecture Requirements) |
+| SaaS commercialization | [brd.md](../../01-strategy/brd.md) | Section 2.1.1 |
+| Event-driven architecture | [platform-core-add.md](../../03-architecture/platform-core-add.md) | Section 10.1 |
+
+### Downstream References
+
+| Implementation | Target Document | Section |
+|----------------|-----------------|---------|
+| Folder structure patterns | [05a-Coding-Guidelines.md](../05-guidelines/05a-Coding-Guidelines.md) | Project Structure |
+| CI/CD pipeline | [01-runbook.md](../06-operations/01-runbook.md) | Build & Deployment |
