@@ -1,0 +1,2376 @@
+openapi: 3.1.0
+info:
+  title: Aptivo Platform Core API
+  description: |
+    Domain-agnostic workflow automation platform API.
+
+    ## Authentication
+    All endpoints (except health checks) require a valid Supabase JWT in the `Authorization: Bearer` header.
+    Authorization is handled via database role lookup linked to the authenticated user ID.
+
+    ## Pagination
+    All list endpoints use cursor-based pagination with `cursor` and `limit` parameters.
+    - Default limit: 50
+    - Maximum limit: 200
+    - Response includes `next_cursor` (null when no more results) and `has_more` boolean.
+
+    ## Error Responses
+    All errors follow RFC 7807 Problem Details with extensions for machine-readable codes.
+
+    ## Idempotency
+    Critical state-changing operations (HITL decisions, trades, money movement) require an `Idempotency-Key` header.
+  version: 1.0.0
+  contact:
+    name: Aptivo Platform Team
+  license:
+    name: Proprietary
+
+servers:
+  - url: https://api.aptivo.io
+    description: Production
+  - url: https://api.staging.aptivo.io
+    description: Staging
+
+tags:
+  - name: Health
+    description: Health check endpoints (no auth required)
+  - name: HITL
+    description: Human-in-the-Loop approval gateway
+  - name: Workflows
+    description: Workflow definition and instance management
+  - name: Audit
+    description: Audit log querying and export
+  - name: Files
+    description: File storage with presigned URLs
+  - name: Webhooks
+    description: Webhook configuration management
+  - name: Identity
+    description: Authentication and user management
+  - name: Domains
+    description: Domain role management
+
+# ==============================================================================
+# PATHS
+# ==============================================================================
+paths:
+  # ============================================================================
+  # HEALTH CHECKS (No Auth)
+  # ============================================================================
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Liveness check
+      description: Returns basic health status. Used by load balancers for liveness probes.
+      operationId: getHealth
+      security: []
+      responses:
+        '200':
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/ready:
+    get:
+      tags: [Health]
+      summary: Readiness check
+      description: Returns readiness status including dependency health. Used for readiness probes.
+      operationId: getReady
+      security: []
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: Service is not ready (dependencies unhealthy)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+
+  # ============================================================================
+  # HITL GATEWAY
+  # ============================================================================
+  /api/v1/hitl:
+    get:
+      tags: [HITL]
+      summary: List pending HITL requests
+      description: Returns paginated list of HITL approval requests for the authenticated user.
+      operationId: listHitlRequests
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, approved, rejected, expired, changes_requested]
+        - name: domain
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of HITL requests
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/HitlRequestSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/hitl/{requestId}:
+    get:
+      tags: [HITL]
+      summary: Get HITL request details
+      operationId: getHitlRequest
+      parameters:
+        - $ref: '#/components/parameters/RequestIdParam'
+      responses:
+        '200':
+          description: HITL request details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HitlRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/hitl/{requestId}/approve:
+    post:
+      tags: [HITL]
+      summary: Approve HITL request
+      description: |
+        Approve a pending HITL request. Requires both user authentication (Bearer JWT)
+        and a valid HITL action token in the request body.
+      operationId: approveHitlRequest
+      parameters:
+        - $ref: '#/components/parameters/RequestIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyRequiredParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HitlDecisionRequest'
+      responses:
+        '200':
+          description: Request approved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HitlDecisionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Decision already recorded (idempotent)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '410':
+          description: Request has expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /api/v1/hitl/{requestId}/reject:
+    post:
+      tags: [HITL]
+      summary: Reject HITL request
+      operationId: rejectHitlRequest
+      parameters:
+        - $ref: '#/components/parameters/RequestIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyRequiredParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/HitlDecisionRequest'
+      responses:
+        '200':
+          description: Request rejected successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HitlDecisionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Decision already recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '410':
+          description: Request has expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /api/v1/hitl/{requestId}/request-changes:
+    post:
+      tags: [HITL]
+      summary: Request changes on HITL request
+      description: Request additional information from the submitter before making a decision.
+      operationId: requestChangesHitl
+      parameters:
+        - $ref: '#/components/parameters/RequestIdParam'
+        - $ref: '#/components/parameters/IdempotencyKeyRequiredParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/HitlDecisionRequest'
+                - type: object
+                  properties:
+                    feedback:
+                      type: string
+                      description: Feedback message explaining what changes are needed
+                      maxLength: 2000
+                  required: [feedback]
+      responses:
+        '200':
+          description: Changes requested successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HitlDecisionResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Decision already recorded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '410':
+          description: Request has expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  # ============================================================================
+  # WORKFLOWS
+  # ============================================================================
+  /api/v1/workflows:
+    get:
+      tags: [Workflows]
+      summary: List workflow definitions
+      operationId: listWorkflows
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: domain
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [enabled, disabled]
+      responses:
+        '200':
+          description: List of workflow definitions
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/WorkflowSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+    post:
+      tags: [Workflows]
+      summary: Create workflow definition
+      operationId: createWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowCreateRequest'
+      responses:
+        '201':
+          description: Workflow created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/workflows/validate:
+    post:
+      tags: [Workflows]
+      summary: Validate workflow definition
+      description: Validates a workflow definition without creating it. Returns validation errors and warnings.
+      operationId: validateWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowCreateRequest'
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowValidationResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/workflows/{workflowId}:
+    get:
+      tags: [Workflows]
+      summary: Get workflow definition
+      operationId: getWorkflow
+      parameters:
+        - $ref: '#/components/parameters/WorkflowIdParam'
+      responses:
+        '200':
+          description: Workflow definition
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags: [Workflows]
+      summary: Update workflow definition
+      operationId: updateWorkflow
+      parameters:
+        - $ref: '#/components/parameters/WorkflowIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowUpdateRequest'
+      responses:
+        '200':
+          description: Workflow updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Workflow'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/workflows/{workflowId}/export:
+    get:
+      tags: [Workflows]
+      summary: Export workflow definition
+      description: Export workflow definition in portable JSON format.
+      operationId: exportWorkflow
+      parameters:
+        - $ref: '#/components/parameters/WorkflowIdParam'
+      responses:
+        '200':
+          description: Exported workflow
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowExport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/workflows/{workflowId}/instances:
+    get:
+      tags: [Workflows]
+      summary: List workflow instances
+      operationId: listWorkflowInstances
+      parameters:
+        - $ref: '#/components/parameters/WorkflowIdParam'
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [running, completed, failed, suspended]
+      responses:
+        '200':
+          description: List of workflow instances
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/WorkflowInstanceSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/workflows/{workflowId}/instances/{instanceId}:
+    get:
+      tags: [Workflows]
+      summary: Get workflow instance details
+      operationId: getWorkflowInstance
+      parameters:
+        - $ref: '#/components/parameters/WorkflowIdParam'
+        - $ref: '#/components/parameters/InstanceIdParam'
+      responses:
+        '200':
+          description: Workflow instance details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowInstance'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/workflows/{workflowId}/instances/{instanceId}/history:
+    get:
+      tags: [Workflows]
+      summary: Get workflow instance execution history
+      operationId: getWorkflowInstanceHistory
+      parameters:
+        - $ref: '#/components/parameters/WorkflowIdParam'
+        - $ref: '#/components/parameters/InstanceIdParam'
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: Execution history
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/WorkflowHistoryEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================================
+  # AUDIT
+  # ============================================================================
+  /api/v1/audit/logs:
+    get:
+      tags: [Audit]
+      summary: Query audit logs
+      operationId: queryAuditLogs
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: startTime
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: endTime
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: actor
+          in: query
+          description: Filter by actor ID (user or system)
+          schema:
+            type: string
+        - name: entityType
+          in: query
+          description: Filter by entity type (e.g., workflow, hitl_request)
+          schema:
+            type: string
+        - name: action
+          in: query
+          description: Filter by action (e.g., created, updated, deleted)
+          schema:
+            type: string
+        - name: domain
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Audit log entries
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/AuditLogEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/audit/exports:
+    post:
+      tags: [Audit]
+      summary: Request audit log export
+      description: Request an asynchronous export of audit logs. Returns an export ID to check status.
+      operationId: requestAuditExport
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKeyParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AuditExportRequest'
+      responses:
+        '202':
+          description: Export request accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditExportStatus'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/audit/exports/{exportId}:
+    get:
+      tags: [Audit]
+      summary: Get audit export status
+      operationId: getAuditExportStatus
+      parameters:
+        - name: exportId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Export status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditExportStatus'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================================
+  # FILES
+  # ============================================================================
+  /api/v1/files/upload-url:
+    post:
+      tags: [Files]
+      summary: Generate presigned upload URL
+      operationId: generateUploadUrl
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UploadUrlRequest'
+      responses:
+        '200':
+          description: Presigned upload URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresignedUrlResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/files/{fileId}:
+    get:
+      tags: [Files]
+      summary: Get file metadata
+      operationId: getFileMetadata
+      parameters:
+        - $ref: '#/components/parameters/FileIdParam'
+      responses:
+        '200':
+          description: File metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileMetadata'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Files]
+      summary: Delete file
+      operationId: deleteFile
+      parameters:
+        - $ref: '#/components/parameters/FileIdParam'
+      responses:
+        '204':
+          description: File deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/files/{fileId}/download-url:
+    post:
+      tags: [Files]
+      summary: Generate presigned download URL
+      operationId: generateDownloadUrl
+      parameters:
+        - $ref: '#/components/parameters/FileIdParam'
+      responses:
+        '200':
+          description: Presigned download URL
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PresignedUrlResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/files/{fileId}/link:
+    post:
+      tags: [Files]
+      summary: Link file to entity
+      description: Associate a file with a business entity (e.g., workflow instance, HITL request).
+      operationId: linkFileToEntity
+      parameters:
+        - $ref: '#/components/parameters/FileIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FileLinkRequest'
+      responses:
+        '200':
+          description: File linked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FileMetadata'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================================
+  # WEBHOOKS
+  # ============================================================================
+  /api/v1/webhooks:
+    get:
+      tags: [Webhooks]
+      summary: List webhook configurations
+      operationId: listWebhooks
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: event
+          in: query
+          description: Filter by event type
+          schema:
+            type: string
+        - name: active
+          in: query
+          schema:
+            type: boolean
+      responses:
+        '200':
+          description: List of webhook configurations
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/WebhookConfig'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags: [Webhooks]
+      summary: Create webhook configuration
+      operationId: createWebhook
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookCreateRequest'
+      responses:
+        '201':
+          description: Webhook created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/webhooks/{webhookId}:
+    get:
+      tags: [Webhooks]
+      summary: Get webhook configuration
+      operationId: getWebhook
+      parameters:
+        - $ref: '#/components/parameters/WebhookIdParam'
+      responses:
+        '200':
+          description: Webhook configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookConfig'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags: [Webhooks]
+      summary: Update webhook configuration
+      operationId: updateWebhook
+      parameters:
+        - $ref: '#/components/parameters/WebhookIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookUpdateRequest'
+      responses:
+        '200':
+          description: Webhook updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookConfig'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Webhooks]
+      summary: Delete webhook configuration
+      operationId: deleteWebhook
+      parameters:
+        - $ref: '#/components/parameters/WebhookIdParam'
+      responses:
+        '204':
+          description: Webhook deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /api/v1/webhooks/inbound/{sourceId}:
+    post:
+      tags: [Webhooks]
+      summary: Receive inbound webhook
+      description: |
+        Endpoint for receiving webhooks from external systems.
+        Requires signature verification via X-Webhook-Signature header.
+      operationId: receiveInboundWebhook
+      security: []  # uses signature verification instead of JWT
+      parameters:
+        - name: sourceId
+          in: path
+          required: true
+          description: Registered webhook source ID
+          schema:
+            type: string
+            format: uuid
+        - name: X-Webhook-Signature
+          in: header
+          required: true
+          description: HMAC signature for verification
+          schema:
+            type: string
+        - name: X-Webhook-ID
+          in: header
+          description: |
+            Unique webhook event ID for deduplication.
+            **At least one of X-Webhook-ID, X-Request-ID, or body.id/body.event_id is required for deduplication.**
+          schema:
+            type: string
+        - name: X-Request-ID
+          in: header
+          description: |
+            Alternative to X-Webhook-ID for deduplication (used by some providers).
+            Falls back to body.id or body.event_id if neither header is present.
+          schema:
+            type: string
+        - name: X-Webhook-Timestamp
+          in: header
+          description: Event timestamp for replay protection
+          schema:
+            type: string
+            format: date-time
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '200':
+          description: Webhook received and processed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  received:
+                    type: boolean
+                  eventId:
+                    type: string
+        '401':
+          description: Invalid signature
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+        '404':
+          description: Unknown webhook source
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  # ============================================================================
+  # IDENTITY / AUTH
+  # ============================================================================
+  /api/v1/auth/magic-link:
+    post:
+      tags: [Identity]
+      summary: Send magic link
+      description: Send a passwordless login link to the specified email.
+      operationId: sendMagicLink
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                redirectTo:
+                  type: string
+                  format: uri
+                  description: URL to redirect after successful login
+              required: [email]
+      responses:
+        '200':
+          description: Magic link sent
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sent:
+                    type: boolean
+                  message:
+                    type: string
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /api/v1/auth/callback:
+    post:
+      tags: [Identity]
+      summary: Handle auth callback
+      description: Exchange auth code/token for session.
+      operationId: handleAuthCallback
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+                  description: Authorization code from OAuth or magic link
+                provider:
+                  type: string
+                  enum: [magic_link, google, github]
+              required: [code]
+      responses:
+        '200':
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthSession'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          description: Invalid or expired code
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
+  /api/v1/auth/user:
+    get:
+      tags: [Identity]
+      summary: Get current user
+      operationId: getCurrentUser
+      responses:
+        '200':
+          description: Current user info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Identity]
+      summary: Logout
+      operationId: logout
+      responses:
+        '200':
+          description: Logged out successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /api/v1/users:
+    get:
+      tags: [Identity]
+      summary: List users (admin)
+      operationId: listUsers
+      parameters:
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+        - name: role
+          in: query
+          schema:
+            type: string
+        - name: domain
+          in: query
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/UserSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/users/{userId}/roles:
+    get:
+      tags: [Identity]
+      summary: Get user roles
+      operationId: getUserRoles
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      responses:
+        '200':
+          description: User roles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRoles'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    post:
+      tags: [Identity]
+      summary: Assign roles to user
+      operationId: assignUserRoles
+      parameters:
+        - $ref: '#/components/parameters/UserIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleAssignmentRequest'
+      responses:
+        '200':
+          description: Roles assigned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserRoles'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ============================================================================
+  # DOMAIN ROLES
+  # ============================================================================
+  /api/v1/domains/{domain}/roles:
+    get:
+      tags: [Domains]
+      summary: List domain roles
+      operationId: listDomainRoles
+      parameters:
+        - $ref: '#/components/parameters/DomainParam'
+        - $ref: '#/components/parameters/CursorParam'
+        - $ref: '#/components/parameters/LimitParam'
+      responses:
+        '200':
+          description: List of domain roles
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/PaginatedResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/DomainRole'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+    post:
+      tags: [Domains]
+      summary: Create domain role
+      operationId: createDomainRole
+      parameters:
+        - $ref: '#/components/parameters/DomainParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DomainRoleCreateRequest'
+      responses:
+        '201':
+          description: Domain role created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainRole'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/v1/domains/{domain}/roles/{roleId}:
+    get:
+      tags: [Domains]
+      summary: Get domain role
+      operationId: getDomainRole
+      parameters:
+        - $ref: '#/components/parameters/DomainParam'
+        - $ref: '#/components/parameters/RoleIdParam'
+      responses:
+        '200':
+          description: Domain role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainRole'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    put:
+      tags: [Domains]
+      summary: Update domain role
+      operationId: updateDomainRole
+      parameters:
+        - $ref: '#/components/parameters/DomainParam'
+        - $ref: '#/components/parameters/RoleIdParam'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DomainRoleUpdateRequest'
+      responses:
+        '200':
+          description: Domain role updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DomainRole'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+    delete:
+      tags: [Domains]
+      summary: Delete domain role
+      operationId: deleteDomainRole
+      parameters:
+        - $ref: '#/components/parameters/DomainParam'
+        - $ref: '#/components/parameters/RoleIdParam'
+      responses:
+        '204':
+          description: Domain role deleted
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+# ==============================================================================
+# COMPONENTS
+# ==============================================================================
+components:
+  # ============================================================================
+  # SECURITY SCHEMES
+  # ============================================================================
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Supabase JWT token
+
+  # ============================================================================
+  # PARAMETERS
+  # ============================================================================
+  parameters:
+    CursorParam:
+      name: cursor
+      in: query
+      description: Opaque cursor for pagination (from previous response)
+      schema:
+        type: string
+
+    LimitParam:
+      name: limit
+      in: query
+      description: Number of items to return (default 50, max 200)
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+
+    IdempotencyKeyParam:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: |
+        Unique key for idempotent operations. Must be unique per logical operation.
+        **Required** for critical operations: HITL decisions (approve/reject/request-changes).
+        **Recommended** for other mutating operations.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+
+    IdempotencyKeyRequiredParam:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Unique key for idempotent operations. Must be unique per logical operation.
+        This header is **required** for this operation.
+      schema:
+        type: string
+        minLength: 16
+        maxLength: 128
+
+    RequestIdParam:
+      name: requestId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    WorkflowIdParam:
+      name: workflowId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    InstanceIdParam:
+      name: instanceId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    FileIdParam:
+      name: fileId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    WebhookIdParam:
+      name: webhookId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    UserIdParam:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    DomainParam:
+      name: domain
+      in: path
+      required: true
+      description: Domain identifier (e.g., 'hr', 'crypto')
+      schema:
+        type: string
+        pattern: '^[a-z][a-z0-9_-]{1,30}$'
+
+    RoleIdParam:
+      name: roleId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  # ============================================================================
+  # RESPONSES
+  # ============================================================================
+  responses:
+    BadRequest:
+      description: Bad request - validation error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+      headers:
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/X-RateLimit-Limit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/X-RateLimit-Remaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/X-RateLimit-Reset'
+
+    Unauthorized:
+      description: Unauthorized - invalid or missing token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    Forbidden:
+      description: Forbidden - insufficient permissions
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+    TooManyRequests:
+      description: Rate limit exceeded
+      headers:
+        X-RateLimit-Limit:
+          $ref: '#/components/headers/X-RateLimit-Limit'
+        X-RateLimit-Remaining:
+          $ref: '#/components/headers/X-RateLimit-Remaining'
+        X-RateLimit-Reset:
+          $ref: '#/components/headers/X-RateLimit-Reset'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+  # ============================================================================
+  # HEADERS
+  # ============================================================================
+  headers:
+    X-RateLimit-Limit:
+      description: Maximum requests per window
+      schema:
+        type: integer
+    X-RateLimit-Remaining:
+      description: Remaining requests in current window
+      schema:
+        type: integer
+    X-RateLimit-Reset:
+      description: Unix timestamp when rate limit resets
+      schema:
+        type: integer
+
+  # ============================================================================
+  # SCHEMAS
+  # ============================================================================
+  schemas:
+    # --------------------------------------------------------------------------
+    # COMMON
+    # --------------------------------------------------------------------------
+    ProblemDetails:
+      type: object
+      description: RFC 7807 Problem Details with extensions
+      properties:
+        type:
+          type: string
+          format: uri
+          description: URI reference identifying the problem type
+          example: /errors/validation
+        title:
+          type: string
+          description: Short human-readable summary
+          example: Validation Error
+        status:
+          type: integer
+          description: HTTP status code
+          example: 400
+        detail:
+          type: string
+          description: Human-readable explanation specific to this occurrence
+        instance:
+          type: string
+          format: uri
+          description: URI reference to the specific occurrence
+        code:
+          type: string
+          description: Machine-readable error code (UPPER_SNAKE_CASE)
+          example: VALIDATION_FAILED
+        errors:
+          type: array
+          description: Field-level validation errors
+          items:
+            type: object
+            properties:
+              field:
+                type: string
+                example: email
+              message:
+                type: string
+                example: Invalid email format
+              code:
+                type: string
+                example: INVALID_FORMAT
+            required: [field, message, code]
+      required: [type, title, status, code]
+
+    PaginatedResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items: {}
+        next_cursor:
+          type: string
+          nullable: true
+          description: Cursor for next page, null if no more results
+        has_more:
+          type: boolean
+          description: Whether there are more results
+      required: [data, next_cursor, has_more]
+
+    # --------------------------------------------------------------------------
+    # HEALTH
+    # --------------------------------------------------------------------------
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        version:
+          type: string
+          example: 1.0.0
+        timestamp:
+          type: string
+          format: date-time
+        uptime:
+          type: integer
+          description: Uptime in seconds
+      required: [status, version, timestamp, uptime]
+
+    ReadinessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded, down]
+        checks:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+                example: postgres
+              status:
+                type: string
+                enum: [up, down]
+              latencyMs:
+                type: integer
+              message:
+                type: string
+            required: [name, status, latencyMs]
+        timestamp:
+          type: string
+          format: date-time
+      required: [status, checks, timestamp]
+
+    # --------------------------------------------------------------------------
+    # HITL
+    # --------------------------------------------------------------------------
+    HitlRequestSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflowId:
+          type: string
+          format: uuid
+        workflowName:
+          type: string
+        status:
+          type: string
+          enum: [pending, approved, rejected, expired, changes_requested]
+        requestedAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+        domain:
+          type: string
+        summary:
+          type: string
+          description: Brief description of what needs approval
+      required: [id, workflowId, status, requestedAt, expiresAt]
+
+    HitlRequest:
+      allOf:
+        - $ref: '#/components/schemas/HitlRequestSummary'
+        - type: object
+          properties:
+            workflowInstanceId:
+              type: string
+              format: uuid
+            stepId:
+              type: string
+            context:
+              type: object
+              additionalProperties: true
+              description: Context data for the approval decision
+            approvers:
+              type: array
+              items:
+                type: string
+                format: uuid
+              description: List of user IDs who can approve
+            decision:
+              type: object
+              nullable: true
+              properties:
+                action:
+                  type: string
+                  enum: [approved, rejected, changes_requested]
+                decidedBy:
+                  type: string
+                  format: uuid
+                decidedAt:
+                  type: string
+                  format: date-time
+                comment:
+                  type: string
+
+    HitlDecisionRequest:
+      type: object
+      properties:
+        token:
+          type: string
+          description: Signed HITL action token
+        comment:
+          type: string
+          maxLength: 2000
+          description: Optional comment explaining the decision
+      required: [token]
+
+    HitlDecisionResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [approved, rejected, changes_requested]
+        decidedAt:
+          type: string
+          format: date-time
+        message:
+          type: string
+      required: [id, status, decidedAt]
+
+    # --------------------------------------------------------------------------
+    # WORKFLOWS
+    # --------------------------------------------------------------------------
+    WorkflowSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        version:
+          type: string
+        status:
+          type: string
+          enum: [enabled, disabled]
+        domain:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, version, status]
+
+    Workflow:
+      allOf:
+        - $ref: '#/components/schemas/WorkflowSummary'
+        - type: object
+          properties:
+            description:
+              type: string
+            states:
+              type: array
+              items:
+                $ref: '#/components/schemas/WorkflowState'
+            triggers:
+              type: array
+              items:
+                $ref: '#/components/schemas/WorkflowTrigger'
+
+    WorkflowState:
+      type: object
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [initial, intermediate, final]
+        transitions:
+          type: array
+          items:
+            type: string
+        onEnter:
+          type: array
+          items:
+            type: string
+        onExit:
+          type: array
+          items:
+            type: string
+      required: [name, type]
+
+    WorkflowTrigger:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [webhook, schedule, event, manual]
+        config:
+          type: object
+          additionalProperties: true
+      required: [type]
+
+    WorkflowCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+        domain:
+          type: string
+        states:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowState'
+          minItems: 1
+        triggers:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowTrigger'
+      required: [name, states]
+
+    WorkflowUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        description:
+          type: string
+          maxLength: 1000
+        status:
+          type: string
+          enum: [enabled, disabled]
+        states:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowState'
+        triggers:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowTrigger'
+
+    WorkflowValidationResult:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              message:
+                type: string
+              code:
+                type: string
+            required: [path, message, code]
+        warnings:
+          type: array
+          items:
+            type: object
+            properties:
+              path:
+                type: string
+              message:
+                type: string
+              code:
+                type: string
+            required: [path, message, code]
+      required: [valid, errors, warnings]
+
+    WorkflowExport:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        version:
+          type: string
+        name:
+          type: string
+        status:
+          type: string
+        states:
+          type: array
+          items:
+            type: object
+        triggers:
+          type: array
+          items:
+            type: object
+        exportedAt:
+          type: string
+          format: date-time
+      required: [id, version, name, status, states, triggers, exportedAt]
+
+    WorkflowInstanceSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflowId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [running, completed, failed, suspended]
+        currentState:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+      required: [id, workflowId, status, currentState, startedAt]
+
+    WorkflowInstance:
+      allOf:
+        - $ref: '#/components/schemas/WorkflowInstanceSummary'
+        - type: object
+          properties:
+            input:
+              type: object
+              additionalProperties: true
+            output:
+              type: object
+              additionalProperties: true
+              nullable: true
+            error:
+              type: object
+              nullable: true
+              properties:
+                message:
+                  type: string
+                code:
+                  type: string
+                stepId:
+                  type: string
+
+    WorkflowHistoryEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        eventType:
+          type: string
+          enum: [state_entered, state_exited, action_started, action_completed, action_failed, suspended, resumed]
+        state:
+          type: string
+        stepId:
+          type: string
+        details:
+          type: object
+          additionalProperties: true
+      required: [id, timestamp, eventType]
+
+    # --------------------------------------------------------------------------
+    # AUDIT
+    # --------------------------------------------------------------------------
+    AuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        actor:
+          type: object
+          properties:
+            type:
+              type: string
+              enum: [user, system, workflow]
+            id:
+              type: string
+            name:
+              type: string
+          required: [type, id]
+        action:
+          type: string
+          example: created
+        entityType:
+          type: string
+          example: workflow
+        entityId:
+          type: string
+        domain:
+          type: string
+        changes:
+          type: object
+          additionalProperties: true
+          description: Before/after values for update operations
+        metadata:
+          type: object
+          additionalProperties: true
+      required: [id, timestamp, actor, action, entityType, entityId]
+
+    AuditExportRequest:
+      type: object
+      properties:
+        startTime:
+          type: string
+          format: date-time
+        endTime:
+          type: string
+          format: date-time
+        filters:
+          type: object
+          properties:
+            actor:
+              type: string
+            entityType:
+              type: string
+            action:
+              type: string
+            domain:
+              type: string
+        format:
+          type: string
+          enum: [json, csv, pdf]
+          default: json
+      required: [startTime, endTime]
+
+    AuditExportStatus:
+      type: object
+      properties:
+        exportId:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, processing, completed, failed]
+        format:
+          type: string
+          enum: [json, csv, pdf]
+        createdAt:
+          type: string
+          format: date-time
+        completedAt:
+          type: string
+          format: date-time
+          nullable: true
+        downloadUrl:
+          type: string
+          format: uri
+          nullable: true
+          description: Presigned URL to download export (available when completed)
+        expiresAt:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the download URL expires
+        error:
+          type: string
+          nullable: true
+      required: [exportId, status, format, createdAt]
+
+    # --------------------------------------------------------------------------
+    # FILES
+    # --------------------------------------------------------------------------
+    UploadUrlRequest:
+      type: object
+      properties:
+        filename:
+          type: string
+          maxLength: 255
+        contentType:
+          type: string
+          example: application/pdf
+        size:
+          type: integer
+          description: File size in bytes
+          maximum: 104857600  # 100MB
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+      required: [filename, contentType]
+
+    PresignedUrlResponse:
+      type: object
+      properties:
+        fileId:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        expiresAt:
+          type: string
+          format: date-time
+        method:
+          type: string
+          enum: [PUT, GET]
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Required headers for the presigned request
+      required: [fileId, url, expiresAt, method]
+
+    FileMetadata:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        filename:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+        uploadedAt:
+          type: string
+          format: date-time
+        uploadedBy:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, uploaded, scanned, quarantined]
+        linkedEntities:
+          type: array
+          items:
+            type: object
+            properties:
+              entityType:
+                type: string
+              entityId:
+                type: string
+        metadata:
+          type: object
+          additionalProperties:
+            type: string
+      required: [id, filename, contentType, size, uploadedAt, status]
+
+    FileLinkRequest:
+      type: object
+      properties:
+        entityType:
+          type: string
+          example: workflow_instance
+        entityId:
+          type: string
+          format: uuid
+      required: [entityType, entityId]
+
+    # --------------------------------------------------------------------------
+    # WEBHOOKS
+    # --------------------------------------------------------------------------
+    WebhookConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+          description: Event types this webhook subscribes to
+        active:
+          type: boolean
+        secret:
+          type: string
+          description: Secret for HMAC signature (write-only, not returned in GET)
+          writeOnly: true
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Custom headers to include in webhook requests
+        retryPolicy:
+          type: object
+          properties:
+            maxRetries:
+              type: integer
+              minimum: 0
+              maximum: 10
+            backoffMultiplier:
+              type: number
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, name, url, events, active]
+
+    WebhookCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        secret:
+          type: string
+          minLength: 32
+          description: Secret for HMAC signature verification
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        retryPolicy:
+          type: object
+          properties:
+            maxRetries:
+              type: integer
+              minimum: 0
+              maximum: 10
+              default: 3
+            backoffMultiplier:
+              type: number
+              default: 2
+      required: [name, url, events, secret]
+
+    WebhookUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+          minItems: 1
+        active:
+          type: boolean
+        secret:
+          type: string
+          minLength: 32
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+        retryPolicy:
+          type: object
+          properties:
+            maxRetries:
+              type: integer
+              minimum: 0
+              maximum: 10
+            backoffMultiplier:
+              type: number
+
+    # --------------------------------------------------------------------------
+    # IDENTITY
+    # --------------------------------------------------------------------------
+    AuthSession:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+        user:
+          $ref: '#/components/schemas/User'
+      required: [accessToken, expiresAt, user]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        avatarUrl:
+          type: string
+          format: uri
+        coreRoles:
+          type: array
+          items:
+            type: string
+          description: Platform-level roles
+        domainRoles:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          description: Domain-specific roles keyed by domain
+        createdAt:
+          type: string
+          format: date-time
+        lastLoginAt:
+          type: string
+          format: date-time
+      required: [id, email, coreRoles, domainRoles]
+
+    UserSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        coreRoles:
+          type: array
+          items:
+            type: string
+        lastLoginAt:
+          type: string
+          format: date-time
+      required: [id, email, coreRoles]
+
+    UserRoles:
+      type: object
+      properties:
+        userId:
+          type: string
+          format: uuid
+        coreRoles:
+          type: array
+          items:
+            type: string
+        domainRoles:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+      required: [userId, coreRoles, domainRoles]
+
+    RoleAssignmentRequest:
+      type: object
+      properties:
+        coreRoles:
+          type: array
+          items:
+            type: string
+          description: Core roles to assign (replaces existing)
+        domainRoles:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+          description: Domain roles to assign keyed by domain
+
+    # --------------------------------------------------------------------------
+    # DOMAIN ROLES
+    # --------------------------------------------------------------------------
+    DomainRole:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        domain:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        permissions:
+          type: array
+          items:
+            type: string
+          description: List of permission strings
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      required: [id, domain, name, permissions]
+
+    DomainRoleCreateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+          pattern: '^[a-z][a-z0-9_-]*$'
+        description:
+          type: string
+          maxLength: 500
+        permissions:
+          type: array
+          items:
+            type: string
+          minItems: 1
+      required: [name, permissions]
+
+    DomainRoleUpdateRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 50
+          pattern: '^[a-z][a-z0-9_-]*$'
+        description:
+          type: string
+          maxLength: 500
+        permissions:
+          type: array
+          items:
+            type: string
+          minItems: 1
+
+# ==============================================================================
+# DEFAULT SECURITY
+# ==============================================================================
+security:
+  - BearerAuth: []
