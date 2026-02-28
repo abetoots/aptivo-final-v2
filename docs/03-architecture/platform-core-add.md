@@ -41,7 +41,7 @@ This document defines **HOW** the Aptivo Agentic Core is architected to meet the
 | Identity | **Supabase Auth** (Buy) | 50K MAU free, magic links, saves 2+ months |
 | Notifications | **Novu** (Buy) | Multi-channel, templates, quiet hours, saves 3 weeks |
 | Runtime | Node.js 24 LTS + TypeScript | Async I/O, strong typing, LangGraph.js compatibility |
-| Database | PostgreSQL 18 | ACID compliance, JSONB, full-text search |
+| Database | PostgreSQL 16 | ACID compliance, JSONB, full-text search |
 | Cache | Redis 7 | Sub-ms latency, pub/sub, rate limiting |
 | Audit | Append-only SQL | Phase 1 simplified; hash-chaining deferred to Phase 3+ |
 
@@ -77,7 +77,7 @@ This document defines **HOW** the Aptivo Agentic Core is architected to meet the
 │  File Storage     │  S3-compatible blob service                 │
 ├─────────────────────────────────────────────────────────────────┤
 │                      INFRASTRUCTURE                              │
-│  PostgreSQL (separate schemas) │ Redis │ NATS │ S3/Minio        │
+│  PostgreSQL (separate schemas) │ Redis │ S3/Minio              │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -85,9 +85,174 @@ This document defines **HOW** the Aptivo Agentic Core is architected to meet the
 
 1. **Durable Execution**: Workflows persist state, survive restarts, sleep without threads
 2. **Domain Isolation**: Separate database schemas, separate deployments, separate secrets
-3. **Functional Core, Imperative Shell**: Pure business logic in domain/, side effects in infrastructure/
-4. **LLM-Agnostic**: Provider abstraction enables runtime switching
-5. **MCP-Based Integration**: Standardized external service access
+3. **Failure Domain Isolation**: Every component declares its failure boundary, blast radius, and isolation mechanisms (see §2.3)
+4. **Functional Core, Imperative Shell**: Pure business logic in domain/, side effects in infrastructure/
+5. **LLM-Agnostic**: Provider abstraction enables runtime switching
+6. **MCP-Based Integration**: Standardized external service access
+
+### 2.3 Failure Domain Map
+
+Every component declares its failure boundary, blast radius, propagation characteristics, isolation mechanisms, and fallback behavior. This section is the authoritative reference for incident triage and recovery prioritization.
+
+> **Phase 1 Reality**: Aptivo runs as a single-region monolith deployment on DigitalOcean App Platform with a shared PostgreSQL instance and a single Redis node. True failure domain isolation (separate databases per domain, multi-region DR) is a Phase 2+ capability. Phase 1 relies on logical isolation (schema separation, circuit breakers, timeout paths) and documented degradation behavior.
+
+#### 2.3.1 Component Criticality Classification
+
+| Tier | Definition | Recovery Priority | Components |
+|------|-----------|-------------------|------------|
+| **Critical** | Failure causes platform-wide outage, data corruption risk, or compliance violation | Immediate (SEV-1/SEV-2) | Workflow Engine, HITL Gateway, Identity Service, Audit Service, PostgreSQL, Redis, DO App Platform |
+| **Standard** | Failure causes feature degradation; core platform continues operating | High (SEV-2/SEV-3) | MCP Integration Layer, LLM Gateway, Notification Bus, File Storage, BullMQ |
+| **Non-critical** | Failure is tolerable for extended periods | Normal (SEV-3/SEV-4) | — (all Phase 1 components are standard or critical) |
+
+#### 2.3.2 Failure Domain Matrix
+
+##### Workflow Engine (Inngest) — Critical
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | Workflow execution boundary. Owns durable workflow state (Inngest-managed). Shares PostgreSQL for application data. Depends on Inngest Cloud for scheduling, event routing, and step execution. |
+| **Blast Radius** | All active workflows pause; new workflows cannot be triggered; HITL `waitForEvent` correlations stop processing; scheduled timers do not fire. Domain applications (HR, Crypto) that rely on workflow orchestration are fully blocked. API endpoints for workflow management return errors. Components NOT affected: Identity Service, direct API reads, health checks. |
+| **Propagation Mode** | Both (sync for API-triggered workflows, async for event-triggered and timer-based) |
+| **Propagation Outcome** | Degraded (contained by Inngest durable state — workflows resume from last successful step on recovery). Potential for cascading if recovery takes longer than HITL TTLs. |
+| **Impacted Components** | HITL Gateway, MCP Integration Layer, LLM Gateway, Notification Bus (workflow-triggered), Audit Service (workflow audit events), all domain workflows |
+| **Isolation Mechanisms** | Inngest memoization prevents duplicate step execution on replay; durable state persistence allows crash recovery; individual step failures do not fail the entire workflow (step-level retry with configurable policy). Inngest Cloud self-hosting available as DR option. |
+| **Fallback Behavior** | Workflows resume automatically from last successful step when engine recovers. HITL requests that exceed TTL during outage follow the TIMEOUT error path. No new workflow execution until recovery. |
+
+##### HITL Gateway — Critical
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | Approval processing boundary. Owns HITL request/decision tables in PostgreSQL `public` schema. Depends on Notification Bus for approval delivery, Workflow Engine for `waitForEvent` correlation. |
+| **Blast Radius** | All workflows requiring human approval stall in SUSPENDED state. Business processes gated by approval (trade execution, hiring decisions, contract approvals) are blocked. Components NOT affected: workflows without HITL steps, API reads, notification delivery for non-HITL events. |
+| **Propagation Mode** | Sync (approval endpoints block caller until response; workflow suspends synchronously) |
+| **Propagation Outcome** | Degraded — workflows auto-resume via TIMEOUT error path after configurable TTL (default 24h–7d per policy). Does not cascade beyond approval-gated workflows. |
+| **Impacted Components** | Workflow Engine (suspended workflows), Notification Bus (pending approval notifications), approver-facing clients |
+| **Isolation Mechanisms** | Signed JWT approval tokens (self-contained, verifiable without HITL service for read-only validation); idempotent decision recording (duplicate submissions safe); configurable TTL auto-resume prevents indefinite suspension; race condition guards on concurrent approvals. |
+| **Fallback Behavior** | Workflows auto-resume with TIMEOUT error path if no decision received within TTL. Approvers can retry via token link once service recovers. Pending decisions are durable in PostgreSQL. |
+
+##### MCP Integration Layer — Standard
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | External tool integration boundary. Per-tool isolation via circuit breaker composition. Shares Redis for idempotency keys and rate-limit queue (BullMQ). |
+| **Blast Radius** | Limited — individual tool failures affect only the calling workflow step; other tools and workflows continue. If the entire MCP layer is down, all external tool calls fail but core platform (HITL, auth, audit) continues. |
+| **Propagation Mode** | Both (sync for direct tool calls within workflow steps, async for rate-limited queued requests via BullMQ) |
+| **Propagation Outcome** | Degraded — workflows receive explicit `service-unavailable` signal and can follow error paths. Unavailable MCP servers are flagged at startup but do not prevent system boot. |
+| **Impacted Components** | Workflow Engine (steps waiting on MCP calls), domain workflows using external tools |
+| **Isolation Mechanisms** | Circuit breaker (cockatiel: 5 consecutive failures → open, 30s half-open test, 10s timeout) + retry (3 attempts, exponential backoff) composition per tool; per-tool rate limits with BullMQ queueing instead of rejection; idempotency keys in Redis prevent duplicate side-effecting calls; schema validation rejects malformed responses. |
+| **Fallback Behavior** | Workflow receives explicit error signal; can retry, skip, or follow error path. Rate-limited requests queue in BullMQ and drain when capacity is available. |
+
+##### LLM Gateway — Standard
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | LLM provider abstraction boundary. No shared state except PostgreSQL for usage logging. |
+| **Blast Radius** | Limited — AI-powered workflow steps fail or degrade. Core platform operations (HITL, MCP non-AI calls, auth, audit) are unaffected. Budget exhaustion blocks all LLM calls for the affected domain. |
+| **Propagation Mode** | Sync (workflow steps block on LLM response) |
+| **Propagation Outcome** | Degraded — provider fallback (primary → secondary on 429/5xx); budget enforcement returns explicit error; Inngest memoization prevents duplicate LLM calls on workflow replay. |
+| **Impacted Components** | Workflow Engine (AI-dependent steps), domain workflows using LLM reasoning |
+| **Isolation Mechanisms** | Provider-agnostic interface enables runtime switching; budget guardrails (daily/monthly caps) prevent runaway costs; Inngest step memoization deduplicates on replay. |
+| **Fallback Behavior** | Automatic retry with backup provider on transient failures. Budget exceeded returns `Result.err` with `DAILY_BUDGET_EXCEEDED` or `MONTHLY_BUDGET_EXCEEDED`. Workflow can handle via error path. |
+
+##### Notification Bus (Novu) — Standard
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | Notification delivery boundary. Depends on Novu Cloud (Phase 1) for channel routing and delivery. No shared state with other components except receiving events from Workflow Engine and HITL Gateway. |
+| **Blast Radius** | Notification delivery delayed or lost. HITL approval notifications are most impactful — approvers may not know they have pending approvals, causing workflows to timeout at TTL. Non-HITL notifications (status updates, alerts) are delayed but not business-critical. Core platform operations continue. |
+| **Propagation Mode** | Async (fire-and-forget from caller perspective; Novu handles delivery retries internally) |
+| **Propagation Outcome** | Degraded — notification delivery fails silently from platform perspective. HITL workflows degrade to TTL timeout path. |
+| **Impacted Components** | HITL Gateway (approval notification delivery), users (miss alerts), domain workflows (notification steps) |
+| **Isolation Mechanisms** | Novu internal retry logic; `transactionId` deduplication for critical notifications; priority routing (critical notifications get preferred delivery). Phase 2: self-hosted Novu option. |
+| **Fallback Behavior** | Phase 1: No fallback — Novu is single notification path. HITL workflows fall back to TTL timeout. Phase 2: Consider direct SMTP fallback for critical HITL notifications; in-app notification as secondary channel. |
+
+##### Audit Service — Critical
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | Compliance logging boundary. Owns `audit_logs` table in PostgreSQL `public` schema. Audit writes are currently **synchronous** (`await auditService.log()`) in critical paths including HITL decision recording, file access, and retention enforcement. |
+| **Blast Radius** | If audit writes slow or fail: HITL decision recording blocks (approvals delayed), file access logging blocks (downloads delayed), retention enforcement stalls. Audit table lock contention or disk pressure can transitively degrade all audit-emitting components. |
+| **Propagation Mode** | Sync (audit writes are `await`-ed inline in calling components) |
+| **Propagation Outcome** | Degraded — audit failures should not cascade to data corruption, but **currently risk blocking critical paths** due to synchronous writes. Must be addressed. |
+| **Impacted Components** | HITL Gateway (decision audit), File Storage (access audit), Workflow Engine (workflow audit events), Identity Service (role change audit) |
+| **Isolation Mechanisms** | Append-only SQL with idempotent inserts (deterministic IDs prevent duplicates on retry); `REVOKE UPDATE, DELETE` on `audit_logs` table enforces immutability. **Gap**: No timeout or async decoupling on audit writes — a slow audit insert blocks the caller. |
+| **Fallback Behavior** | Phase 1: Audit write failure propagates to caller as error. **Recommended**: Add write timeout (500ms) with dead-letter queue for failed audit entries; retry via background job. This preserves compliance (no silent drops) while decoupling audit latency from critical paths. |
+
+##### Identity Service (Supabase Auth) — Critical
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | Authentication and authorization boundary. Depends on Supabase Auth Cloud for session management, magic link delivery, and OAuth flows. Application-layer RBAC uses PostgreSQL `public` schema tables. |
+| **Blast Radius** | **Platform-wide for authenticated operations.** All API endpoints requiring `BearerAuth` (all except health checks, magic-link request, auth callback, inbound webhooks) return 401/503. Users cannot log in. Approvers cannot submit HITL decisions via authenticated endpoints. Workflow management APIs unavailable. |
+| **Propagation Mode** | Sync (every authenticated request validates JWT against Supabase) |
+| **Propagation Outcome** | Degraded with Phase 1 mitigation, potentially cascading without JWKS caching. See isolation mechanisms. |
+| **Impacted Components** | All authenticated API endpoints, HITL Gateway (approver authentication), RBAC enforcement, workflow management APIs |
+| **Isolation Mechanisms** | JWT tokens are self-contained — **JWKS public keys should be cached locally** with a TTL of 1 hour and stale-if-error of 24 hours. During Supabase outage, already-authenticated sessions continue working with cached JWKS validation. New logins and token refresh require live Supabase connection. Exit strategy: standard OIDC/JWT tokens enable migration to Keycloak/Authentik (ADD §8.1). |
+| **Fallback Behavior** | With JWKS caching: existing sessions continue for up to 24h (stale key grace period). New login attempts fail with user-friendly "Authentication service temporarily unavailable" message. HITL approval tokens (signed JWTs) can be validated locally without Supabase. Without JWKS caching: all authenticated endpoints fail immediately. |
+
+##### File Storage (S3/Minio + ClamAV) — Standard
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | File management boundary. Depends on S3-compatible object storage (Minio/DO Spaces) for binary data and PostgreSQL for file metadata. ClamAV for malware scanning. |
+| **Blast Radius** | File upload, download, and link operations fail. Workflows requiring document attachments (HR contracts, resumes) degrade. Audit export downloads fail. Core platform operations (workflows without files, HITL, auth) continue. |
+| **Propagation Mode** | Async (file operations are typically workflow steps, not blocking API-level) |
+| **Propagation Outcome** | Degraded — file-dependent workflow steps fail; non-file workflows continue. |
+| **Impacted Components** | File-dependent workflow steps, audit export downloads, malware scanning flow |
+| **Isolation Mechanisms** | Metadata/binary separation (PostgreSQL metadata survives object storage failure); scan status uses upsert (idempotent); S3 delete is inherently idempotent. |
+| **Fallback Behavior** | File upload returns error; workflow step follows error path. Existing file metadata remains accessible even if binary storage is down. ClamAV unavailability: files flagged as `scan_pending` and quarantined until scanner recovers. |
+
+##### PostgreSQL Database — Critical (Shared Infrastructure)
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | **Shared infrastructure — single failure domain for entire platform in Phase 1.** Single managed PostgreSQL instance hosts `public` schema (core platform), `aptivo_hr` schema, and `aptivo_trading` schema. Schema separation provides data isolation but NOT failure isolation. |
+| **Blast Radius** | **Total platform outage.** All components using PostgreSQL become unavailable: Workflow Engine (application data), HITL Gateway (request/decision tables), Audit Service (audit_logs), Identity Service (RBAC tables), File Storage (metadata), LLM Gateway (usage logs). Only stateless health checks (`/health/live`) continue responding. |
+| **Propagation Mode** | Sync (all database queries are synchronous from caller perspective) |
+| **Propagation Outcome** | **Cascading** — database failure propagates synchronously to all callers. No component can operate independently of PostgreSQL in Phase 1. |
+| **Impacted Components** | All platform components (Workflow Engine, HITL Gateway, Audit Service, Identity Service, File Storage, LLM Gateway, domain applications) |
+| **Isolation Mechanisms** | **Phase 1**: Schema isolation (logical separation only); connection pooling via managed database; automated daily backups (RPO < 24h). **Phase 2+**: HA-tier managed database with standby failover; connection pool per schema/domain to prevent pool exhaustion cascade; statement timeouts per domain. |
+| **Fallback Behavior** | Phase 1: Application reconnects automatically when database recovers. Restore from backup if unrecoverable (RTO < 4h, RPO < 24h). Phase 2+: Automatic failover to standby via connection pooler. |
+
+> **Accepted Risk (Phase 1)**: PostgreSQL is a single point of failure. All domains share one instance. Mitigation: managed daily backups, health monitoring, and documented recovery playbook (RUNBOOK §8.5). Phase 2 upgrade path: HA-tier database with standby nodes, connection pool isolation per schema.
+
+##### Redis Cache — Critical (Shared Infrastructure)
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | **Shared infrastructure — affects multiple unrelated concerns.** Single Basic-tier Redis instance serves: MCP idempotency keys, rate-limit queueing (BullMQ), webhook deduplication, session cache. |
+| **Blast Radius** | MCP idempotency checks fail (risk of duplicate side-effecting tool calls including financial operations); rate-limited requests cannot be queued (rejected instead of queued); webhook deduplication fails (duplicate processing); BullMQ job queue halts. Core platform operations that don't depend on Redis (direct API calls, HITL approval recording, audit writes) continue. |
+| **Propagation Mode** | Sync (Redis operations are synchronous from caller perspective) |
+| **Propagation Outcome** | **Degraded with data integrity risk.** Most consumers can tolerate temporary Redis unavailability with degraded behavior, but MCP idempotency loss can cause duplicate financial operations. |
+| **Impacted Components** | MCP Integration Layer (idempotency, rate limiting), BullMQ workers (rate-limited requests, outbound webhooks), webhook deduplication, session performance |
+| **Isolation Mechanisms** | **Phase 1**: Logical database separation — use separate Redis databases (SELECT 0–3) or key prefix namespacing for different concerns: `idem:*` for idempotency, `rl:*` for rate limiting, `dedup:*` for webhook deduplication, `sess:*` for sessions. Memory policy: `allkeys-lru` with monitoring for eviction pressure. **Phase 2+**: Separate Redis instances for job queues vs. cache. |
+| **Fallback Behavior** | **Per-consumer degradation policy**: (1) MCP idempotency: **fail-closed** — reject tool calls when idempotency cannot be verified (prevents duplicate financial operations); (2) Rate limiting: **fail-open** — allow requests without rate limiting (temporary burst acceptable); (3) Webhook dedup: **fail-open** — process webhooks without dedup (handlers are idempotent); (4) Session cache: **fail-open** — fall back to database session lookup (slower but functional). |
+
+> **Accepted Risk (Phase 1)**: Single Redis node. BullMQ job accumulation could cause OOM affecting all Redis consumers. Mitigation: memory limit monitoring, key TTL enforcement, consumer-specific degradation policies documented above.
+
+##### DigitalOcean App Platform — Critical (Infrastructure)
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | **Platform infrastructure boundary.** Single-region deployment on DigitalOcean App Platform. All containers (API, workers) run in one region. |
+| **Blast Radius** | **Total platform outage** on regional failure. All API endpoints, workflow workers, and background jobs unavailable. |
+| **Propagation Mode** | Sync (infrastructure failure immediately affects all hosted services) |
+| **Propagation Outcome** | **Cascading** — regional outage takes down all services simultaneously. |
+| **Impacted Components** | All services and infrastructure |
+| **Isolation Mechanisms** | Health checks (liveness, readiness, startup probes) trigger container restarts for individual container failures; rolling deployment with rollback; auto-scaling 1–3 containers. These mitigate container-level failures but not regional outages. |
+| **Fallback Behavior** | Container failure: automatic restart via health checks. Regional outage: restore to alternate region manually (RTO < 4h per RUNBOOK §8.6). Feature flags for instant rollback of new functionality. Phase 2+: multi-region DR with DNS failover. |
+
+##### BullMQ (Job Queue) — Standard
+
+| Field | Value |
+|-------|-------|
+| **Failure Domain** | Job queue processing boundary. Depends entirely on Redis for job storage and coordination. |
+| **Blast Radius** | Rate-limited MCP requests stop draining; outbound webhook delivery halts. Does not affect synchronous API operations or direct workflow execution. |
+| **Propagation Mode** | Async (jobs are enqueued and processed asynchronously) |
+| **Propagation Outcome** | Degraded — queued work stalls but does not affect non-queued operations. Jobs resume when Redis recovers. |
+| **Impacted Components** | MCP rate-limited request processing, outbound webhook delivery |
+| **Isolation Mechanisms** | Job deduplication by `jobId`; inherits Redis availability. |
+| **Fallback Behavior** | Jobs remain in Redis and resume processing when BullMQ workers reconnect. No data loss for enqueued jobs (Redis persistence). |
 
 ---
 
@@ -100,11 +265,13 @@ This document defines **HOW** the Aptivo Agentic Core is architected to meet the
 
 | Option | Pros | Cons | Decision |
 |--------|------|------|----------|
-| **Inngest** | TypeScript-native, AgentKit for MCP, step.waitForEvent for HITL | Cloud-first (not open source) | **Selected** |
+| **Inngest** | TypeScript-native, AgentKit for MCP, step.waitForEvent for HITL | Source-available (Elastic License); self-hosting supported | **Selected** |
 | **Trigger.dev** | Open source, warm starts | MCP exposes server only, no consumption | Not selected |
 | **Temporal.io** | Production-proven, full durable execution | Heavy infrastructure, Java SDK primary | Consider for scale |
 
 **Decision**: **Inngest** selected as Platform Core Workflow Engine.
+
+> **Verified (2026-02-26)**: AgentKit MCP consumption confirmed at [agentkit.inngest.com](https://agentkit.inngest.com/advanced-patterns/mcp). `step.waitForEvent()` confirmed at [inngest.com/docs/features/inngest-functions/steps-workflows/wait-for-event](https://www.inngest.com/docs/features/inngest-functions/steps-workflows/wait-for-event). Self-hosting available at [inngest.com/docs/self-hosting](https://www.inngest.com/docs/self-hosting). Pricing at [inngest.com/pricing](https://www.inngest.com/pricing).
 
 **Rationale** (Multi-Model Consensus 2026-02-02):
 1. **MCP Consumption**: AgentKit natively supports calling external MCP servers (required for 13+ crypto integrations)
@@ -158,6 +325,8 @@ export const smartMoneyWorkflow = inngest.createFunction(
     });
   }
 );
+
+> **Inngest Serve Endpoint Security**: The Inngest SDK serves an HTTP endpoint (typically `/api/inngest`) that receives events from Inngest Cloud. This endpoint MUST be protected with `INNGEST_SIGNING_KEY` validation — the SDK rejects unsigned requests when this key is configured. See §14.8 for the full threat model.
 
 ### 3.3 Inngest Idempotency Guarantees
 
@@ -275,6 +444,40 @@ async function transferFunds(ctx: Context) {
   }
 }
 ```
+
+### 3.5 Workflow Data Ownership
+
+#### Workflow Definitions
+
+| Field | Value |
+|-------|-------|
+| **Owner** | Workflow Management API (single writer) |
+| **Source of Truth** | PostgreSQL `public.workflow_definitions` table (see TSD `database.md` §3.1) |
+| **Write Access** | Single-owner — all CRUD via `/api/v1/workflows` endpoints. Inngest reads definitions at execution time. |
+| **Conflict Resolution** | Optimistic concurrency via `version` column. UPDATE with `WHERE version = expected` prevents stale overwrites. |
+| **Handoff** | API writes definition → Inngest runtime reads on workflow trigger. No async sync required — Inngest functions are code-defined, referencing definition data at step execution time. |
+
+#### Workflow Execution State (Inngest ↔ PostgreSQL Bridge)
+
+| Field | Value |
+|-------|-------|
+| **Authoritative Owner** | Inngest Cloud (durable execution runtime). Inngest owns step execution order, memoization, timer state, and event correlation. |
+| **Queryable Projection** | PostgreSQL `public.workflow_executions` table (see TSD `database.md` §3.2). This is an application-layer projection of Inngest state for API queryability. |
+| **Sync Mechanism** | Inngest lifecycle events update the projection: workflow started → INSERT; step completed → UPDATE stepResults; workflow completed/failed → UPDATE status + completedAt. Updates are idempotent (upsert on execution ID). |
+| **Which Is Authoritative?** | **Inngest is authoritative for execution state.** The PostgreSQL table is a read-optimized projection. In case of divergence, Inngest state wins. The API reads from PostgreSQL for list/search queries and from Inngest for detailed step-level debugging. |
+| **Conflict Resolution** | Single-owner (Inngest). PostgreSQL projection writes are event-driven and idempotent — no concurrent write conflicts possible. |
+
+#### Feature Flag State
+
+| Field | Value |
+|-------|-------|
+| **Owner** | Application configuration layer (code-defined) |
+| **Source of Truth** | Code-defined `FEATURE_FLAGS` array with environment variable overrides (see TSD `configuration.md` §5) |
+| **Write Access** | Phase 1: Static code definition + env var override at deployment. Runtime toggling via env var change + container restart. |
+| **Propagation** | All containers read flags from process environment on startup. Changes require redeployment or env var update + restart. No runtime propagation delay — flags are read synchronously from memory. |
+| **Consistency** | Strongly consistent within a container. During rolling deployment, containers may briefly disagree (old vs. new flag values). This window is bounded by deployment duration (< 5 minutes). |
+
+> **Phase 1 Reality**: Feature flags are compile-time constants with env var escape hatches, not a runtime feature flag service. RUNBOOK §2.4 "feature flag management" refers to environment variable toggling and deployment-gated rollouts. A dedicated feature flag service (LaunchDarkly, Unleash, etc.) is a Phase 2+ consideration if runtime percentage rollouts are needed without redeployment.
 
 ---
 
@@ -973,7 +1176,7 @@ class MCPRegistry {
 **Mechanism**:
 - Novu supports `transactionId` for deduplication
 - For HITL notifications: use `hitl:{requestId}` as transactionId
-- Novu deduplicates within 24-hour window
+- Novu deduplicates via `transactionId` (idempotency key; explicit window not publicly documented)
 
 **Duplicate Behavior**: Novu silently ignores duplicate transactionIds
 
@@ -1051,6 +1254,8 @@ Templates are configured in Novu dashboard, not code:
 
 ### 6.4 Channel Configuration
 
+> **Verified (2026-02-26)**: Novu supports Telegram as a chat channel provider ([docs.novu.co/platform/integrations/chat](https://docs.novu.co/platform/integrations/chat)). Resend email integration is documented at [docs.novu.co/platform/integrations/email/resend](https://docs.novu.co/platform/integrations/email/resend). The `transactionId` parameter for deduplication is confirmed in the [Trigger Event API](https://docs.novu.co/api-reference/events/trigger-event); however, the deduplication window duration is not publicly documented by Novu -- the ADD's "24-hour" claim should be validated during integration testing.
+
 | Channel | Provider | Phase |
 |---------|----------|-------|
 | Email | Resend (via Novu) | Phase 1 |
@@ -1099,6 +1304,22 @@ Novu's workflow editor handles priority-based routing:
 - Fallback to secondary provider
 
 **Cost Protection**: Usage logging (§7.2) is idempotent; duplicate requests are logged once per workflow step.
+
+#### 7.1.2 Provider Rate Limits Reference
+
+> **Verified (2026-02-26)**: Rate limits are tier-based and change frequently. The table below captures baseline Tier 1 limits. Teams must check current limits at provider dashboards before production launch.
+
+| Provider | Rate Limit Reference | Tier 1 Baseline (approx.) | Notes |
+|----------|---------------------|--------------------------|-------|
+| **OpenAI** | [platform.openai.com/docs/guides/rate-limits](https://platform.openai.com/docs/guides/rate-limits) | ~500K TPM, ~1,000 RPM (GPT-5) | Auto-graduates tiers by spend |
+| **Anthropic** | [platform.claude.com/docs/en/api/rate-limits](https://platform.claude.com/docs/en/api/rate-limits) | ~5-60 RPM, scales by tier ($5→$400+ deposit) | Long-context requests have separate limits |
+| **Google** | [ai.google.dev/gemini-api/docs/rate-limits](https://ai.google.dev/gemini-api/docs/rate-limits) | 150-300 RPM (Paid Tier 1); Free tier: 5-15 RPM | Free tier reduced ~50-80% in Dec 2025 |
+
+**Rate Limit Management Strategy**:
+- LLM Gateway must implement per-provider rate tracking using token bucket or sliding window
+- When approaching limits: queue requests rather than fail (aligns with Durable Execution pattern)
+- Budget enforcement (§7.2) acts as secondary rate governor
+- Provider fallback (§7.1) triggers on 429 responses before circuit breaker
 
 ```typescript
 interface LLMProvider {
@@ -1362,11 +1583,22 @@ Full WebAuthn support deferred to Phase 2. Supabase Auth roadmap includes passke
 
 ```
 PostgreSQL
-├── public (shared)
-│   ├── users
-│   ├── authenticators
-│   ├── audit_logs
-│   └── llm_usage_logs
+├── public (shared — Platform Core)
+│   ├── users                    → Identity Service (owner)
+│   ├── authenticators           → Identity Service (owner)
+│   ├── user_roles               → Identity Service (owner, RBAC)
+│   ├── workflow_definitions     → Workflow Management API (owner) [TSD database.md §3.1]
+│   ├── workflow_executions      → Workflow Engine (owner, Inngest projection) [TSD database.md §3.2]
+│   ├── hitl_requests            → HITL Gateway (owner) [TSD hitl-gateway.md]
+│   ├── hitl_decisions           → HITL Gateway (owner) [TSD hitl-gateway.md]
+│   ├── hitl_policies            → HITL Gateway (owner) [TSD hitl-gateway.md]
+│   ├── audit_logs               → Audit Service (owner, append-only)
+│   ├── audit_exports            → Audit Service (owner)
+│   ├── llm_usage_logs           → LLM Gateway (owner)
+│   ├── files                    → File Storage Service (owner, metadata)
+│   ├── file_entity_links        → File Storage Service (owner)
+│   ├── webhook_deliveries       → Interop Layer (owner, outbound)
+│   └── notification_logs        → Notification Bus (owner) [TSD notification-bus.md]
 ├── aptivo_hr (HR domain)
 │   ├── candidates
 │   ├── applications
@@ -1378,6 +1610,8 @@ PostgreSQL
     ├── trade_executions
     └── security_reports
 ```
+
+> **Ownership Rule**: Each table has exactly one owner component that is the single writer. Other components interact via the owner's API, not by direct table access. Domain tables are owned by their respective domain applications.
 
 ### 9.2 Audit Log Schema
 
@@ -1831,6 +2065,24 @@ async function logFileAccess(userId: string, fileId: string, action: 'view' | 'd
 - Workflow step retry
 
 ```typescript
+#### 9.8.2 ClamAV Deployment Specification
+
+> **Verified (2026-02-26)**: ClamAV provides official Docker images ([docs.clamav.net/manual/Installing/Docker.html](https://docs.clamav.net/manual/Installing/Docker.html)). For REST API access, use [clamav-rest-api](https://github.com/benzino77/clamav-rest-api) or [ajilach/clamav-rest](https://github.com/ajilach/clamav-rest) which bundles ClamAV daemon + REST API + auto signature updates in a single container.
+
+**Deployment Model**: Separate container service (not sidecar -- incompatible with DO App Platform)
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Container image | `ajilach/clamav-rest` or `benzino77/clamav-rest-api` | Two-in-one: daemon + REST API |
+| Minimum RAM | 1.2 GiB | Signature database loading |
+| Peak RAM (updates) | 2.4 GiB | During daily `freshclam` updates |
+| API protocol | HTTP POST (multipart/form-data) | Scan file via `POST /api/v1/scan` |
+| ClamAV port | 3310 (TCP) | Direct `clamd` connection (internal only) |
+| Timeout | 30s per file (configurable) | Large files may need longer |
+| Phase 1 deployment | Docker Compose service | Runs alongside API container |
+| Production deployment | DO App Platform worker or external service | Evaluate cost vs. managed alternatives |
+
+```typescript
 // malware scan integration point
 interface MalwareScanResult {
   fileId: string;
@@ -1905,11 +2157,11 @@ services:
   # Core Services
   api:
     image: aptivo/api
-    depends_on: [postgres, redis, nats]
+    depends_on: [postgres, redis]
 
   workflow-worker:
     image: aptivo/worker
-    depends_on: [postgres, redis, nats]
+    depends_on: [postgres, redis]
 
   # Infrastructure
   postgres:
@@ -1918,12 +2170,12 @@ services:
   redis:
     image: redis:7
 
-  nats:
-    image: nats:latest
-    command: ["--jetstream"]
-
   minio:
     image: minio/minio
+
+  clamav:
+    image: ajilach/clamav-rest
+    mem_limit: 2560m  # 2.5GB for signature update peak
 ```
 
 ### 10.3 Infrastructure Selection Rationale
@@ -2395,7 +2647,7 @@ This section provides a quick reference for all idempotency patterns used across
 | **Audit Service** | Export | Deterministic exportId | Return existing export | 1 hour |
 | **Audit Service** | Retention | Date-based archive | Already-archived skipped | Daily |
 | **LLM Gateway** | Usage tracking | Deterministic UUID | ON CONFLICT ignore | Permanent |
-| **Notification Bus** | Critical notifications | Novu transactionId | Novu ignores duplicate | 24 hours |
+| **Notification Bus** | Critical notifications | Novu transactionId | Novu ignores duplicate | transactionId lifetime (window undocumented) |
 | **Notification Bus** | Non-critical | Best-effort | May duplicate (acceptable) | N/A |
 | **Inbound Webhooks** | Webhook receipt | webhookId + Redis | Return cached response | 7 days (configurable) |
 | **Outbound Webhooks** | Event enqueue | BullMQ jobId (eventId) | Job deduplicated | Job lifetime |
@@ -2483,7 +2735,191 @@ Example: client 3x × LB 2x × workflow 3x = 18x potential executions.
 
 ---
 
-## 14. References
+## 14. Security Threat Analysis
+
+This section applies STRIDE-based threat modeling to the platform's attack surfaces. Each surface has explicit threat enumeration, mitigations (referencing existing ADD sections), and residual risk acknowledgment.
+
+**Methodology**: STRIDE (Spoofing, Tampering, Repudiation, Information Disclosure, Denial of Service, Elevation of Privilege). Each identified threat is mapped to a specific mitigation or classified as accepted residual risk with justification.
+
+### 14.1 Authentication & Authorization
+
+**Surface**: Magic link login, OAuth callback, JWT session management, RBAC role assignment.
+**Source**: §8.1-8.4, API Spec `/api/v1/auth/*`
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Magic link email interception | HTTPS-only delivery, link expiry (Supabase default: 1h), single-use tokens | Email account compromise outside platform control |
+| **S** | OAuth redirect URI manipulation | Supabase-managed registered redirect URIs, PKCE for public clients | Dependent on Supabase OAuth implementation |
+| **T** | JWT token modification | Supabase JWKS-based RS256 signature verification (§8.2) | N/A — cryptographic guarantee |
+| **T** | Session token theft (XSS) | HttpOnly, Secure, SameSite cookies (Supabase-managed); CSP headers (Coding Guidelines §4.5) | Persistent XSS via other vectors |
+| **R** | Login without audit trail | Supabase logs authentication events; application-layer audit for role changes (§9.2) | Supabase-side audit retention policy unknown |
+| **I** | Account enumeration via magic link | API returns identical success response regardless of email existence | Timing side-channel possible |
+| **D** | Magic link email flooding | Rate limiting on magic link endpoint (API Spec 429 response); Supabase-level rate limits | Distributed attacks may exceed rate limits |
+| **E** | Privilege escalation via role assignment | Single write path (§8.3), deny-by-default RBAC, role changes audited | Admin account compromise |
+
+### 14.2 HITL Approval Gateway
+
+**Surface**: Approval token generation/verification, decision recording, workflow signaling.
+**Source**: §4.1-4.6, API Spec HITL endpoints
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Approver impersonation via stolen token | JWT tokens scoped to specific requestId, signed with HS256 (§4.2); not reusable across requests | Token intercepted from notification channel before expiry |
+| **S** | HITL_SECRET compromise → forge any token | Encrypted env var storage (Runbook §4.3), 180-day rotation | Symmetric key — compromise window matches rotation period |
+| **T** | Approval payload manipulation | Server-side decision validation — only approve/reject/request-changes accepted (§4.5) | N/A |
+| **T** | Race condition: concurrent approvals | Database-level guard: status check within transaction, ON CONFLICT dedup (§4.5.1, §4.6.1) | N/A — database guarantees |
+| **R** | Decision without audit | Deterministic audit ID, actor, timestamp recorded (§4.6.1); append-only logs (§9.3) | N/A |
+| **D** | Approval endpoint flooding | BearerAuth required, rate limiting (429), Idempotency-Key prevents duplicate processing | Distributed authenticated attacks |
+| **E** | Bypass HITL to execute workflow directly | Workflow signals only accepted from authenticated HITL Gateway service (§4.5.1) | Compromised HITL service |
+
+> **Accepted Residual Risk**: HS256 symmetric signing means HITL_SECRET compromise allows forging approval tokens for any pending request. Mitigated by: encrypted storage, rotation schedule, monitoring for anomalous approval patterns. **Phase 2 consideration**: migrate to RS256/ES256 asymmetric signing where only the issuing service holds the private key.
+
+### 14.3 PII Data Stores
+
+**Surface**: PostgreSQL tables containing personally identifiable information across `public` and domain schemas.
+**Source**: §9.1, TSD §5.2 (Data Classification)
+
+**PII Inventory** (from TSD §5.2 Data Classification):
+- `users`: email, name
+- `aptivo_hr.candidates`: name, email, phone, address, salary expectations
+- `aptivo_hr.contracts`: salary, compensation details
+- `audit_logs`: actor metadata (may contain PII in context)
+- `files`: uploaded documents (resumes, identity documents)
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Unauthorized access via stolen credentials | BearerAuth on all endpoints, deny-by-default RBAC (§8.3), domain-scoped roles | Compromised admin credentials |
+| **T** | SQL injection | All database access via Drizzle ORM parameterized queries (Coding Guidelines §4.1); no raw SQL permitted | ORM bypass or misconfiguration |
+| **T** | Unauthorized data modification | Single-owner write model per table (§9.1), audit logging on all mutations (§9.2) | Database admin has direct write access |
+| **R** | Data modification without trail | All mutations create audit entries with deterministic IDs (§9.2-9.3); append-only enforcement | N/A |
+| **I** | Bulk data exfiltration | RBAC limits access; audit export audited (§9.5); API pagination limits per-request volume | Authorized user with export access — no anomaly detection |
+| **I** | PII leakage in application logs | Pino logger with field redaction (Coding Guidelines §6.1) | PII fields (email, phone) not in default redaction list |
+| **I** | Cross-schema data access | Schema isolation per domain (§9.1), application-level tenant context | Shared PostgreSQL — cross-schema queries possible with connection credentials |
+| **I** | Backup data exposure | Managed daily backups (Runbook §8.5), encrypted at rest (BRD §8.1) | Backup restoration to unauthorized environment |
+| **D** | Database resource exhaustion | Connection pool limits, statement timeouts (§2.3.2) | Single shared instance — cross-domain contention |
+| **E** | Privilege escalation via domain role | Domain roles scoped to specific domain (§8.3), admin-only role assignment | Cross-domain escalation if isolation misconfigured |
+
+> **Accepted Residual Risk**: Pino log redaction covers `password`, `token`, `secret` but not PII fields. Configure Pino redaction paths for all TSD §5.2 PII-classified fields before production deployment.
+
+> **Accepted Residual Risk**: No anomaly detection for bulk data access patterns. Phase 2: implement audit-based threshold alerts on large query result sets and export operations.
+
+### 14.4 MCP Tool Execution
+
+**Surface**: External MCP server integration via stdio/HTTP transport, tool invocation with environment secrets.
+**Source**: §5.1-5.5, Sprint 0 SP-06
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Malicious MCP server impersonation | Server registry with approved servers only (§5.1); transport config per server | Compromised npm package in supply chain |
+| **T** | Malformed/malicious tool responses | Zod schema validation on all tool outputs (§5.3) | Schema-valid but semantically malicious responses |
+| **T** | Tool argument injection | Tool-specific argument schemas; HITL gates on critical tools (§5.1 `requiresApproval`) | LLM prompt injection → malicious arguments (see §14.5) |
+| **T** | SSRF via MCP HTTP transport | MCP server URLs defined in registry (§5.1), not user-supplied | Registry misconfiguration |
+| **R** | Undocumented tool calls | Idempotency keys logged (§5.1.1); LLM usage tracking (§7.2); Inngest step audit | N/A |
+| **I** | Secret exfiltration via stdio MCP | SP-06 identifies risk; env sanitization planned | **UNMITIGATED until SP-06 complete** — all env vars accessible |
+| **D** | MCP server resource exhaustion | Circuit breaker (§5.2): 5 failures → open, 30s half-open; timeout: 10s; BullMQ rate queueing (§5.4) | Coordinated slowloris across servers |
+| **D** | Runaway MCP process | Cockatiel timeout enforcement (§5.2) | No documented memory/CPU limits |
+| **E** | MCP server accesses unauthorized resources | Scoped capabilities per registry (§5.1); HITL approval gates for critical tools | Compromised server + env secrets = full credential access |
+
+> **Accepted Residual Risk (CRITICAL — pre-production blocker)**: MCP servers spawned via `npx` inherit the full process environment including database credentials and API keys. Sprint 0 SP-06 plans environment sanitization but is not yet implemented. A compromised MCP server package could exfiltrate all platform secrets. **Must complete SP-06 env sanitization before production deployment.**
+
+### 14.5 LLM Gateway — Prompt Injection
+
+**Surface**: LLM prompts constructed from user-supplied and MCP-retrieved data, processed by OpenAI/Anthropic/Google.
+**Source**: §7.1-7.2
+
+LangGraph.js runs inside Inngest `step.run()` activities for AI reasoning tasks (sentiment analysis, narrative clustering, resume parsing). User-controlled data flows into prompts that influence workflow decisions.
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Input crafted to impersonate system prompt | System/user prompt separation in provider SDKs (standard practice) | Prompt injection via data embedded in system context |
+| **T** | Direct prompt injection — user text manipulates LLM | HITL approval gates verify human oversight of LLM-influenced decisions (§4.1) | **UNMITIGATED at input layer** — no prompt hardening documented |
+| **T** | Indirect prompt injection — MCP data contains adversarial instructions | Zod schema validation on MCP outputs (§5.3) provides structural checks | **UNMITIGATED for semantic content** — valid schema but adversarial text |
+| **T** | Output manipulation → wrong HITL recommendation | Human approver verifies decision (§4.1) | Human may rubber-stamp LLM recommendation |
+| **R** | LLM decisions without audit | LLM usage logged: token counts, model, provider (§7.2); Inngest step logging | Prompt/response content not logged |
+| **I** | Data exfiltration via crafted prompts | LLM responses stay within workflow context, not directly user-facing in Phase 1 | Injection could encode PII in tool-call arguments reaching external MCP servers |
+| **D** | Cost manipulation via token-maximizing prompts | Daily/monthly budget caps (§7.2) | Attacker staying below threshold |
+| **E** | Jailbreaking → unauthorized tool calls | MCP tool calls subject to idempotency (§5.1.1) and HITL gates (§5.1 `requiresApproval`) | Sophisticated jailbreak bypassing content filters |
+
+> **Accepted Residual Risk (Phase 1)**: Direct and indirect prompt injection are unmitigated at the input layer. Compensating controls: (1) HITL approval gates provide human verification, (2) MCP idempotency keys prevent duplicate tool calls, (3) schema validation constrains tool argument structure. **Phase 2**: add prompt injection detection, output validation guardrails, and structured output enforcement.
+
+### 14.6 File Upload & Storage
+
+**Surface**: Presigned URL upload, ClamAV scanning, S3/Minio storage, presigned URL download.
+**Source**: §9.6-9.8, API Spec Files endpoints
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Unauthorized upload via leaked presigned URL | Presigned URLs have TTL expiry (§9.6); obtaining URL requires BearerAuth | URL shared before expiry |
+| **T** | Path traversal via filename | S3 key generated server-side: `files/${fileId}/${sanitizedFilename}` (§9.6) | Filename sanitization must strip `../` and special chars |
+| **T** | Content-type spoofing | Server-side content-type validation recommended | Partial — API accepts client-declared contentType |
+| **T** | Malware in uploaded files | ClamAV integration with quarantine (§9.8); scan-before-download gate | Zero-day malware; decompression bombs |
+| **R** | File access without audit | File access logged: actor, entityType, accessType (§9.7) | N/A |
+| **I** | Unauthorized download | Access control inherited from linked entity (§9.7); download requires BearerAuth | Presigned download URL shared after generation |
+| **D** | Storage exhaustion | 50MB max file size (API Spec); presigned URL scoped to declared size | No per-user upload quota or concurrent upload limit |
+| **E** | Access file from another entity | Entity-link verification on download (§9.7) | IDOR if entity-link validation incorrectly implemented |
+
+### 14.7 Webhook Security
+
+#### 14.7.1 Inbound Webhooks
+
+**Surface**: `POST /api/v1/webhooks/inbound/{sourceId}` — accepts payloads from external systems.
+**Source**: §12.3, API Spec
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Forged webhook payload | HMAC signature verification via X-Webhook-Signature (§12.3.1) | Webhook secret compromise |
+| **T** | Replay attack | X-Webhook-Timestamp freshness check; Redis dedup with 7-day TTL (§12.3.1) | Replay within clock-skew tolerance |
+| **I** | Source enumeration via sourceId | Pre-registered sources; invalid sourceId returns 404 | Brute-force enumeration |
+| **D** | Webhook flooding | Rate limiting (429 response); dedup prevents duplicate processing | Volume exceeding rate limit |
+| **D** | Oversized payload | Body size limit at reverse proxy / application layer | Not explicitly specified in API Spec |
+
+#### 14.7.2 Outbound Webhooks
+
+**Surface**: HTTP POST to user-configured webhook URLs.
+**Source**: §12.2, API Spec
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Receiver cannot verify sender | HMAC signature (§12.2.1); X-Webhook-Timestamp | Receiver must implement verification |
+| **T** | SSRF via user-supplied webhook URL | **Not yet implemented** — must validate against private IP ranges | **Pre-production blocker** |
+| **I** | Sensitive data in webhook payload | Event payloads defined per type (§12.2) | Payload content review needed |
+| **D** | Overwhelming receiver | Exponential backoff retry (§12.2.2); BullMQ dedup | Receiver-side concern |
+
+> **Accepted Residual Risk (pre-production blocker)**: Outbound webhook URL validation for SSRF is not documented. Must implement: block private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8), cloud metadata endpoints (169.254.169.254), enforce HTTPS-only.
+
+### 14.8 Inngest Webhook Endpoint
+
+**Surface**: HTTP endpoint (`/api/inngest`) serving Inngest SDK for event ingestion and workflow execution.
+**Source**: §3.1-3.3
+
+The Inngest SDK serves an HTTP endpoint that receives events from Inngest Cloud to trigger and manage workflow executions. This endpoint is the control plane for all platform workflows.
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Unauthorized event injection | Inngest SDK validates `INNGEST_SIGNING_KEY` on all incoming requests | Signing key compromise |
+| **T** | Event payload manipulation | Signing key verification ensures payload integrity | N/A |
+| **D** | Event flooding | Inngest Cloud manages ingestion rate; SDK rejects unsigned requests | Inngest Cloud-level DoS (§2.3.2) |
+| **E** | Trigger privileged workflow | Event-to-function matching by name (§3.2); HITL gates on privileged operations | Function triggered without HITL gate |
+
+> **Implementation Note**: The `INNGEST_SIGNING_KEY` environment variable MUST be configured in all environments. The Inngest SDK rejects unsigned requests when this key is set. Verify during deployment that the key is present and that request validation is not bypassed by middleware.
+
+### 14.9 Residual Risk Register
+
+| ID | Surface | Risk | Likelihood | Impact | Status | Phase |
+|----|---------|------|------------|--------|--------|-------|
+| RR-1 | MCP §14.4 | Env secret exfiltration via compromised npm MCP server | Medium | Critical | **Pre-production blocker** — SP-06 | 1 |
+| RR-2 | LLM §14.5 | Direct prompt injection via user-supplied data | Medium | High | Accepted — HITL compensating control | 1 |
+| RR-3 | LLM §14.5 | Indirect prompt injection via MCP-retrieved data | Low | High | Accepted — schema validation | 1 |
+| RR-4 | HITL §14.2 | HS256 symmetric key compromise | Low | Critical | Accepted — encrypted storage, rotation | 2 (asymmetric) |
+| RR-5 | PII §14.3 | PII leakage in application logs | Medium | Medium | **Pre-production blocker** — extend Pino redaction | 1 |
+| RR-6 | PII §14.3 | No bulk exfiltration detection | Low | High | Accepted — audit logging covers trail | 2 (anomaly detection) |
+| RR-7 | Webhooks §14.7 | Outbound SSRF via user-supplied URL | Medium | Medium | **Pre-production blocker** — URL validation | 1 |
+| RR-8 | File §14.6 | Content-type spoofing | Low | Low | Accepted | 1 |
+| RR-9 | Auth §14.1 | Supabase security vulnerability | Low | Critical | Accepted — exit strategy documented (§8.1) | — |
+
+---
+
+## 15. References
 
 | Document | Purpose |
 |----------|---------|
@@ -2492,6 +2928,9 @@ Example: client 3x × LB 2x × workflow 3x = 18x potential executions.
 | Original ADD (HR) | Historical reference (`docs/03-architecture/add.md`) |
 | Original ADD (Crypto) | Historical reference (`docs/temp/`) |
 | Coding Guidelines | Development standards (`docs/05-guidelines/`) |
+| OWASP Threat Modeling | [owasp.org/www-community/Threat_Modeling](https://owasp.org/www-community/Threat_Modeling) |
+| OWASP Top 10 for LLM | [owasp.org/www-project-top-10-for-large-language-model-applications](https://owasp.org/www-project-top-10-for-large-language-model-applications/) |
+| Microsoft STRIDE | [learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats](https://learn.microsoft.com/en-us/azure/security/develop/threat-modeling-tool-threats) |
 
 ---
 

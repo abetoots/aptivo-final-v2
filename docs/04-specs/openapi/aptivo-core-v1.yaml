@@ -56,12 +56,12 @@ paths:
   # ============================================================================
   # HEALTH CHECKS (No Auth)
   # ============================================================================
-  /api/health:
+  /health/live:
     get:
       tags: [Health]
       summary: Liveness check
-      description: Returns basic health status. Used by load balancers for liveness probes.
-      operationId: getHealth
+      description: Returns basic health status. Used by load balancers and DO App Platform for liveness probes.
+      operationId: getHealthLive
       security: []
       responses:
         '200':
@@ -71,12 +71,12 @@ paths:
               schema:
                 $ref: '#/components/schemas/HealthResponse'
 
-  /api/ready:
+  /health/ready:
     get:
       tags: [Health]
       summary: Readiness check
       description: Returns readiness status including dependency health. Used for readiness probes.
-      operationId: getReady
+      operationId: getHealthReady
       security: []
       responses:
         '200':
@@ -168,7 +168,9 @@ paths:
               $ref: '#/components/schemas/HitlDecisionRequest'
       responses:
         '200':
-          description: Request approved successfully
+          description: |
+            Request approved successfully. Also returned for idempotent duplicate approvals
+            (response includes `idempotent: true` flag per ADD §4.5.1).
           content:
             application/json:
               schema:
@@ -180,7 +182,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: Decision already recorded (idempotent)
+          description: Conflicting decision — request was already resolved with a different action (e.g., trying to approve after rejection)
           content:
             application/json:
               schema:
@@ -208,7 +210,9 @@ paths:
               $ref: '#/components/schemas/HitlDecisionRequest'
       responses:
         '200':
-          description: Request rejected successfully
+          description: |
+            Request rejected successfully. Also returned for idempotent duplicate rejections
+            (response includes `idempotent: true` flag per ADD §4.5.1).
           content:
             application/json:
               schema:
@@ -220,7 +224,7 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
         '409':
-          description: Decision already recorded
+          description: Conflicting decision — request was already resolved with a different action (e.g., trying to reject after approval)
           content:
             application/json:
               schema:
@@ -2008,7 +2012,7 @@ components:
         size:
           type: integer
           description: File size in bytes
-          maximum: 104857600  # 100MB
+          maximum: 52428800  # 50MB (matches FRD §8.5 FR-CORE-BLOB-001 default)
         metadata:
           type: object
           additionalProperties:
@@ -2057,7 +2061,11 @@ components:
           format: uuid
         status:
           type: string
-          enum: [pending, uploaded, scanned, quarantined]
+          enum: [pending, uploaded, clean, quarantined, error]
+          description: >
+            Upload lifecycle: pending (URL generated) → uploaded (received, scan queued) →
+            clean (scan passed, downloadable) | quarantined (infected, blocked) | error (scan failed).
+            Aligns with ADD §9.8 scanStatus values.
         linkedEntities:
           type: array
           items:

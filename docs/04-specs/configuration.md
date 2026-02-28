@@ -34,12 +34,6 @@ DATABASE_SSL=true
 REDIS_URL=redis://host:6379
 REDIS_TLS=true
 
-# NATS JetStream
-NATS_URL=nats://host:4222
-NATS_USER=service-user
-NATS_PASS=service-pass
-NATS_TLS=true
-
 # Object Storage (S3-compatible)
 S3_ENDPOINT=https://storage.aptivo.com
 S3_REGION=us-east-1
@@ -106,10 +100,6 @@ export const env = createEnv({
 
     REDIS_URL: z.string().url(),
 
-    NATS_URL: z.string().url(),
-    NATS_USER: z.string().min(1),
-    NATS_PASS: z.string().min(1),
-
     AUTH_ISSUER: z.string().url(),
     AUTH_CLIENT_ID: z.string().min(1),
     AUTH_CLIENT_SECRET: z.string().min(1),
@@ -144,7 +134,6 @@ const validateEnvironment = () => {
   const requiredVars = [
     'DATABASE_URL',
     'REDIS_URL',
-    'NATS_URL',
     'AUTH_ISSUER',
   ];
 
@@ -230,18 +219,17 @@ spec:
 All services must expose:
 
 ```typescript
-// app/api/health/live/route.ts
+// app/health/live/route.ts (matches Runbook §5.3, DO App Platform config)
 export async function GET() {
   // basic liveness - is the process running?
   return Response.json({ status: 'ok', timestamp: new Date().toISOString() });
 }
 
-// app/api/health/ready/route.ts
+// app/health/ready/route.ts (matches Runbook §5.3, DO App Platform config)
 export async function GET() {
   const checks: HealthCheck[] = [
     { name: 'database', check: checkDatabase },
     { name: 'redis', check: checkRedis },
-    { name: 'nats', check: checkNats },
   ];
 
   const results = await Promise.all(
@@ -277,47 +265,29 @@ const checkRedis = async (): Promise<void> => {
   await redis.ping();
 };
 
-const checkNats = async (): Promise<void> => {
-  if (!natsConnection.isConnected()) {
-    throw new Error('NATS not connected');
-  }
-};
 ```
 
-### 4.3 Kubernetes Probes
+### 4.3 DO App Platform Health Checks
+
+> **Note**: Production uses DigitalOcean App Platform (not Kubernetes). See Runbook §3.3 for the full app spec.
 
 ```yaml
-# deployment.yaml
-spec:
-  containers:
-    - name: app
-      livenessProbe:
-        httpGet:
-          path: /api/health/live
-          port: 3000
-        initialDelaySeconds: 10
-        periodSeconds: 10
-        timeoutSeconds: 5
-        failureThreshold: 3
-
-      readinessProbe:
-        httpGet:
-          path: /api/health/ready
-          port: 3000
-        initialDelaySeconds: 5
-        periodSeconds: 5
-        timeoutSeconds: 3
-        failureThreshold: 3
-
-      startupProbe:
-        httpGet:
-          path: /api/health/live
-          port: 3000
-        initialDelaySeconds: 0
-        periodSeconds: 5
-        timeoutSeconds: 3
-        failureThreshold: 30  # 30 * 5s = 150s max startup
+# .do/app.yaml (excerpt)
+services:
+  - name: api
+    health_check:
+      http_path: /health/live
+      initial_delay_seconds: 10
+      period_seconds: 10
 ```
+
+Health check paths are standardized across all documents:
+
+| Endpoint | Path | Purpose |
+|----------|------|---------|
+| Liveness | `/health/live` | Is the process running? |
+| Readiness | `/health/ready` | Can the service accept traffic? |
+| Startup | `/health/startup` | Has initialization completed? |
 
 ---
 
@@ -464,12 +434,13 @@ export const serviceUrls = {
 };
 ```
 
-### 7.2 DNS-based Discovery (Kubernetes)
+### 7.2 DO App Platform Service Discovery
 
 ```yaml
-# services communicate via Kubernetes DNS
-# service-name.namespace.svc.cluster.local
-CANDIDATE_SERVICE_URL=http://candidate-service.aptivo.svc.cluster.local:3000
+# DO App Platform injects internal URLs as environment variables
+# Format: ${service_name.PRIVATE_URL} in app spec → resolved at runtime
+# See Runbook §3.3 for full app spec configuration
+CANDIDATE_SERVICE_URL=${candidate-service.PRIVATE_URL}
 ```
 
 ---

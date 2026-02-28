@@ -623,10 +623,6 @@ export const env = createEnv({
 
     REDIS_URL: z.string().url(),
 
-    NATS_URL: z.string().url(),
-    NATS_USER: z.string().min(1),
-    NATS_PASS: z.string().min(1),
-
     AUTH_ISSUER: z.string().url(),
     AUTH_SECRET: z.string().min(32),
 
@@ -643,9 +639,6 @@ export const env = createEnv({
     DATABASE_URL: process.env.DATABASE_URL,
     DATABASE_POOL_MAX: process.env.DATABASE_POOL_MAX,
     REDIS_URL: process.env.REDIS_URL,
-    NATS_URL: process.env.NATS_URL,
-    NATS_USER: process.env.NATS_USER,
-    NATS_PASS: process.env.NATS_PASS,
     AUTH_ISSUER: process.env.AUTH_ISSUER,
     AUTH_SECRET: process.env.AUTH_SECRET,
     OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
@@ -735,7 +728,7 @@ export const initTracing = () => {
     instrumentations: [
       getNodeAutoInstrumentations({
         '@opentelemetry/instrumentation-http': {
-          ignoreIncomingPaths: ['/api/health', '/api/metrics'],
+          ignoreIncomingPaths: ['/health/live', '/health/ready', '/metrics'],
         },
         '@opentelemetry/instrumentation-pg': { enabled: true },
         '@opentelemetry/instrumentation-redis': { enabled: true },

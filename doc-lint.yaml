@@ -1,0 +1,95 @@
+version: "1.0"
+project:
+  name: aptivo-final-v2
+  classification: standard
+documents:
+  required:
+    - role: brd
+      path: docs/01-strategy/platform-core-brd.md
+    - role: frd
+      path: docs/02-requirements/platform-core-frd.md
+    - role: add
+      path: docs/03-architecture/platform-core-add.md
+  optional:
+    - role: runbook
+      path: docs/06-operations/01-runbook.md
+    - role: tsd
+      path: docs/04-specs/index.md
+    - role: api_spec
+      path: docs/04-specs/openapi/aptivo-core-v1.yaml
+    - role: guideline
+      path: docs/05-guidelines/05a-Coding-Guidelines.md
+
+signals:
+  declared:
+    - ai-provider
+    - alerting
+    - api-keys
+    - api-versioning
+    - approval-gates
+    - async-workflows
+    - audit
+    - authentication
+    - authorization
+    - auto-scaling
+    - availability
+    - backward-compatibility
+    - caching
+    - certificates
+    - ci-cd
+    - compliance
+    - containerization
+    - cost-management
+    - credentials
+    - data-retention
+    - database
+    - database-migration
+    - deployment
+    - durable-execution
+    - encryption
+    - enterprise
+    - error-handling
+    - event-driven
+    - external-api
+    - external-dependency
+    - fault-tolerance
+    - feature-flags
+    - file-upload
+    - gdpr
+    - human-in-loop
+    - inbound-events
+    - integration
+    - jwt
+    - kubernetes
+    - limits
+    - logging
+    - long-running
+    - message-queue
+    - microservices
+    - monitoring
+    - multi-component
+    - multi-tenant
+    - oauth
+    - observability
+    - orchestration
+    - performance
+    - pii
+    - privacy
+    - rate-limiting
+    - rbac
+    - requirements-tracing
+    - resilience
+    - resilience-triad
+    - rest-api
+    - retry-policy
+    - scalability
+    - secrets
+    - security
+    - sla
+    - sso
+    - testing
+    - third-party
+    - user-data
+    - validation
+    - webhooks
+    - workflow-approval

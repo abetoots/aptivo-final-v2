@@ -70,8 +70,8 @@ This document defines the observability strategy for Aptivo. It establishes stan
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Application Layer                               │
 ├─────────────┬─────────────┬─────────────┬─────────────┬─────────────────────┤
-│   Traefik   │  Next.js    │  Next.js    │    NATS     │    PostgreSQL       │
-│  (Gateway)  │  (App 1)    │  (App N)    │ (Messaging) │    (Database)       │
+│   Traefik   │  Next.js    │  Next.js    │  Inngest    │    PostgreSQL       │
+│  (Gateway)  │  (App 1)    │  (App N)    │ (Workflows) │    (Database)       │
 └──────┬──────┴──────┬──────┴──────┬──────┴──────┬──────┴──────────┬──────────┘
        │             │             │             │                  │
        │ traces      │ traces      │ traces      │ traces           │ metrics
@@ -404,41 +404,34 @@ tracing:
 
 > **SECURITY WARNING**: Never capture `Authorization`, `Cookie`, or other sensitive headers in traces. This leaks credentials to the observability backend.
 
-### 4.5 NATS Messaging Tracing
+### 4.5 Inngest Workflow Tracing
 
-Use auto-instrumentation for NATS when available, or wrap with context propagation:
+Inngest provides built-in observability for workflow function runs. Augment with OTel context propagation for end-to-end traces:
 
 ```typescript
-// lib/observability/nats-tracing.ts
-import {
-  context,
-  propagation,
-  trace,
-  SpanKind,
-  SpanStatusCode,
-} from "@opentelemetry/api";
-import type { NatsConnection, Msg, MsgHdrs } from "nats";
+// lib/observability/inngest-tracing.ts
+import { trace, SpanKind, SpanStatusCode } from "@opentelemetry/api";
 
-const tracer = trace.getTracer("nats");
+const tracer = trace.getTracer("inngest");
 
-export function createTracedPublish(nats: NatsConnection) {
-  return async (subject: string, data: unknown, headers?: MsgHdrs) => {
-    return tracer.startActiveSpan(
-      `NATS SEND ${subject}`,
-      {
-        kind: SpanKind.PRODUCER,
-        attributes: {
-          "messaging.system": "nats",
-          "messaging.destination": subject,
-        },
-      },
+/**
+ * Wrap an Inngest step.run() callback with OTel span context.
+ * Inngest Cloud dashboard provides native function-level observability;
+ * this bridges Inngest spans into your distributed trace.
+ */
+export function tracedStep<T>(
+  stepName: string,
+  fn: () => Promise<T>,
+): () => Promise<T> {
+  return () =>
+    tracer.startActiveSpan(
+      `inngest.step ${stepName}`,
+      { kind: SpanKind.INTERNAL },
       async (span) => {
-        const hdrs = headers ?? nats.headers();
-        propagation.inject(context.active(), hdrs);
-
         try {
-          nats.publish(subject, JSON.stringify(data), { headers: hdrs });
+          const result = await fn();
           span.setStatus({ code: SpanStatusCode.OK });
+          return result;
         } catch (error) {
           span.recordException(error as Error);
           span.setStatus({ code: SpanStatusCode.ERROR });
@@ -448,39 +441,6 @@ export function createTracedPublish(nats: NatsConnection) {
         }
       },
     );
-  };
-}
-
-export function wrapMessageHandler(
-  subject: string,
-  handler: (msg: Msg) => Promise<void>,
-): (err: Error | null, msg: Msg) => void {
-  return async (err, msg) => {
-    if (err) return;
-
-    const parentContext = propagation.extract(context.active(), msg.headers);
-
-    await context.with(parentContext, async () => {
-      const span = tracer.startSpan(`NATS RECEIVE ${subject}`, {
-        kind: SpanKind.CONSUMER,
-        attributes: {
-          "messaging.system": "nats",
-          "messaging.destination": subject,
-        },
-      });
-
-      try {
-        await handler(msg);
-        span.setStatus({ code: SpanStatusCode.OK });
-      } catch (error) {
-        span.recordException(error as Error);
-        span.setStatus({ code: SpanStatusCode.ERROR });
-        throw error;
-      } finally {
-        span.end();
-      }
-    });
-  };
 }
 ```
 
@@ -819,7 +779,7 @@ service:
 | **Service Overview** | Health at a glance | Request rate, error rate, P95 latency       |
 | **API Performance**  | Endpoint analysis  | Latency by route, status code distribution  |
 | **Database**         | PostgreSQL health  | Connections, query latency, replication lag |
-| **NATS Messaging**   | Message flow       | Publish/subscribe rates, consumer lag       |
+| **Inngest Workflows** | Workflow health    | Function run rate, step latency, failure rate |
 | **Business Metrics** | Domain KPIs        | Candidates created, workflows completed     |
 | **Risk Monitoring**  | Change Management  | Risk dashboard links, validation queries    |
 
@@ -1160,7 +1120,7 @@ export async function writeAuditEvent(
 1. Verify trace headers propagate: `curl -v http://service/endpoint | grep traceparent`
 2. Check collector is receiving: `kubectl logs -l app=otel-collector`
 3. Ensure service names match in configuration
-4. Verify NATS messages include trace headers
+4. Verify Inngest function spans propagate trace context
 
 **Problem:** Logs not correlating with traces
 **Solution:** Verify Pino mixin is injecting trace context:

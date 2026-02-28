@@ -34,7 +34,7 @@ This specification defines the monorepo structure, build tooling, and package bo
 | Multiple services (worker, CLI) | ADD Section 3.2, 10.1 | Separate apps in monorepo |
 | Modular ecosystem | BRD Section 2.1.1 | Package-based architecture |
 | SaaS commercialization path | BRD Section 2.1.1 | Shared packages enable white-labeling |
-| Event-driven decoupling | ADD Section 2.1 | Dedicated worker app for NATS consumers |
+| Event-driven decoupling | ADD Section 2.1 | Inngest event system; dedicated worker app deferred to Phase 2+ |
 
 ---
 
@@ -82,7 +82,7 @@ This specification defines the monorepo structure, build tooling, and package bo
 | **UI Library** | React | 19.x | Concurrent features, use() hook |
 | **Runtime** | Node.js | 24.x LTS | ES2024+ features |
 | **Language** | TypeScript | 5.9.x | Strict mode, isolatedDeclarations |
-| **Database** | PostgreSQL | 18.x | JSON, full-text search |
+| **Database** | PostgreSQL | 16.x | JSON, full-text search |
 | **Styling** | TailwindCSS | 4.x | CSS-first configuration |
 | **Validation** | Zod | 4.x | Runtime schema validation |
 | **Testing** | Vitest | 4.x | ESM-native, workspace support |
@@ -119,7 +119,7 @@ aptivo/
 │   │   ├── public/
 │   │   └── package.json
 │   │
-│   ├── worker/                  # NATS consumers, Sagas, Scheduler [Phase 2+]
+│   ├── worker/                  # Async consumers, Sagas, Scheduler [Phase 2+]
 │   │   ├── src/
 │   │   │   ├── consumers/       # Event handlers
 │   │   │   ├── sagas/           # Long-running workflows
@@ -149,9 +149,9 @@ aptivo/
 │   │   │   └── index.ts
 │   │   └── package.json
 │   │
-│   ├── events/                  # NATS client, topic enums [Phase 2+]
+│   ├── events/                  # Event schemas, topic enums [Phase 2+]
 │   │   ├── src/
-│   │   │   ├── client.ts        # JetStream connection factory
+│   │   │   ├── client.ts        # Event bus connection factory
 │   │   │   ├── topics.ts        # Topic name constants
 │   │   │   └── schemas/         # Zod schemas for event payloads
 │   │   └── package.json
@@ -400,7 +400,7 @@ module.exports = {
 | **Memory** | Shared heap | Dedicated resources |
 | **Deployment** | Coupled releases | Independent releases |
 
-**Decision:** NATS consumers run in `apps/worker`, not embedded in Next.js.
+**Decision:** Async consumers run in `apps/worker`, not embedded in Next.js. Phase 1 uses Inngest for event-driven workflows; dedicated worker app deferred to Phase 2+.
 
 ### 7.2 Worker Responsibilities
 
@@ -543,7 +543,7 @@ pnpm add @aptivo/new-package --filter=@aptivo/web --workspace
 
 | Task | Status | Deliverables |
 |------|--------|--------------|
-| Create `@aptivo/events` | 🔲 Pending | NATS client, topic schemas |
+| Create `@aptivo/events` | 🔲 Pending | Event bus client, topic schemas (transport TBD — evaluate NATS vs Inngest native events) |
 | Create `apps/worker` | 🔲 Pending | Consumer infrastructure |
 | Implement Candidate events | 🔲 Pending | Status change handlers |
 

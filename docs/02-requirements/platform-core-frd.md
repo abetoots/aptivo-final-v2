@@ -396,9 +396,10 @@ The core architecture follows the **Durable Execution** pattern, ensuring that l
 - No passwords are stored in the database
 - Account recovery is supported without storing passwords
 - Authentication events are auditable
-- Support for SSO via standard protocols (OIDC-compliant)
 - Multi-Factor Authentication (MFA) enforced for users with elevated permissions
-- Integration with centralized Identity Provider for enterprise deployments
+- **Phase 1**: Magic links + social login (Google/GitHub OAuth) via Supabase Auth free tier
+- **Phase 2+**: SSO via standard protocols (OIDC/SAML) for enterprise deployments (requires Supabase Pro tier or equivalent)
+- **Phase 2+**: Integration with centralized Identity Provider for enterprise deployments
 
 ### FR-CORE-ID-002: Role-Based Access Control (RBAC)
 

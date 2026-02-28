@@ -123,7 +123,7 @@ docs/04-specs/
 | **Frontend** | TailwindCSS | 4.x | CSS-first configuration |
 | **Backend Runtime** | Node.js | 24.x LTS | ES2024+ features |
 | **Language** | TypeScript | 5.9.x | Strict mode, isolatedDeclarations |
-| **Database** | PostgreSQL | 18.x | Primary data store |
+| **Database** | PostgreSQL | 16.x | Primary data store |
 | **ORM** | Drizzle ORM | Latest | Type-safe queries |
 | **Validation** | Zod | 4.x | Runtime schema validation |
 | **Testing** | Vitest | 4.x | Unit/integration tests |
@@ -137,8 +137,7 @@ docs/04-specs/
 |------------|-------------------------|---------|-------|
 | **Caching** | Redis | 7.x | Session, query cache |
 | **Object Storage** | MinIO (S3-compatible) | Latest | Document/media storage |
-| **API Gateway** | Traefik | 3.x | Edge routing, TLS termination |
-| **Messaging** | NATS JetStream | 2.x | Async event bus |
+| **API Gateway** | Traefik | 3.x | Local development routing; production uses DO App Platform managed LB |
 | **Containerization** | Podman/Docker | Latest | OCI-compliant |
 | **CI/CD** | GitHub Actions | - | Automated pipelines |
 
@@ -174,7 +173,7 @@ docs/04-specs/
 | **Explicit Dependencies** | Dependency injection via interfaces |
 | **Functional Core** | Pure business logic, effects at boundaries |
 | **Result Types** | Explicit error handling, no thrown exceptions in domain |
-| **Event-Driven** | Async communication via NATS JetStream |
+| **Event-Driven** | Async communication via Inngest event system |
 
 ### 4.2 Error Handling Philosophy
 
@@ -342,5 +341,5 @@ When new functional code interfaces with legacy code, use adapter functions to t
 - **Added:** Missing Phase 1 modules (Workflow Automation, IAM, File Storage)
 - **Moved:** Financial module implementation → interface contracts only
 - **Fixed:** Database schema conventions (UUID/ULID PKs, normalized relations)
-- **Fixed:** NATS configuration (removed deprecated STAN cluster ID)
+- **Removed:** NATS JetStream from Phase 1 (redundant with Inngest; deferred to Phase 2+ if needed)
 - **Incorporated:** Migration queue items (JSON schemas, saga patterns)

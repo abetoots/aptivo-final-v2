@@ -37,7 +37,7 @@ Per BRD v2.0.0: **Automate 60% of routine HR administrative tasks within 12 mont
 
 > **⚠️ Strategic Note:** Per BRD v2.0.0, Workflow Automation is classified as **Core Domain (Custom Build)**.
 > This specification defines a custom Workflow Engine that owns business logic while leveraging
-> NATS JetStream for event-driven execution. This approach balances the BRD mandate for
+> Inngest for durable, event-driven workflow execution. This approach balances the BRD mandate for
 > custom capability with engineering pragmatism.
 
 ### 2.1 Component Architecture
@@ -54,7 +54,7 @@ Per BRD v2.0.0: **Automate 60% of routine HR administrative tasks within 12 mont
 │        │ CRUD definitions  │ Event subscription    │ Step execution │
 │        ▼                   ▼                       ▼                │
 │  ┌──────────────────────────────────────────────────────────────┐  │
-│  │                    PostgreSQL + NATS JetStream                │  │
+│  │                    PostgreSQL + Inngest (Durable Execution)   │  │
 │  └──────────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────────┘
 ```

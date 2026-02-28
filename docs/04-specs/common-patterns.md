@@ -193,9 +193,12 @@ const ERROR_TYPES = {
 
 ---
 
-## 5. Event Bus Patterns (NATS JetStream)
+## 5. Event Patterns
 
-### 5.1 Subject Naming Convention
+> **Phase 1:** Inngest handles all event-driven workflow orchestration. The event envelope and naming conventions below are transport-agnostic and apply regardless of the underlying event system.
+> **Phase 2+:** If inter-service pub/sub beyond Inngest is needed, evaluate NATS JetStream or similar.
+
+### 5.1 Event Naming Convention
 
 All events follow the pattern: `{domain}.{entity}.{action}`
 
@@ -208,35 +211,7 @@ aptivo.workflow.triggered
 aptivo.workflow.step-completed
 ```
 
-### 5.2 JetStream Configuration
-
-```typescript
-// stream configuration for domain events
-const STREAMS = {
-  APTIVO_EVENTS: {
-    name: 'APTIVO_EVENTS',
-    subjects: ['aptivo.>'],
-    retention: 'limits' as const,
-    maxAge: 7 * 24 * 60 * 60 * 1_000_000_000, // 7 days in nanoseconds
-    maxBytes: 1024 * 1024 * 1024, // 1GB
-    storage: 'file' as const,
-    replicas: 3,
-    duplicates: 60_000_000_000, // 60 second dedup window
-  },
-};
-
-// consumer configuration for services
-const createConsumerConfig = (serviceName: string, filterSubject: string) => ({
-  durable_name: `${serviceName}-consumer`,
-  filter_subject: filterSubject,
-  ack_policy: 'explicit' as const,
-  ack_wait: 30_000_000_000, // 30 seconds
-  max_deliver: 5,
-  deliver_policy: 'all' as const,
-});
-```
-
-### 5.3 Event Schemas (JSON Schema)
+### 5.2 Event Schemas
 
 All events must include a standard envelope:
 

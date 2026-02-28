@@ -22,7 +22,7 @@ This document serves as a quick reference checklist for implementing observabili
 
 | Pillar | Required | Tool | Verification |
 |--------|----------|------|--------------|
-| **Logs** | ✅ | Pino → Loki | `curl -s localhost:3000/api/health \| jq .` shows JSON |
+| **Logs** | ✅ | Pino → Loki | `curl -s localhost:3000/health/live \| jq .` shows JSON |
 | **Metrics** | ✅ | prom-client → Prometheus | `curl localhost:3000/metrics` returns metrics |
 | **Traces** | ✅ | OTel SDK → Jaeger | Jaeger UI shows service spans |
 | **Errors** | ✅ | Sentry | Sentry dashboard shows errors |
@@ -92,7 +92,7 @@ interface RequiredLogFields {
 - [ ] Enable auto-instrumentations (HTTP, pg, Redis)
 - [ ] Ignore health/metrics endpoints in HTTP instrumentation
 - [ ] Wrap `ReaderResult` operations with `traceReaderResult`
-- [ ] Propagate context in NATS messages
+- [ ] Propagate context in Inngest function steps
 
 ### 4.2 Sampling Policy
 

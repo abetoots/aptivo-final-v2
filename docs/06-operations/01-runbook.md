@@ -60,11 +60,14 @@ This guide covers the operational lifecycle of all modules and shared services. 
 
 The system uses a container-based deployment model with progressive delivery:
 
-| Component            | Strategy                           | Rollback Time |
-| -------------------- | ---------------------------------- | ------------- |
-| Application Services | Blue-Green / Canary                | < 5 minutes   |
-| Database Migrations  | Forward-only with rollback scripts | < 15 minutes  |
-| Feature Releases     | Feature flags (instant toggle)     | Immediate     |
+| Component            | Strategy                                          | Rollback Time |
+| -------------------- | ------------------------------------------------- | ------------- |
+| Application Services | Rolling deploy with instant rollback (DO App Platform) | < 5 minutes   |
+| Database Migrations  | Forward-only with rollback scripts                | < 15 minutes  |
+| Feature Releases     | Feature flags (instant toggle)                    | Immediate     |
+| Gradual Rollout      | Feature flag percentage ramp (canary substitute)  | Immediate     |
+
+> **Note**: DigitalOcean App Platform does not support native percentage-based canary traffic splitting (that requires Kubernetes + service mesh). Gradual rollout is achieved via feature flags (Section 2.4) which provide equivalent risk mitigation with finer control.
 
 ### 2.2 Environments (Trunk-Based Development)
 
@@ -206,8 +209,9 @@ aptivo-cli feature status user-dashboard-v2
 | **PostgreSQL**     | Basic ($15/mo)| Vertical          | DO Managed Database                   |
 | **Redis**          | Basic ($15/mo)| Single node       | DO Managed Redis                      |
 | **Spaces**         | $5/mo + usage | N/A               | S3-compatible object storage          |
+| **ClamAV**         | ~$6/mo        | Single container  | Malware scanning (see ADD §9.8.2); runs as DO App Platform worker or external Docker service |
 
-**Cost Estimate**: ~$50-100/mo for staging + production (vs. $200-400/mo for managed K8s)
+**Cost Estimate**: ~$55-110/mo for staging + production (vs. $200-400/mo for managed K8s)
 
 ### 3.3 App Platform Configuration
 
@@ -289,7 +293,6 @@ export const env = createEnv({
     DATABASE_URL: z.string().url(),
     DATABASE_POOL_MAX: z.coerce.number().int().min(1).max(100).default(20),
     REDIS_URL: z.string().url(),
-    NATS_URL: z.string().url(),
     AUTH_ISSUER: z.string().url(),
     AUTH_SECRET: z.string().min(32),
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url(),
@@ -367,7 +370,7 @@ All services emit telemetry via OpenTelemetry SDK with direct OTLP export (App P
 | **CPU Utilization**          | Prometheus      | > 80% for 10 min   | Slack #ops-alerts | DevOps Team     |
 | **Memory Utilization**       | Prometheus      | > 85% for 10 min   | PagerDuty P2      | On-Call SRE     |
 | **Database Connections**     | Prometheus      | > 80% of max       | PagerDuty P2      | On-Call SRE     |
-| **Database Replication Lag** | Prometheus      | > 30 seconds       | PagerDuty P1      | On-Call SRE     |
+| **Database Replication Lag** | Prometheus      | > 30 seconds       | PagerDuty P1      | On-Call SRE (Phase 2+: HA-tier only) |
 | **Health Check Failures**    | App Platform    | Container unhealthy 3x | PagerDuty P1  | On-Call SRE     |
 | **Application Errors**       | Sentry/OTel     | New error type     | Slack #ops-errors | On-Call Support |
 | **Feature Flag Errors**      | Custom metric   | Any toggle failure | Slack #ops-alerts | DevOps Team     |
@@ -389,7 +392,6 @@ interface HealthResponse {
   checks: {
     database: "up" | "down";
     redis: "up" | "down";
-    nats: "up" | "down";
   };
   version: string;
   uptime: number;
@@ -718,57 +720,158 @@ Alert Received
 
 **Immediate Actions:**
 
-1. **Check managed service status** (RDS/CloudSQL dashboard)
-2. **Assess scope:** Primary failure vs replication issue
+1. **Check managed service status** (DigitalOcean Managed Databases dashboard)
+2. **Assess scope:** Primary failure vs connectivity issue
 3. **Page DBA** if not already notified
 
-**Automated Failover (if enabled):**
+**Phase 1 Recovery (Basic-tier, no replication):**
 
-- Managed database services handle automatic failover
+- DO managed database provides automated daily backups
+- Restore from latest backup if database is unrecoverable
+- Application reconnects automatically when database recovers
+
+**Phase 2+ Recovery (HA-tier, with standby):**
+
+- HA-tier managed databases handle automatic failover to standby
 - Application reconnects automatically via connection pooler
-
-**Manual Failover (if required):**
-
-1. Promote standby to primary
-2. Update connection strings (via App Platform encrypted env vars)
-3. Redeploy application to pick up new connection
 
 **Recovery Validation:**
 
 1. Verify database connectivity from all services
-2. Check replication is re-established
-3. Verify no data loss (compare transaction logs)
+2. Check replication is re-established (Phase 2+ HA-tier only)
+3. Verify no data loss (compare transaction logs / check latest backup timestamp)
 
-### 8.6 Playbook 3: Regional Disaster Recovery
+### 8.6 Playbook 3: Disaster Recovery
 
-**Trigger:** Complete regional outage or declared disaster
+> **Phase 1 Reality**: Production runs on DigitalOcean App Platform (single region, Basic-tier managed databases). Full multi-region DR with automatic failover is a Phase 2+ capability requiring HA-tier databases and multi-region infrastructure. Phase 1 relies on DO's managed database automated daily backups and App Platform's built-in container restart.
 
-**RTO Target:** < 4 hours
-**RPO Target:** < 1 hour
+**Trigger:** Complete regional outage or extended infrastructure failure
 
-**Pre-Requisites:**
+#### Phase 1: Single-Region Recovery
 
-- [ ] Secondary region infrastructure provisioned
-- [ ] Database replication to secondary region active
-- [ ] DNS failover configured (Route53/CloudFlare)
-- [ ] Runbook tested quarterly
+**RTO Target:** < 4 hours (restore from backup)
+**RPO Target:** < 24 hours (daily automated backups)
 
 **Recovery Steps:**
 
-1. **Declare disaster** - Notify management, create incident channel
-2. **Verify secondary region** - Confirm infrastructure is healthy
-3. **Promote database replica** - Make secondary region primary
-4. **Update DNS** - Point traffic to secondary region
-5. **Verify services** - Run smoke tests against secondary
-6. **Communicate** - Update status page, notify stakeholders
-7. **Monitor** - Watch for issues in new primary region
+1. **Declare incident** - Notify management, create incident channel
+2. **Assess DO status** - Check [status.digitalocean.com](https://status.digitalocean.com)
+3. **If transient** - Wait for DO platform recovery; App Platform auto-restarts containers
+4. **If extended outage** - Restore database from latest DO automated backup to new region
+5. **Redeploy app** - Create new App Platform app in alternate region using same app spec
+6. **Update DNS** - Point traffic to new deployment (via CloudFlare or registrar)
+7. **Verify services** - Run smoke tests
+8. **Communicate** - Update status page, notify stakeholders
 
-**Failback Process (after primary recovery):**
+#### Phase 2+: Multi-Region DR (Future)
 
-1. Re-establish replication from new primary to original region
-2. Plan maintenance window for failback
-3. Execute reverse of recovery steps
-4. Update runbook with lessons learned
+**Prerequisites (not yet met):**
+
+- [ ] HA-tier managed databases with standby nodes and replication
+- [ ] Secondary region infrastructure provisioned
+- [ ] Cross-region database replication active
+- [ ] DNS failover configured (CloudFlare)
+- [ ] Runbook tested quarterly
+
+### 8.7 Playbook 4: Redis Outage
+
+**Trigger:** Redis unreachable alert, BullMQ job processing stalled, or idempotency check failures detected
+
+**Severity Classification:**
+- Redis down + MCP tool calls active → **SEV-2** (data integrity risk from duplicate side-effecting calls)
+- Redis down + no active MCP calls → **SEV-3** (feature degradation, no data risk)
+
+**Immediate Actions (< 5 minutes):**
+
+1. **Check managed Redis status** (DigitalOcean Managed Redis dashboard or `redis-cli ping`)
+2. **Assess scope:** Complete failure vs connectivity issue vs OOM
+3. **Activate per-consumer degradation policies** (documented in ADD §2.3.2 Redis):
+   - MCP idempotency: **fail-closed** — reject new tool calls to prevent duplicate financial operations
+   - Rate limiting: **fail-open** — allow requests without rate limiting
+   - Webhook deduplication: **fail-open** — process webhooks (handlers are idempotent)
+   - Session cache: **fail-open** — fall back to database session lookup
+4. **If OOM:** Check `redis-cli info memory` for eviction pressure; identify largest key namespace (`idem:*`, `rl:*`, `dedup:*`, `sess:*`)
+
+**Recovery:**
+
+1. If Redis restarts: verify connectivity from all consumers, check BullMQ job queue drains
+2. If unrecoverable: provision new Redis instance, update connection strings, restart application
+3. BullMQ jobs that were in-flight during outage: verify idempotency keys prevent duplicate processing
+
+**Recovery Validation:**
+
+1. `redis-cli ping` returns PONG from application network
+2. BullMQ dashboard shows jobs processing
+3. MCP idempotency checks passing (check application logs for `idempotency-cache-miss` events)
+4. No duplicate webhook processing detected
+
+### 8.8 Playbook 5: External SaaS Outage (Inngest / Novu / Supabase)
+
+**Trigger:** Health check failures for external dependencies, or user reports of authentication/workflow/notification failures
+
+#### Inngest Cloud Outage
+
+**Severity:** SEV-1 (all workflows halt)
+
+**Blast Radius:** All active workflows pause; new workflows cannot trigger; HITL correlations stop; scheduled timers do not fire.
+
+**Immediate Actions:**
+
+1. Check [status.inngest.com](https://status.inngest.com) for known incidents
+2. Verify via application logs (`inngest.connection.error` or step execution failures)
+3. **Communicate:** Post to #ops channel — "Workflow processing paused due to Inngest outage. No data loss — workflows will resume from last checkpoint on recovery."
+4. If extended (> 1 hour): evaluate self-hosted Inngest deployment as DR option (see ADD §3.1 self-hosting link)
+
+**Recovery:** Workflows resume automatically from last successful step (Inngest durable state). Verify: check Inngest dashboard for resumed function runs, confirm HITL events being correlated.
+
+#### Supabase Auth Outage
+
+**Severity:** SEV-1 (all authenticated operations fail)
+
+**Blast Radius:** All authenticated API endpoints return 401/503. New logins impossible. HITL approvals via authenticated endpoints blocked.
+
+**Immediate Actions:**
+
+1. Check [status.supabase.com](https://status.supabase.com) for known incidents
+2. Verify JWKS cache status — if cached keys are fresh (< 1h), existing sessions continue working
+3. **If JWKS cache stale:** Extend stale-if-error window to 24h in application config to allow existing sessions
+4. **Communicate:** Post to #ops channel with user impact assessment
+5. HITL approval tokens (self-contained signed JWTs) can be validated locally — confirm HITL link-based approvals still work
+
+**Recovery:** Verify login flow works end-to-end. Verify JWKS refresh succeeds. Monitor for elevated 401 rates.
+
+#### Novu Outage
+
+**Severity:** SEV-3 (notification delivery degraded; core platform unaffected)
+
+**Blast Radius:** HITL approval notifications not delivered — approvers unaware of pending decisions. Workflows with HITL gates will eventually timeout at TTL.
+
+**Immediate Actions:**
+
+1. Check Novu status page for known incidents
+2. Monitor HITL pending approval count — if growing, manually notify approvers via alternative channels (Slack, direct message)
+3. **No platform action required** — core operations continue; HITL workflows fall back to TTL timeout path
+
+**Recovery:** Verify notification delivery resumes. Check for queued notifications being delivered (potential burst). Monitor for duplicate notifications.
+
+### 8.9 Component Criticality & Recovery Priority
+
+During multi-component incidents, recover in this order:
+
+| Priority | Component | Rationale |
+|----------|-----------|-----------|
+| 1 | DigitalOcean App Platform | Infrastructure — nothing works without it |
+| 2 | PostgreSQL Database | All components depend on it |
+| 3 | Identity Service (Supabase Auth) | Gates all authenticated operations |
+| 4 | Redis Cache | Idempotency and rate limiting (data integrity) |
+| 5 | Workflow Engine (Inngest) | Core business process execution |
+| 6 | HITL Gateway | Approval-gated business processes |
+| 7 | Audit Service | Compliance logging |
+| 8 | MCP Integration Layer | External tool access |
+| 9 | LLM Gateway | AI-powered workflow steps |
+| 10 | Notification Bus (Novu) | Alert delivery |
+| 11 | File Storage | Document management |
+| 12 | BullMQ | Queued job processing |
 
 ---
 

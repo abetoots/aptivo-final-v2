@@ -299,7 +299,7 @@ Defined in respective domain addendums:
 | Identity Service | Integrate | Passwordless auth via industry standards |
 | Database | Buy | Managed relational database service |
 | Cache | Buy | Managed in-memory cache service |
-| Message Queue | Buy | Managed message queue service |
+| Message Queue | Buy (Phase 2+) | Deferred — Phase 1 uses Inngest event system for async communication |
 
 *Build using established libraries/frameworks (specified in ADD/TSD), not from scratch.
 
@@ -313,7 +313,7 @@ Defined in respective domain addendums:
 |------|--------|------------|------------|
 | Over-abstraction | High | Medium | Keep core simple; domain-specific features stay in domains |
 | Performance bottleneck | High | Low | Design for async; test under load early |
-| Single point of failure | High | Low | Stateless services; database replication |
+| Single point of failure | High | Low | Stateless services; managed database with automated backups (Phase 1); HA-tier database with replication (Phase 2+) |
 | Scope creep | Medium | High | Strict Core vs Domain boundary; reject domain features in core |
 
 ### 7.2 Cross-Domain Risks
