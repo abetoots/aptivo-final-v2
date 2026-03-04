@@ -36,7 +36,7 @@ This document defines the observability strategy for Aptivo. It establishes stan
 - **[specs/observability.md](../04-specs/observability.md)** - Implementation checklist (quick reference)
 - **Coding Guidelines v3.0.0** - Section 6: Observability integration, ReaderResult wrapper
 - **Testing Strategies v2.0.0** - Performance testing with P95 < 500ms targets
-- **Deployment Operations v2.0.0** - Metrics/alerts table, health checks, OTel sidecars
+- **Deployment Operations v2.0.0** - Metrics/alerts table, health checks, OTel companion workers
 - **Change Management v2.0.0** - Risk monitoring dashboards, validation queries
 
 ---
@@ -70,7 +70,7 @@ This document defines the observability strategy for Aptivo. It establishes stan
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                              Application Layer                               │
 ├─────────────┬─────────────┬─────────────┬─────────────┬─────────────────────┤
-│   Traefik   │  Next.js    │  Next.js    │  Inngest    │    PostgreSQL       │
+│ DO Router   │  Next.js    │  Next.js    │  Inngest    │    PostgreSQL       │
 │  (Gateway)  │  (App 1)    │  (App N)    │ (Workflows) │    (Database)       │
 └──────┬──────┴──────┬──────┴──────┬──────┴──────┬──────┴──────────┬──────────┘
        │             │             │             │                  │
@@ -79,7 +79,7 @@ This document defines the observability strategy for Aptivo. It establishes stan
        │             │ logs        │ logs        │                  │
        ▼             ▼             ▼             ▼                  ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        OTel Collector (Sidecar per Pod)                      │
+│                  OTel Collector (Companion Worker per Service)                │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐                          │
 │  │  Receivers  │─▶│ Processors  │─▶│  Exporters  │                          │
 │  │ OTLP, Prom  │  │ Batch, Attr │  │ Prom, Jaeger│                          │
@@ -102,32 +102,37 @@ This document defines the observability strategy for Aptivo. It establishes stan
                           └───────────────────┘
 ```
 
-### 2.3 Sidecar Pattern
+### 2.3 Companion Worker Pattern
 
-Per **Deployment Operations v2.0.0**, each application pod includes an OTel Collector sidecar:
+> **Note**: The platform deploys on DO App Platform, not Kubernetes. References to K8s-specific concepts (sidecars, pods, namespaces) should be interpreted as their DO App Platform equivalents (separate services, containers, components).
+
+Per **Deployment Operations v2.0.0**, each application service is paired with an OTel Collector companion worker:
 
 ```yaml
-# k8s/deployment.yaml (excerpt)
-spec:
-  template:
-    spec:
-      containers:
-        - name: app
-          image: registry.aptivo.com/app:${VERSION}
-          # ... app config
-        - name: otel-collector
-          image: otel/opentelemetry-collector-contrib:0.96.0
-          args: ["--config=/etc/otel-collector-config.yaml"]
-          volumeMounts:
-            - name: otel-config
-              mountPath: /etc/otel-collector-config.yaml
-              subPath: otel-collector-config.yaml
+# .do/app.yaml (excerpt)
+services:
+  - name: api
+    image:
+      registry_type: DOCR
+      repository: aptivo/app
+      tag: ${VERSION}
+    # ... app config
+
+  - name: otel-collector
+    image:
+      registry_type: DOCR
+      repository: otel/opentelemetry-collector-contrib
+      tag: "0.96.0"
+    internal_ports:
+      - 4317
+      - 4318
+      - 8889
 ```
 
-**Why Sidecars?**
+**Why Companion Workers?**
 
-- Lower network latency for telemetry
-- Isolation: collector failure doesn't affect other pods
+- Lower network latency for telemetry (internal networking within DO App Platform)
+- Isolation: collector failure doesn't affect other containers
 - Simplified configuration per service
 - Better resource management
 
@@ -379,27 +384,19 @@ export function traceReaderResult<D, T, E extends { _tag: string }>(
 }
 ```
 
-### 4.4 Traefik Gateway Tracing
+### 4.4 DO App Platform HTTP Route Tracing
+
+> **Note**: DO App Platform uses a managed HTTP router (not Traefik). Trace context propagation through the gateway relies on the platform's built-in support for forwarding `traceparent` and `tracestate` headers (W3C Trace Context — see §4.6). No gateway-level tracing configuration is required; traces are initiated by the application's OTel SDK on the first instrumented handler.
 
 ```yaml
-# traefik.yml (Traefik 3.x)
-tracing:
-  serviceName: "api-gateway"
-  sampleRate: 1.0 # 100% in dev/staging, reduce in production
-  addInternals: true
-
-  otlp:
-    grpc:
-      endpoint: "otel-collector:4317"
-      insecure: true
-
-  # SECURITY: only capture safe headers - NEVER capture Authorization
-  capturedRequestHeaders:
-    - X-Request-ID
-    - X-Correlation-ID
-
-  capturedResponseHeaders:
-    - X-Response-Time
+# Application-level gateway span (created by OTel HTTP instrumentation)
+# The DO managed router forwards these headers automatically:
+#   - traceparent (W3C Trace Context)
+#   - tracestate (W3C Trace Context)
+#   - X-Request-ID (DO-generated)
+#
+# SECURITY: Application instrumentation captures only safe headers.
+# Authorization headers are NEVER captured in traces.
 ```
 
 > **SECURITY WARNING**: Never capture `Authorization`, `Cookie`, or other sensitive headers in traces. This leaks credentials to the observability backend.
@@ -443,6 +440,20 @@ export function tracedStep<T>(
     );
 }
 ```
+
+### 4.6 Trace Propagation Standard
+
+**Standard**: W3C Trace Context (https://www.w3.org/TR/trace-context/)
+
+All distributed trace propagation in the Aptivo platform uses the **W3C Trace Context** standard. This applies to:
+- HTTP headers: `traceparent` and `tracestate` headers on all outbound HTTP requests
+- Internal service calls: trace context propagated via OpenTelemetry SDK
+- Async boundaries: trace context serialized into event/job metadata for cross-boundary propagation
+
+**Header format**: `traceparent: 00-<trace-id>-<parent-id>-<flags>`
+**Implementation**: OpenTelemetry JS SDK (`@opentelemetry/api`) with W3C `TraceContextPropagator` (default propagator).
+
+> **Note**: Phase 1 implements trace context for synchronous HTTP calls. Async boundary propagation (Inngest events, BullMQ jobs, Novu notifications, outbound webhooks) requires explicit trace context serialization and is tracked as implementation work (Bucket C WARNINGs S7-W24 through S7-W30).
 
 ---
 
@@ -518,31 +529,31 @@ All logs are JSON with consistent structure:
 
 ### 5.3 Log Collection with Fluent Bit
 
-Logs are collected from stdout by Fluent Bit and forwarded to Loki:
+Logs are collected from application stdout by the DO App Platform log pipeline and forwarded to Loki via Fluent Bit:
 
 ```yaml
-# k8s/fluent-bit-config.yaml
+# config/fluent-bit-config.yaml
+# DO App Platform captures stdout/stderr from each container automatically.
+# Fluent Bit processes the captured log stream for forwarding to Loki.
 [INPUT]
-    Name              tail
-    Path              /var/log/containers/*.log
-    Parser            docker
-    Tag               kube.*
+    Name              forward
+    Listen            0.0.0.0
+    Port              24224
+    Tag               app.*
     Mem_Buf_Limit     5MB
-    Skip_Long_Lines   On
 
 [FILTER]
-    Name              kubernetes
-    Match             kube.*
-    Merge_Log         On
-    Keep_Log          Off
-    K8S-Logging.Parser On
+    Name              modify
+    Match             app.*
+    Add               service ${SERVICE_NAME}
+    Add               environment ${NODE_ENV}
 
 [OUTPUT]
     Name              loki
     Match             *
-    Host              loki.monitoring.svc.cluster.local
+    Host              loki.monitoring.internal
     Port              3100
-    Labels            job=fluent-bit, namespace=$kubernetes['namespace_name'], pod=$kubernetes['pod_name']
+    Labels            job=fluent-bit, service=$service, environment=$environment
 ```
 
 ### 5.4 Log Levels & Usage
@@ -643,7 +654,13 @@ export function reportResultError<E extends { _tag: string; message: string }>(
 function sanitizeForLogging(input: unknown): unknown {
   if (typeof input !== "object" || input === null) return input;
   const sanitized = { ...input } as Record<string, unknown>;
-  const sensitiveKeys = ["password", "token", "secret", "authorization"];
+  const sensitiveKeys = [
+    // credentials
+    "password", "token", "secret", "authorization", "apiKey",
+    // PII fields (ADD §14.3.1)
+    "email", "name", "firstName", "lastName", "phone",
+    "address", "ssn", "creditCard",
+  ];
   for (const key of sensitiveKeys) {
     if (key in sanitized) sanitized[key] = "[REDACTED]";
   }
@@ -675,10 +692,10 @@ export async function POST(request: Request) {
 
 ## 7. OpenTelemetry Collector Configuration
 
-### 7.1 Sidecar Collector Config
+### 7.1 Companion Worker Collector Config
 
 ```yaml
-# config/otel-collector-sidecar.yaml
+# config/otel-collector-companion.yaml
 receivers:
   otlp:
     protocols:
@@ -732,7 +749,7 @@ processors:
 
 exporters:
   otlp/jaeger:
-    endpoint: "jaeger-collector.monitoring.svc.cluster.local:4317"
+    endpoint: "jaeger-collector.internal:4317"
     tls:
       insecure: true
 
@@ -986,15 +1003,16 @@ LOG_LEVEL=debug
 
 ```typescript
 // ensure sensitive data is never logged
+// must match ADD §14.3.1 redaction paths
 const redactPaths = [
-  "req.headers.authorization",
-  "req.headers.cookie",
-  "password",
-  "token",
-  "secret",
-  "apiKey",
-  "creditCard",
-  "ssn",
+  // credentials
+  "password", "token", "secret", "apiKey",
+  "req.headers.authorization", "req.headers.cookie",
+  // PII fields (TSD §5.2 classification)
+  "*.email", "*.name", "*.firstName", "*.lastName",
+  "*.phone", "*.address", "*.ssn", "*.creditCard",
+  // nested request context
+  "input.email", "input.name", "input.phone", "input.address",
 ];
 ```
 
@@ -1118,7 +1136,7 @@ export async function writeAuditEvent(
 **Checklist:**
 
 1. Verify trace headers propagate: `curl -v http://service/endpoint | grep traceparent`
-2. Check collector is receiving: `kubectl logs -l app=otel-collector`
+2. Check collector is receiving: `doctl apps logs <app-id> --component otel-collector`
 3. Ensure service names match in configuration
 4. Verify Inngest function spans propagate trace context
 
@@ -1168,3 +1186,4 @@ processors:
 | v1.0.1  | 2025-06-13 | Abe Caymo             | Added manual instrumentation examples                                                                                                                                                                         |
 | v2.0.0  | 2026-01-15 | Document Review Panel | Major rewrite: aligned with Prometheus/Grafana/Jaeger stack, removed security vulnerabilities, added prom-client metrics, Pino logging, ReaderResult wrapper, tail-based sampling, risk monitoring dashboards |
 | v2.0.1  | 2026-01-15 | Document Review Panel | Consolidation: Added Section 6 (Sentry Error Tracking), Section 12 (Audit Logging), updated pillars table, cross-referenced specs/observability.md checklist                                                  |
+| v2.1.0  | 2026-03-04 | Document Review Panel | Added Section 4.6 (W3C Trace Context standard declaration, S7-W28). Fixed K8s-specific references to use DO App Platform equivalents (S7-N1): replaced sidecar/pod/namespace terminology, updated deployment configs and troubleshooting commands |

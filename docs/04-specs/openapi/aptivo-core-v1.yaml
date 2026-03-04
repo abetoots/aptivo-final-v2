@@ -19,6 +19,24 @@ info:
 
     ## Idempotency
     Critical state-changing operations (HITL decisions, trades, money movement) require an `Idempotency-Key` header.
+
+    ## Global Request Limits
+    All API endpoints enforce the following limits:
+    - **Maximum request body size**: 1 MiB (1,048,576 bytes). Requests exceeding this limit receive `413 Payload Too Large`.
+    - **Maximum JSON nesting depth**: 10 levels. Requests exceeding this limit receive `400 Bad Request`.
+
+    ## Rate Limits
+    Rate limits are enforced per endpoint to ensure fair usage and platform stability:
+    - `POST /auth/magic-link`: 5 requests per minute per email
+    - `POST /api/v1/hitl/:id/approve`: 10 requests per minute per user
+    - `POST /api/v1/hitl/:id/reject`: 10 requests per minute per user
+    - `GET /api/v1/workflows`: 100 requests per minute per user
+    - `POST /api/v1/workflows`: 20 requests per minute per user
+    - `POST /api/v1/webhooks/inbound/:sourceId`: 100 requests per minute per source
+    - All other authenticated endpoints: 100 requests per minute per user
+
+    All rate-limited responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and `X-RateLimit-Reset` headers.
+    Exceeding a rate limit returns `429 Too Many Requests` with a `Retry-After` header.
   version: 1.0.0
   contact:
     name: Aptivo Platform Team
@@ -129,6 +147,8 @@ paths:
                           $ref: '#/components/schemas/HitlRequestSummary'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /api/v1/hitl/{requestId}:
     get:
@@ -148,6 +168,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '404':
           $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /api/v1/hitl/{requestId}/approve:
     post:
@@ -193,6 +215,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /api/v1/hitl/{requestId}/reject:
     post:
@@ -235,6 +259,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   /api/v1/hitl/{requestId}/request-changes:
     post:
@@ -284,6 +310,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ProblemDetails'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
 
   # ============================================================================
   # WORKFLOWS
@@ -411,6 +439,31 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+    delete:
+      tags: [Workflows]
+      summary: Delete workflow definition
+      description: |
+        Permanently deletes a workflow definition. Only allowed if no active instances exist.
+        Requires admin or user role with workflow delete permission.
+      operationId: deleteWorkflow
+      parameters:
+        - $ref: '#/components/parameters/WorkflowIdParam'
+      responses:
+        '204':
+          description: Workflow deleted successfully
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Conflict — workflow has active instances
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProblemDetails'
+
   /api/v1/workflows/{workflowId}/export:
     get:
       tags: [Workflows]
@@ -444,7 +497,26 @@ paths:
           in: query
           schema:
             type: string
-            enum: [running, completed, failed, suspended]
+            enum: [running, completed, failed, suspended, timed_out]
+          description: Filter by execution status
+        - name: createdAfter
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Filter instances created after this timestamp (ISO 8601)
+        - name: createdBefore
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Filter instances created before this timestamp (ISO 8601)
+        - name: ownerId
+          in: query
+          schema:
+            type: string
+            format: uuid
+          description: Filter by the user who triggered the workflow instance
       responses:
         '200':
           description: List of workflow instances
@@ -899,6 +971,11 @@ paths:
             format: date-time
       requestBody:
         required: true
+        description: >
+          Inbound webhook payload from external system.
+          Request body must not exceed 1 MiB (1,048,576 bytes).
+          Requests exceeding this limit are rejected with 413 Payload Too Large.
+        x-body-size-limit: 1048576
         content:
           application/json:
             schema:
@@ -1415,6 +1492,8 @@ components:
     TooManyRequests:
       description: Rate limit exceeded
       headers:
+        Retry-After:
+          $ref: '#/components/headers/Retry-After'
         X-RateLimit-Limit:
           $ref: '#/components/headers/X-RateLimit-Limit'
         X-RateLimit-Remaining:
@@ -1431,7 +1510,7 @@ components:
   # ============================================================================
   headers:
     X-RateLimit-Limit:
-      description: Maximum requests per window
+      description: Maximum requests allowed per rate limit window
       schema:
         type: integer
     X-RateLimit-Remaining:
@@ -1439,7 +1518,11 @@ components:
       schema:
         type: integer
     X-RateLimit-Reset:
-      description: Unix timestamp when rate limit resets
+      description: Unix timestamp when the rate limit window resets
+      schema:
+        type: integer
+    Retry-After:
+      description: Seconds until the rate limit resets (included in 429 responses)
       schema:
         type: integer
 
@@ -1478,6 +1561,10 @@ components:
           type: string
           description: Machine-readable error code (UPPER_SNAKE_CASE)
           example: VALIDATION_FAILED
+        traceId:
+          type: string
+          description: OpenTelemetry trace ID for correlating this error with server-side traces
+          example: "4bf92f3577b34da6a3ce929d0e0e4736"
         errors:
           type: array
           description: Field-level validation errors
@@ -1992,6 +2079,11 @@ components:
           format: date-time
           nullable: true
           description: When the download URL expires
+        checksumSha256:
+          type: string
+          nullable: true
+          description: SHA-256 hash of the export file for integrity verification (available when completed)
+          example: "a1b2c3d4e5f6..."
         error:
           type: string
           nullable: true
@@ -2138,6 +2230,41 @@ components:
           type: string
           format: date-time
       required: [id, name, url, events, active]
+
+    WebhookEventPayload:
+      type: object
+      description: |
+        Standard envelope for all outbound webhook event payloads.
+        Consumers MUST ignore unknown fields in the `data` object (forward compatibility).
+        See ADD §12.2.3 for per-event-type data schemas.
+      properties:
+        id:
+          type: string
+          description: Unique event ID (same as X-Webhook-ID header, for deduplication)
+        event:
+          type: string
+          description: Event type
+          enum:
+            - workflow.completed
+            - workflow.failed
+            - hitl.requested
+            - hitl.approved
+            - hitl.rejected
+            - entity.created
+            - entity.updated
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO 8601 event timestamp
+        workflowId:
+          type: string
+          format: uuid
+          description: Originating workflow ID
+        data:
+          type: object
+          additionalProperties: true
+          description: Event-specific payload (schema varies by event type, see ADD §12.2.3)
+      required: [id, event, timestamp, workflowId, data]
 
     WebhookCreateRequest:
       type: object

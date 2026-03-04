@@ -106,7 +106,7 @@ The Aptivo Agentic Core is a **domain-agnostic workflow automation platform** de
 - **Data retention framework**: Platform provides configurable retention with domain-specific policies:
   - Default minimum: 7 years for compliance-critical records
   - Domain override: Shorter retention permitted where regulations allow (e.g., consent withdrawal)
-  - Domain override: Longer/indefinite retention for analytics data
+  - Domain override: Longer/indefinite retention for fully anonymized, aggregated analytics data only (no PII or re-identifiable data)
 
 ---
 
@@ -139,7 +139,7 @@ These components are **shared infrastructure** that all domain applications will
 - Capture approval/rejection with optional comments
 - Enforce expiration (auto-reject stale requests)
 - Support multi-channel delivery (web, Telegram, email, mobile)
-- Maintain tamper-proof audit trail
+- Maintain tamper-evident audit trail (append-only; tamper-proofness deferred to Phase 3+)
 
 **Domain Examples**:
 - Crypto: "Approve trade: Buy 0.5 ETH at $3,000?" with AI reasoning
@@ -205,6 +205,19 @@ These components are **shared infrastructure** that all domain applications will
 
 > **Implementation Note**: Specific authentication mechanisms (WebAuthn, OAuth providers, etc.) are defined in ADD/FRD.
 
+#### 3.1.8 File Storage Service
+**Purpose**: Shared infrastructure for secure file upload, malware scanning (ClamAV), and storage management. Supports HITL file attachments and document processing workflows.
+
+**Business Capabilities**:
+- Secure file upload via presigned URLs
+- Malware scanning before storage confirmation
+- Access control inherited from linked business entities
+- File versioning for critical documents
+
+**Domain Examples**:
+- Crypto: Trade charts, analysis exports, regulatory documents
+- HR: Resumes, contracts, onboarding documents
+
 ### 3.2 Out-of-Scope (Domain-Specific)
 
 The following are **NOT** part of the platform core and must be defined in domain addendums:
@@ -247,7 +260,7 @@ Defined in respective domain addendums:
 | HITL response latency | <10s P95 | Time from request creation to delivery |
 | MCP request success rate | >99% | Successful requests / Total requests (with retries) |
 | LLM cost per workflow | Tracked | Aggregated by workflow type |
-| Audit log integrity | 100% | Zero tampering incidents |
+| Audit log completeness | >99.9% | Zero missing audit entries | Note: Tamper-proofness deferred to Phase 3+ (see ADD §10.4.2) |
 
 ### 5.2 Development Velocity Metrics
 
@@ -296,6 +309,7 @@ Defined in respective domain addendums:
 | LLM Gateway | Build* | Provider flexibility is strategic |
 | Notification Bus | Build* | Unified across domains |
 | Audit Service | Build* | Compliance requirements are specific |
+| File Storage | Build (Supabase Storage + ClamAV) | Domain-agnostic; integrated with existing Supabase infrastructure |
 | Identity Service | Integrate | Passwordless auth via industry standards |
 | Database | Buy | Managed relational database service |
 | Cache | Buy | Managed in-memory cache service |
@@ -336,7 +350,7 @@ The platform core provides these compliance capabilities to all domain applicati
 - **Data Encryption**: At rest (database) and in transit (TLS 1.3)
 - **Access Control**: RBAC with domain-specific role definitions
 - **Session Security**: Passwordless auth, configurable timeouts
-- **Secrets Management**: Centralized via Vault or equivalent
+- **Secrets Management**: Centralized via platform secret store (Phase 1: DigitalOcean App Platform encrypted environment variables; Phase 2+: Vault or equivalent). **Phase 1 Implementation**: Secrets are stored as encrypted environment variables on DigitalOcean App Platform. See ADD S8.7 for session configuration and ADD S8.8 for rotation cadences. The Runbook S4.3 contains step-by-step rotation procedures. Migration to a dedicated secrets manager (Vault, AWS Secrets Manager, etc.) is a Phase 2+ consideration, triggered by: >20 secrets, need for dynamic secret rotation, or multi-cloud deployment.
 
 ### 8.2 Domain-Specific Compliance
 

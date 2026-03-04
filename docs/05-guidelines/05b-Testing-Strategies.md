@@ -20,7 +20,7 @@ Last updated time: January 15, 2026
 
 *v2.0.0 – [January 15, 2026]*
 
-*Aligned with: Coding Guidelines v3.0.0, TSD v3.0.0, FRD v2.0.0*
+*Aligned with: Coding Guidelines v3.0.0, TSD v3.0.0, FRD v1.0.0*
 
 ---
 
@@ -42,7 +42,7 @@ This document is intended for all Developers and Quality Assurance (QA) Engineer
 ### 1.4 Related Documents
 - **Coding Guidelines v3.0.0** - Testing patterns and coverage requirements
 - **TSD v3.0.0** - Technical specifications and API contracts
-- **FRD v2.0.0** - Functional requirements with acceptance criteria
+- **FRD v1.0.0** - Functional requirements with acceptance criteria
 
 ---
 
@@ -50,10 +50,10 @@ This document is intended for all Developers and Quality Assurance (QA) Engineer
 
 | Requirement | Source | How Addressed |
 |-------------|--------|---------------|
-| Quality targets | FRD §5.2 | Coverage targets per architectural layer |
-| Acceptance testing | FRD acceptance criteria | E2E tests with Playwright |
-| Security testing | ADD §6 | Auth/authz test patterns, Zero Trust validation |
-| Performance targets | FRD §6.1 | P95 < 500ms via k6 load tests |
+| Quality targets | FRD §10.1 (Non-Functional Requirements — Performance) | Coverage targets per architectural layer |
+| Acceptance testing | FRD acceptance criteria (§3–§9) | E2E tests with Playwright |
+| Security testing | ADD §6, ADD §14 | Auth/authz test patterns, Zero Trust validation |
+| Performance targets | FRD §10 (Non-Functional Requirements) | P95 < 500ms via k6 load tests; HITL <10s P95 |
 | Result type testing | TSD §4.2 | Tagged union discrimination in assertions |
 
 ---
@@ -324,6 +324,7 @@ describe('Candidate API Routes', () => {
   - API response time and throughput testing
   - Frontend Core Web Vitals (LCP, FID, CLS)
   - Database query performance under load
+  - HITL request delivery latency: <10s P95 (BRD §5.1) — measured from workflow signal emit to notification delivery confirmation
 
 ### 3.6 Security Testing
 
@@ -1192,7 +1193,7 @@ All test cases for E2E, performance, and security testing will be documented in 
 
 ### 8.2 Requirement Traceability
 
-To ensure complete traceability from business requirements to code, all tests must be mapped back to the source requirement documents (FRD v2.0.0, TSD v3.0.0).
+To ensure complete traceability from business requirements to code, all tests must be mapped back to the source requirement documents (FRD v1.0.0, TSD v3.0.0).
 
 **Convention:** A TSDoc block precedes every test suite (`describe` block).
 
@@ -1345,6 +1346,151 @@ The following gates must pass before code can be merged:
 
 ---
 
+## **11. Error Path & Negative Testing**
+
+Every error path documented in the ADD must have a corresponding test specification. This section provides the framework for systematic error path testing.
+
+### 11.1 Error Path Test Matrix
+
+| Component | Error Path | Test Description | Expected Behavior | Priority |
+|-----------|-----------|-----------------|-------------------|----------|
+| MCP Layer | Circuit breaker open | Simulate 5 consecutive MCP server failures | CB opens; subsequent calls return `circuit_open` without hitting server | P1 |
+| MCP Layer | Retry exhaustion | Simulate all 3 retry attempts failing | Workflow step receives `ExternalServiceError`; follows error path | P1 |
+| LLM Gateway | Provider fallback | Primary provider returns 5xx | Automatic failover to secondary provider | P1 |
+| LLM Gateway | Budget exceeded | Set daily budget to $0; make LLM request | Returns `DAILY_BUDGET_EXCEEDED` error | P1 |
+| LLM Gateway | Both providers down | Both providers return 5xx | Workflow step receives `LLMError`; follows error path | P2 |
+| HITL Gateway | TTL expiry | Create HITL request with 1s TTL | Workflow auto-resumes via TIMEOUT path | P1 |
+| HITL Gateway | Duplicate approval | Submit approval twice for same request | Second returns 200 with `idempotent: true` | P1 |
+| HITL Gateway | Concurrent approval race | Submit approve and reject simultaneously | One wins (database constraint); other returns 409 | P1 |
+| Identity Service | Expired JWT | Send request with expired access token | Returns 401; client uses refresh token | P1 |
+| Identity Service | JWKS cache stale | Simulate Supabase outage after JWKS cache | Requests succeed using cached JWKS (up to 24h) | P2 |
+| Identity Service | MFA step-up required | Access sensitive operation without MFA enrollment | Returns 403 with `mfa_required` error; redirects to enrollment flow | P1 |
+| Identity Service | MFA step-up with enrolled user | Access sensitive operation with MFA enrolled, no recent verification | Prompts for MFA verification before proceeding | P1 |
+| Identity Service | MFA step-up bypass attempt | Attempt sensitive operation with expired MFA verification | Returns 403; requires re-verification (see ADD §8.6) | P1 |
+| Audit Service | Write timeout | Simulate slow audit insert (>500ms) | Caller experiences delay; audit eventually written | P2 |
+| Redis | Unavailable | Simulate Redis connection failure | Per-consumer degradation: MCP fail-closed, others fail-open | P1 |
+| PostgreSQL | Connection pool exhaustion | Exhaust all pool connections | New requests receive connection error; no crash | P2 |
+| File Storage | ClamAV down | Stop ClamAV container | Uploads succeed; files marked `scan_pending`; downloads blocked | P2 |
+| Inbound Webhooks | Invalid signature | Send webhook with wrong HMAC | Returns 401; no processing | P1 |
+| Inbound Webhooks | Duplicate delivery | Send same webhook ID twice | Second returns 200 with `deduplicated: true` | P1 |
+
+### 11.2 Error Path Testing Guidelines
+
+1. **Every documented error path needs a test**: If the ADD describes a fallback behavior, there must be a test that triggers and verifies it.
+2. **Test the transition, not just the end state**: Verify that the system transitions correctly (e.g., circuit breaker moves from closed -> open -> half-open -> closed).
+3. **Test recovery**: After triggering an error path, verify the system recovers when the fault is removed.
+4. **Use fault injection**: Prefer injecting faults at the infrastructure level (kill container, drop connections) over mocking, for integration tests.
+5. **Idempotency tests**: Every idempotent operation must be tested with duplicate inputs to verify duplicate handling.
+
+---
+
+## **12. Boundary Condition Testing**
+
+Every numeric limit, threshold, and boundary documented in the ADD and API specification must have corresponding boundary tests.
+
+### 12.1 Boundary Value Analysis Framework
+
+For each boundary `B` with limit `L`:
+- Test at `L-1` (just below limit): should succeed
+- Test at `L` (at limit): should succeed
+- Test at `L+1` (just above limit): should fail with documented error
+
+### 12.2 Boundary Test Matrix
+
+| Boundary | Limit Value | Test At Limit | Test Over Limit | Expected Error | Source |
+|----------|------------|---------------|-----------------|---------------|--------|
+| API rate limit (general) | 100 req/min | 100th request -> 200 OK | 101st request -> 429 | `TooManyRequests` | API Spec |
+| Magic link rate limit | 5 req/min | 5th request -> 200 OK | 6th request -> 429 | `TooManyRequests` | API Spec |
+| File upload size | 50 MiB (52,428,800 bytes) | 50 MiB file -> 200 OK | 50 MiB + 1 byte -> 413 | `PayloadTooLarge` | API Spec |
+| Pagination limit | 200 items | `limit=200` -> 200 items | `limit=201` -> 400 or clamped to 200 | `ValidationError` | API Spec |
+| LLM daily budget | $50/domain | $49.99 spend -> next request OK | $50.00 spend -> next request blocked | `DAILY_BUDGET_EXCEEDED` | ADD S7.2 |
+| LLM monthly budget | $500/domain | $499.99 -> OK | $500.00 -> blocked | `MONTHLY_BUDGET_EXCEEDED` | ADD S7.2 |
+| DB connection pool | 20 (or configured) | 20th connection -> OK | 21st connection -> error | Connection timeout | ADD S10 |
+| HITL TTL | Per-policy (24h-7d) | Request at TTL-1s -> pending | Request at TTL -> auto-expire | TIMEOUT path | ADD S4.1 |
+| JWKS stale-if-error | 24h | 23h59m -> cached JWKS valid | 24h01m -> JWKS expired, re-fetch required | Auth failure if Supabase down | ADD S2.3.2 |
+| Permission cache TTL | 5 min | 4m59s -> cached permission used | 5m01s -> re-fetch from DB | Slight latency increase | ADD S5.6 |
+| MCP response size | 1 MiB | 1 MiB response -> OK | 1 MiB + 1 byte -> truncated | `RESPONSE_TOO_LARGE` | ADD S5.3.1 |
+| MCP retry budget | 37s (3x10s + backoff) | Total < 120s Inngest timeout -> OK | If increased: ensure < Inngest step timeout | Step timeout | ADD S2.3.3 |
+| JSON body size | 1 MiB | 1 MiB body -> OK | >1 MiB -> 413 | `PayloadTooLarge` | API Spec |
+| JSON nesting depth | 10 levels | 10 levels -> OK | 11 levels -> 400 | `BadRequest` | API Spec |
+| Webhook dedup window | 7 days | Day 6 duplicate -> deduped | Day 8 duplicate -> processed as new | N/A (different behavior) | ADD S12.3 |
+
+### 12.3 Boundary Testing Guidelines
+
+1. **Test both sides**: Always test at-limit (should pass) AND over-limit (should fail).
+2. **Document the exact limit value**: Use the actual configured value, not an approximation.
+3. **Test limit enforcement location**: Verify where the limit is enforced (middleware, application, database) to ensure bypass is not possible.
+4. **Test limit reset**: For rate limits, verify the window resets correctly.
+5. **Test limit interaction**: Some limits interact (e.g., MCP retry budget must be less than Inngest step timeout).
+
+---
+
+## **13. Requirements Traceability Matrix (RTM)**
+
+This section maps all FR-CORE-* functional requirements (defined in the [Platform Core FRD](../../02-requirements/platform-core-frd.md)) to their corresponding test specifications. Every testable requirement must have at least one test type assigned. Test specifications reference the error path matrix (§11) and boundary matrix (§12) where applicable.
+
+### 13.1 Traceability Matrix
+
+| FR-CORE ID | Requirement | Test Type(s) | Test Specification | ADD Reference |
+|------------|-------------|--------------|-------------------|---------------|
+| FR-CORE-WFE-001 | Define workflows as explicit states and transitions | Unit, Integration | Validate state/transition CRUD; reject invalid transitions; verify versioning with active/inactive flags | ADD §3.1 |
+| FR-CORE-WFE-002 | Durable state persistence | Integration, E2E | Kill workflow mid-execution → verify automatic resume from last checkpoint; no duplicate side effects; query by status/owner/time | ADD §3.2 |
+| FR-CORE-WFE-003 | Durable timers (sleep capability) | Integration | Sleep 3s → verify wake-up accuracy; verify compute release during sleep; test recurring schedules | ADD §3.3 |
+| FR-CORE-WFE-004 | Execute workflows from multiple trigger types | Integration | Trigger via user action, scheduled job, and external event; verify traceable origin per instance | ADD §3.4 |
+| FR-CORE-WFE-005 | Handle failures with retry and compensation | Unit, Integration | Configure retry count/backoff; verify transient vs non-retriable error handling; test compensation rollback (§11: saga compensation path) | ADD §3.5 |
+| FR-CORE-WFE-006 | Support parallel and conditional paths | Integration | Branch on condition → verify deterministic evaluation; parallel branches execute independently and rejoin | ADD §3.6 |
+| FR-CORE-WFE-007 | Parent/child workflow orchestration | Integration | Parent spawns child (sync/async); parent halts until child completes; child failure propagation per policy | ADD §3.7 |
+| FR-CORE-HITL-001 | Create approval requests with context | Unit, Integration | Emit approval request → verify unique interaction ID, signed token, structured context, approver visibility | ADD §4.1 |
+| FR-CORE-HITL-002 | Workflow suspension and resumption | Integration, E2E | Workflow transitions to SUSPENDED; approval signal wakes workflow; TTL timeout triggers TIMEOUT error path (§11: HITL TTL expiry; §12: HITL TTL boundary) | ADD §4.2 |
+| FR-CORE-HITL-003 | Approve, reject, or request changes | Integration | Test approve/reject with comments; request-changes flow; verify workflow resume/termination per config | ADD §4.3 |
+| FR-CORE-HITL-004 | Enforce approval policies | Integration | Single-approver and multi-approver policies; expiry with auto-reject; per-step policy configuration | ADD §4.4 |
+| FR-CORE-HITL-005 | Multi-channel action endpoints | Integration, E2E | HTTP endpoints for approve/reject; authentication required; channels invoke same endpoints (§11: duplicate approval, concurrent race) | ADD §4.5 |
+| FR-CORE-HITL-006 | Audit all HITL actions | Integration | Every HITL request/decision recorded; includes approver identity, timestamp, rationale, original context | ADD §4.6, §10.4 |
+| FR-CORE-MCP-001 | Register and manage MCP tools | Unit, Integration | Startup queries MCP servers; tools registered with capabilities/policies; enable/disable without code changes; unavailable servers flagged, no crash | ADD §5.1 |
+| FR-CORE-MCP-002 | Execute MCP requests with standard error handling | Integration | Generic interface invocation; timeout boundary enforced; output validated against schema; retries on transient errors; standardized error surfacing (§11: retry exhaustion) | ADD §5.2 |
+| FR-CORE-MCP-003 | Enforce rate limits and circuit breaking | Integration | Per-tool rate limits; requests queued, not rejected; circuit breaker opens after repeated failures; explicit "service unavailable" signal; response caching with TTL (§11: circuit breaker open; §12: MCP response size, retry budget) | ADD §5.3 |
+| FR-CORE-LLM-001 | Route requests to configured providers | Integration | Multi-provider support; config-only switching; normalized input/output formats; model/version metadata | ADD §7.1 |
+| FR-CORE-LLM-002 | Track usage and cost per workflow | Unit, Integration | Log prompt_tokens/completion_tokens/model; tag by domain/workflow_id; cost attribution reporting; budget limit warn/block (§11: budget exceeded; §12: daily/monthly budget caps) | ADD §7.2 |
+| FR-CORE-LLM-003 | Fallback on provider failure | Integration | Primary 5xx → automatic retry on secondary; fallback logged as warning; explicit error if no fallback; prompt caching for cost optimization (§11: both providers down, provider fallback) | ADD §7.3 |
+| FR-CORE-NOTIF-001 | Send notifications via multiple channels | Integration, E2E | Email + chat/push delivery; failure retry and logging; per-channel opt-out | ADD §6.1 |
+| FR-CORE-NOTIF-002 | Template-based messaging | Unit, Integration | Variable substitution; markdown rendering; template versioning and toggling; domain scoping | ADD §6.2 |
+| FR-CORE-NOTIF-003 | Priority routing and quiet hours | Integration | CRITICAL immediate push; NORMAL standard channels; LOW batched digests via Durable Timer; quiet hours respected except urgent; priority overrides auditable | ADD §6.3 |
+| FR-CORE-AUD-001 | Immutable audit logging for critical actions | Integration | Append-only audit event for state changes; tamper-evident records; structured events (timestamp, actor_id, action, resource_id, metadata); PII masking (§11: audit write timeout) | ADD §10.4 |
+| FR-CORE-AUD-002 | Query and export audit logs | Integration | Filter by time/actor/entity; CSV/JSON export with checksum; export actions audited | ADD §10.4 |
+| FR-CORE-AUD-003 | Retention policies with domain overrides | Integration | 7-year default; domain override shorter/longer; retention actions logged | ADD §10.4 |
+| FR-CORE-ID-001 | Secure authentication without passwords | Integration, E2E | Passwordless auth (magic links, OAuth, passkeys); no passwords stored; account recovery; auth events audited; MFA step-up for sensitive operations (§11: expired JWT, JWKS cache stale, MFA step-up) | ADD §8.1, §8.6 |
+| FR-CORE-ID-002 | Role-based access control (RBAC) | Unit, Integration | Core roles (Admin, User, Viewer); domain role superposition; per-domain definitions; enforcement on all APIs; role changes audited; deny-by-default (§11: insufficient permissions) | ADD §8.3 |
+| FR-CORE-ID-003 | Session management | Integration | Configurable timeouts; admin revocation; concurrent session limits; token rotation on privilege change | ADD §8.7 |
+| FR-CORE-BLOB-001 | S3-compatible storage interface | Integration | Presigned URL upload/download; metadata storage; file versioning; max file size enforcement (§12: file upload size 50 MiB boundary) | ADD §9.8 |
+| FR-CORE-BLOB-002 | Access control and linking | Integration | Permission inheritance from linked entity; multi-entity linking; access logging; malware scan integration (§11: ClamAV down) | ADD §9.8 |
+| FR-CORE-INT-001 | Workflow logic export | Integration | API endpoint exports workflow definitions in JSON; includes states, transitions, status; authorization required | ADD §11.1 |
+| FR-CORE-INT-002 | Extensible action points | Integration | Webhook calls to external URLs; JSON payloads with entity data; failure logged with retry; inbound webhook triggers (§11: invalid signature, duplicate delivery) | ADD §11.2 |
+
+### 13.2 Coverage Summary
+
+| Area | FR-CORE IDs | Count |
+|------|-------------|-------|
+| Workflow Engine | FR-CORE-WFE-001 to 007 | 7 |
+| HITL Gateway | FR-CORE-HITL-001 to 006 | 6 |
+| MCP Integration | FR-CORE-MCP-001 to 003 | 3 |
+| LLM Gateway | FR-CORE-LLM-001 to 003 | 3 |
+| Notification Service | FR-CORE-NOTIF-001 to 003 | 3 |
+| Audit & Compliance | FR-CORE-AUD-001 to 003 | 3 |
+| Identity & Access | FR-CORE-ID-001 to 003 | 3 |
+| File Storage | FR-CORE-BLOB-001, 002 | 2 |
+| Interoperability | FR-CORE-INT-001, 002 | 2 |
+| **Total** | | **32** |
+
+### 13.3 RTM Guidelines
+
+1. **Every FR-CORE requirement must have at least one test specification** — gaps are tracked as ERRORs in validation reviews.
+2. **Cross-reference §11 and §12** — error path and boundary tests should be linked to the FR-CORE requirement they validate.
+3. **Update the RTM when requirements change** — adding, removing, or modifying an FR-CORE requirement triggers an RTM update.
+4. **Test type selection** — unit tests for pure logic, integration tests for service composition, E2E tests for user-facing workflows, acceptance tests for stakeholder-visible criteria.
+5. **TSDoc traceability** — test files should reference FR-CORE IDs in their `@requirements` TSDoc tag (see §8.2).
+
+---
+
 ## **Revision History**
 
 | Version | Date | Author | Changes |
@@ -1352,3 +1498,5 @@ The following gates must pass before code can be merged:
 | v1.0.0 | 2025-02-18 | Abe Caymo | Initial version |
 | v1.0.1 | 2025-06-04 | Abe Caymo | Added Vitest pitfalls section |
 | v2.0.0 | 2026-01-15 | Document Review Panel | Major rewrite: aligned with Coding Guidelines v3.0.0, TSD v3.0.0; added tiered coverage, Result type testing, Zod testing, RFC 7807 testing, modern Vitest/Playwright patterns, expanded security testing |
+| v2.1.0 | 2026-03-04 | Document Review Panel | Added Section 11 (Error Path & Negative Testing) and Section 12 (Boundary Condition Testing) per validation WARNINGs S7-W1 and S7-W14 |
+| v2.2.0 | 2026-03-04 | Document Review Panel | Added Section 13 (Requirements Traceability Matrix) per Tier 3 ERROR E1; fixed stale FRD v2.0.0 refs to v1.0.0 (W4); added MFA step-up test specs (W5); added HITL P95 latency test scope (W6) |

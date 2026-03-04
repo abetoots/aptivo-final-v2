@@ -100,6 +100,15 @@ Three AI models (Claude, Gemini, Codex) independently analyzed Aptivo's document
 - MCP tool call completes successfully
 - Errors propagate correctly to Inngest
 - Timeout handling works as expected
+- Compensation states correctly roll back partial progress
+
+#### WARNINGs Validated
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S7-W9 | Saga compensation path untested | Compensation states verified: partial-progress rollback succeeds; crash-during-compensation recovers cleanly without duplicate side-effects |
+
+**Additional validation step**: 6. Trigger crash during compensation step; verify recovery completes rollback without re-executing memoized steps
 
 ---
 
@@ -123,6 +132,17 @@ Three AI models (Claude, Gemini, Codex) independently analyzed Aptivo's document
 - Event resume latency < 500ms P95
 - 24h+ waits survive worker restarts
 - No lost events during restarts
+- Memoized steps not re-executed after crash recovery
+- TTL boundary behavior confirmed (pending at TTL-1s, auto-expire at TTL)
+
+#### WARNINGs Validated
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S7-W8 | Inngest checkpoint recovery untested | Crash worker mid-step; verify memoized steps are NOT re-executed on recovery |
+| S7-W20 | HITL TTL expiry boundary untested | Test: TTL-1s → request stays pending; at TTL → auto-expires; TTL+1s → already expired |
+
+**Additional validation steps**: 6. Kill Inngest worker during `step.run()` execution; restart and verify step resumes from checkpoint (not re-run) 7. Create HITL request with short TTL; verify state transitions at TTL-1s, TTL, and TTL+1s boundaries
 
 ---
 
@@ -145,6 +165,17 @@ Three AI models (Claude, Gemini, Codex) independently analyzed Aptivo's document
 - Magic link login functional
 - MFA configurable for admin users
 - Clear understanding of enterprise auth path
+- Expired/revoked tokens return 401; JWKS stale-if-error handles Supabase outage
+- Cached JWKS serves valid tokens for ≤24h; rejects at 24h boundary
+
+#### WARNINGs Validated
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S7-W3 | Auth failure paths untested | Expired token → 401; revoked session → 401; Supabase Auth unreachable → JWKS stale-if-error serves cached keys |
+| S7-W21 | JWKS stale-if-error 24h boundary untested | Cached JWKS valid for ≤24h during Supabase outage; at 24h+1s boundary, tokens rejected (fail-closed) |
+
+**Additional validation steps**: 6. Present expired JWT → verify 401 response 7. Simulate Supabase Auth outage; verify JWKS stale-if-error serves cached keys for ≤24h 8. Test 24h boundary: at 24h cached JWKS still valid; at 24h+1s cached JWKS rejected
 
 ---
 
@@ -167,6 +198,16 @@ Three AI models (Claude, Gemini, Codex) independently analyzed Aptivo's document
 - All three channels functional
 - Delivery latency < 2s for 95th percentile
 - Rate limiting understood
+- Novu transactionId dedup window measured and documented
+
+#### WARNINGs Validated
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| T1-W24 | Novu transactionId dedup window unknown | Measured dedup window documented with evidence; behavior at window boundary confirmed (duplicate within window → deduplicated; outside window → delivered) |
+| S3-W7 | Novu dedup window unknown (same finding) | Same measurement closes both WARNINGs |
+
+**Additional validation step**: 6. Send duplicate transactionId at T=0, T=window/2, T=window-1s, T=window+1s; measure exact dedup window
 
 ---
 
@@ -267,6 +308,16 @@ Three AI models (Claude, Gemini, Codex) independently analyzed Aptivo's document
 
 **Result Template**: [spike-results/SP-07-result.md](./spike-results/SP-07-result.md)
 
+#### WARNINGs Validated
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S5-W6 | Inngest free tier limits unknown | Free tier limits documented with evidence (event volume, function count, step count); behavior at limit boundary confirmed |
+| S5-W8 | 10K sleeping workflows unvalidated | 10,000 sleeping workflows sustained without resource exhaustion or scheduling degradation; wake-up reliability ≥99.9% |
+| S5-W12 | Inngest throughput limits unknown | Throughput ceiling measured (events/sec, concurrent functions); documented with evidence from load test |
+
+**Additional validation steps**: 9. Query Inngest dashboard/API for free tier consumption at 1K, 5K, 10K sleeping workflows 10. Document exact free tier limits (events/month, concurrent steps, sleeping workflow cap) with sources
+
 ---
 
 ### SP-08: LLM Streaming Cost Enforcement (HIGH)
@@ -296,6 +347,14 @@ Three AI models (Claude, Gemini, Codex) independently analyzed Aptivo's document
 **Failure Impact**: Budget enforcement unreliable; cost overruns
 
 **Result Template**: [spike-results/SP-08-result.md](./spike-results/SP-08-result.md)
+
+#### WARNINGs Validated
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S7-W18 | LLM budget cap boundary ($50 daily, $500 monthly) untested | Budget enforcement triggers within 10% of $50 daily limit; $500 monthly limit boundary test passes; requests blocked at cap, not after |
+
+**Additional validation step**: 7. Simulate cumulative spend to $49, $50, $51 (daily) and $499, $500, $501 (monthly); verify enforcement triggers at correct boundary
 
 ---
 
@@ -329,6 +388,15 @@ Three AI models (Claude, Gemini, Codex) independently analyzed Aptivo's document
 **Failure Impact**: Cross-domain data exposure; regulatory/security risk
 
 **Result Template**: [spike-results/SP-09-result.md](./spike-results/SP-09-result.md)
+
+#### WARNINGs Validated
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S7-W7 | DB connection pool exhaustion untested | 20th connection succeeds; 21st connection handled gracefully (queued with timeout or rejected with clear error, not hung) |
+| S7-W19 | DB connection pool boundary (max 20) untested | Load test at 20 concurrent connections → all succeed; at 21 → documented behavior (queue, reject, or timeout) |
+
+**Additional validation steps**: 8. Open 20 concurrent connections; verify all complete successfully 9. Open 21st connection; verify graceful handling (connection queued with timeout, or rejected with `POOL_EXHAUSTED` error)
 
 ---
 
@@ -365,6 +433,16 @@ Three AI models (Claude, Gemini, Codex) independently analyzed Aptivo's document
 **Failure Impact**: Unreliable workflows under partial outage; wasted compute on retry storms
 
 **Result Template**: [spike-results/SP-10-result.md](./spike-results/SP-10-result.md)
+
+#### WARNINGs Validated
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S7-W2 | Circuit breaker fallback untested | MCP CB trips after 5 failures → open state returns fallback error; half-open recovery tested |
+| S7-W13 | Dead letter queue routing untested | Failed events route to `system.event.dlq` with original payload + failure metadata; DLQ consumer processes events |
+| S7-W23 | MCP retry budget vs Inngest step timeout untested | Validated: MCP retry budget (~37s total) < Inngest step timeout (120s); no timing coherence drift under load |
+
+**Additional validation steps**: 9. Verify DLQ routing: fail an event intentionally; confirm it appears in `system.event.dlq` with correct metadata 10. Measure total MCP retry duration under load; confirm stays under Inngest step timeout with ≥2x safety margin
 
 ---
 
@@ -503,6 +581,15 @@ Three AI models (Claude, Gemini, Codex) independently analyzed Aptivo's document
 
 **Result Template**: [spike-results/SP-14-result.md](./spike-results/SP-14-result.md)
 
+#### WARNINGs Validated
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S7-W10 | HITL decision race condition untested | Concurrent approval attempts on same request: first succeeds, second gets `409 Conflict` via INSERT ON CONFLICT; no duplicate approvals |
+| S7-W11 | Webhook signature verification failure untested | Invalid HMAC signature → 401 with audit log entry; expired timestamp → 401; valid signature → 200 |
+
+**Additional validation steps**: 7. Send 10 concurrent approve requests for same HITL requestId; verify exactly 1 succeeds (INSERT ON CONFLICT) 8. Send webhook with invalid HMAC → verify 401 + audit log; send with valid HMAC + expired timestamp → verify 401
+
 ---
 
 ### SP-15: Third-Party Degradation & Fallback (HIGH) - *Added from Review*
@@ -532,6 +619,22 @@ Three AI models (Claude, Gemini, Codex) independently analyzed Aptivo's document
 **Failure Impact**: Production instability; blocked workflows; vendor lock-in risk
 
 **Result Template**: [spike-results/SP-15-result.md](./spike-results/SP-15-result.md)
+
+#### WARNINGs Validated
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S6-W8 | Dependency fallback strategies untested | Each dependency's fallback/degraded-mode tested under simulated outage; behavior documented |
+| S7-W4 | Redis per-consumer degradation untested | 4 distinct fail policies validated: MCP cache (closed/reject), rate limiter (open/allow), dedup (open/allow), sessions (open/allow) |
+| S7-W5 | Retry exhaustion final behavior untested | After all retries exhausted for each of 8 dependencies: workflow enters safe-halt state with visibility (not stuck/silent) |
+| S7-W6 | Audit service blocking untested | Sync audit write timeout tested; blocking impact on HITL/file access measured; validates need for T1-W21 (async audit) |
+| S7-W12 | LLM provider fallback untested | Primary provider 429/5xx → secondary provider activated; fallback latency measured |
+| S7-W15 | API rate limit boundary (100 req/min, burst 20) untested | 100th request → 200 OK; 101st request → 429 with `Retry-After` header |
+| S7-W16 | File upload 50MB boundary untested | 52428800 bytes → accepted; 52428801 bytes → 413 Payload Too Large |
+| S7-W17 | Pagination max=200 boundary untested | `limit=200` → 200 results; `limit=201` → 400 Bad Request or clamped to 200 |
+| S7-W22 | Permission cache 5-min revocation window untested | Revoke permission; verify cached permission still allows access for ≤5 min; verify rejection after cache expiry |
+
+**Additional validation steps**: 7. Build per-dependency degradation matrix: simulate outage for each dependency → document observed behavior vs expected 8. Test boundary conditions: rate limit at 100/101, file upload at 50MB/50MB+1, pagination at 200/201 9. Revoke a permission; test access at T=0, T=2.5min, T=5min, T=5min+1s to confirm 5-min cache window
 
 ---
 

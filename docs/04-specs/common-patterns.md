@@ -263,6 +263,40 @@ const CandidateStatusChangedSchema = EventEnvelopeSchema(
 );
 ```
 
+### 5.3 Event Schema Compatibility Rules
+
+**Compatibility Mode**: All event schemas follow **backward-compatible evolution** by default.
+
+**What is a non-breaking change** (allowed within same event name):
+- Adding a new **optional** field with a default value
+- Adding a new optional field to the `data` payload
+- Adding a new event type to the catalog
+- Widening a type (e.g., string enum → string)
+
+**What is a breaking change** (requires new event name with version suffix):
+- Removing a field from the envelope or data payload
+- Renaming a field
+- Changing a field's type (e.g., string → number)
+- Adding a new **required** field
+- Changing the semantics of an existing field (e.g., `status` values change meaning)
+
+**Breaking change process**:
+1. Create new event name with version suffix (e.g., `aptivo.candidate.status-changed.v2`)
+2. Publish both old and new events during migration window
+3. Consumers subscribe to new event and verify
+4. Deprecate old event after all consumers migrated (minimum 30 days)
+5. Remove old event publishing after deprecation period
+
+**Rollout order**: Consumer-first for backward-compatible changes; for breaking changes (new event name), deploy consumers that handle both old and new events first, then deploy producer with new event.
+
+**Rollback safety**: All non-breaking changes are inherently rollback-safe (old consumers ignore new optional fields). Breaking changes use dual-publishing, so rolling back the producer resumes old event format; consumers already handle both.
+
+**Schema validation**: All event payloads SHOULD be validated with Zod schemas at publish time. Invalid payloads are logged as errors and dropped (not published) to prevent schema drift. See §5.2 for schema definitions.
+
+**Dead-letter handling**: Events that fail consumer processing after Inngest retry exhaustion are logged with full payload to the audit trail as `system.event.dlq` events for manual investigation. Alerting triggers on DLQ event rate > 0 for any event type.
+
+> **Phase 1 note**: Phase 1 is a monolith — producer and consumer deploy atomically. Schema compatibility rules are documented now to establish conventions and enable safe Phase 2 service decomposition.
+
 ### 5.4 Event Catalog
 
 | Event | Payload Fields | Publishers | Subscribers |
@@ -321,8 +355,24 @@ const invalidateCandidate = async (cache: CacheClient, candidateId: string) => {
 | Entity by ID | 10 min | Balance freshness with performance |
 | List queries | 5 min | Lists change more frequently |
 | Stats/aggregations | 1 hour | Expensive to compute, acceptable staleness |
-| User permissions | 15 min | Security-sensitive, moderate TTL |
+| User permissions | 5 min | Security-sensitive, tight TTL (ADD §5.6.1) |
 | IdP JWKS | 1 hour | Rarely changes, expensive to fetch |
+
+### 6.4 Stale-Read Behavior
+
+Every cache layer must document what happens when cached data is stale or the cache source is unavailable.
+
+| Cache Type | On Cache Miss | On Redis Unavailable | Freshness SLO |
+|------------|---------------|---------------------|---------------|
+| Entity by ID | Fetch from PostgreSQL | **Bypass cache** — query database directly | Data ≤ 10 min stale; event-driven invalidation reduces typical staleness to seconds |
+| List queries | Fetch from PostgreSQL | **Bypass cache** — query database directly | Data ≤ 5 min stale |
+| Stats/aggregations | Recompute from database | **Bypass cache** — recompute (expensive but acceptable) | Data ≤ 1 hour stale |
+| User permissions | Fetch from PostgreSQL | **Bypass cache** — query database directly | Data ≤ 5 min stale; **accepted risk**: revoked permissions propagate within 5 min (ADD §5.6.1). For immediate revocation (admin removal), use explicit cache purge via `invalidatePattern('*:permissions:*')` |
+| IdP JWKS | Fetch from Supabase | **Serve stale** for up to 24h (stale-if-error) | Data ≤ 1 hour fresh; 24h grace on IdP outage |
+
+> **Permission Cache Security Note**: In-memory permission caching (p-memoize, 5 min TTL per Coding Guidelines §4.6) means a revoked user retains access for up to 5 minutes. For HITL approvers, this is an accepted Phase 1 risk. Phase 2: add event-driven invalidation on `role.updated` / `role.deleted` events to clear the in-memory cache immediately.
+
+> **Cold Start Behavior**: All caches use cache-aside (lazy population). After deployment or Redis restart, caches are empty. First requests for each key hit the database, causing temporarily elevated database load. Critical caches (JWKS) are populated on first auth request. No pre-warming is required in Phase 1.
 
 ---
 
@@ -425,6 +475,41 @@ timeout: 300s  # 5 minutes total saga timeout
 | `compensating` | Rolling back due to failure | → `compensated`, `failed` |
 | `compensated` | All compensations succeeded | (terminal) |
 | `failed` | Unrecoverable failure | (terminal, requires manual intervention) |
+
+### 8.3 Checkpoint and Recovery
+
+Every saga executes as an Inngest function where each step maps to a `step.run()` call. Inngest checkpoints the result of each step, providing automatic crash recovery.
+
+**Checkpoint Boundaries** (using candidate-hiring example):
+
+| Step | Inngest Checkpoint | Side Effect | Data at Risk on Crash | Recovery |
+|------|-------------------|-------------|----------------------|----------|
+| `create-contract` | After `step.run('create-contract', ...)` returns | Contract row in DB | None — step result is checkpointed | Resume from checkpoint; contract is idempotent via deterministic ID |
+| `send-offer` | After `step.run('send-offer', ...)` returns | Email sent via Novu | Between contract creation and email: contract exists but email not sent | Inngest retries `send-offer` step; Novu `transactionId` deduplicates |
+| `update-candidate-status` | After `step.run('update-status', ...)` returns | Status updated in DB | Between email and status update: email sent but status stale | Inngest retries; status update is idempotent |
+
+**Crash During Compensation**: If the process crashes during the compensation phase (rolling back a failed saga), Inngest resumes compensation from the last completed compensation step. Each compensation action must be idempotent.
+
+**Stuck Saga Detection**: Monitor for sagas in `running` or `compensating` state exceeding the `timeout` (300s). Alert via Inngest function failure webhook or periodic Inngest dashboard check. Manual intervention: use Inngest dashboard to cancel or replay the stuck function.
+
+**State Storage**: Inngest Cloud manages all saga state (step results, compensation progress). The application's PostgreSQL stores the business outcome (contract, candidate status) as the projection of completed steps.
+
+---
+
+## 9. Pagination Patterns
+
+### 9.1 Default Sort Order for Stable Pagination
+
+All cursor-paginated endpoints use a default sort order of `createdAt DESC, id ASC` (newest first, with `id` as tie-breaker for records with identical timestamps).
+
+**Rationale**:
+- `createdAt DESC` provides natural "newest first" ordering that users expect
+- `id ASC` provides deterministic ordering for records created within the same timestamp (PostgreSQL timestamp precision may cause ties)
+- Cursor encodes both `createdAt` and `id` to ensure stable pagination across pages
+
+**Index requirement**: All paginated tables must have a composite index on `(created_at DESC, id ASC)` for efficient cursor-based queries.
+
+**Override**: Endpoints that support explicit `sort` parameters may override the default. When sorting by a non-unique field, `id` is always appended as the final tie-breaker.
 
 ---
 

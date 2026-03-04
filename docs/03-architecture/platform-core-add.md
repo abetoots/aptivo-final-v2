@@ -212,9 +212,70 @@ Every component declares its failure boundary, blast radius, propagation charact
 | **Propagation Outcome** | **Cascading** — database failure propagates synchronously to all callers. No component can operate independently of PostgreSQL in Phase 1. |
 | **Impacted Components** | All platform components (Workflow Engine, HITL Gateway, Audit Service, Identity Service, File Storage, LLM Gateway, domain applications) |
 | **Isolation Mechanisms** | **Phase 1**: Schema isolation (logical separation only); connection pooling via managed database; automated daily backups (RPO < 24h). **Phase 2+**: HA-tier managed database with standby failover; connection pool per schema/domain to prevent pool exhaustion cascade; statement timeouts per domain. |
-| **Fallback Behavior** | Phase 1: Application reconnects automatically when database recovers. Restore from backup if unrecoverable (RTO < 4h, RPO < 24h). Phase 2+: Automatic failover to standby via connection pooler. |
+| **Fallback Behavior** | Phase 1: Application reconnects automatically when database recovers. Restore from backup if unrecoverable (RTO < 4h, RPO < 24h). Phase 2+: Automatic failover to standby via connection pooler (see design parameters below). |
 
 > **Accepted Risk (Phase 1)**: PostgreSQL is a single point of failure. All domains share one instance. Mitigation: managed daily backups, health monitoring, and documented recovery playbook (RUNBOOK §8.5). Phase 2 upgrade path: HA-tier database with standby nodes, connection pool isolation per schema.
+
+#### 2.3.4 Schema Isolation vs. Failure Isolation
+
+Schema isolation (Phase 1) provides **data separation** — each domain's tables reside in separate schemas (`public`, `aptivo_hr`, `aptivo_trading`). This prevents cross-domain data access at the application layer via schema-scoped queries and ownership rules (§9.1).
+
+Failure isolation requires **infrastructure separation** — separate database instances, separate connection pools, and independent health monitoring. Schema isolation does NOT provide failure isolation because all schemas share:
+
+- **Connection pool**: A single pool serves all schemas. Pool exhaustion in one domain blocks all domains.
+- **Disk I/O**: All schemas share the same underlying storage volume. Heavy writes in `aptivo_trading` degrade reads in `aptivo_hr`.
+- **CPU and memory**: Query load from any schema consumes shared compute resources.
+- **WAL (Write-Ahead Log)**: A single WAL serves all schemas. WAL pressure from one domain affects replication and recovery for all.
+- **Replication lag**: If HA is enabled (Phase 2+), replication lag applies uniformly across all schemas.
+- **Backup/recovery lifecycle**: Backup and restore operations are instance-wide. You cannot restore a single schema independently from a managed backup.
+
+**Phase progression**:
+| Phase | Isolation Level | Mechanism |
+|-------|----------------|-----------|
+| Phase 1 | Schema isolation only | Separate schemas, shared everything else |
+| Phase 2+ | Connection pool per schema | Statement timeouts per domain, pool exhaustion isolation |
+| Phase 3+ | Separate database instances per domain | Full failure isolation, independent scaling and recovery |
+
+> **MCP Circuit Breaker Scope Decision**: The cockatiel circuit breaker in §5.2 is configured **per-MCP-server**, not per-tool. Rationale: (1) Most MCP servers expose a single transport endpoint — if the server is down, all tools are unavailable. (2) Per-tool circuit breakers would require N×M state tracking (N servers × M tools) with minimal benefit for Phase 1's ~13 MCP integrations. (3) Per-tool granularity is appropriate when a single server has tools with vastly different reliability characteristics. Phase 2 consideration: Add per-tool override capability for servers where specific tools have distinct failure modes (e.g., a server with both read-only and write-mutating tools).
+
+##### HITL Blast Radius Map
+
+| Workflow Type | HITL Dependency | Business Impact if HITL Offline | TTL Fallback |
+|---|---|---|---|
+| Trade execution (Crypto) | Required — gating trade action | Trades blocked until HITL recovers or TTL expires | 24h → auto-reject |
+| Contract approval (HR) | Required — gating contract send | Contract signing delayed | 7d → auto-reject |
+| Interview scheduling (HR) | Optional — notification only | Schedule proceeds without explicit approval | N/A |
+| Security alert (Crypto) | Required — gating alert escalation | Alert notification delayed, not blocked (fallback to direct notification) | 4h → auto-escalate |
+
+> **Accepted Risk — Novu Single Notification Path (Phase 1)**: Novu Cloud is the sole notification delivery channel. There is no fallback provider for email or Telegram delivery. If Novu is unavailable: (1) HITL approval notifications are not delivered — workflows fall back to TTL timeout path; (2) Non-critical notifications (status updates, reminders) are lost. This is accepted for Phase 1 because: Novu's uptime SLA is adequate for Phase 1 volume; implementing a fallback SMTP path adds ~1 week of development; HITL TTL timeout provides a safety net for critical approvals. Phase 2: Add direct SMTP fallback for critical HITL notifications; add in-app notification as secondary channel.
+
+#### Resource Allocation (Phase 1)
+
+| Component | DO App Platform Slug | vCPU | RAM | Notes |
+|---|---|---|---|---|
+| API Server | `basic-xxs` | 1 shared vCPU | 512 MiB | Auto-scale 1–3 containers |
+| Workflow Worker | `basic-xxs` | 1 shared vCPU | 512 MiB | Single container Phase 1 |
+| ClamAV Scanner | `basic-s` | 1 shared vCPU | 2 GiB | Signature DB minimum 1.2 GiB; peak 2.4 GiB during `freshclam` updates (§6.7) |
+| PostgreSQL | `db-s-1vcpu-1gb` | 1 shared vCPU | 1 GiB | 25 GiB storage, 20 max connections |
+| Redis | `db-s-1vcpu-1gb` | 1 shared vCPU | 1 GiB | Basic tier (no HA) |
+
+> **Note**: Slug names map to DigitalOcean App Platform instance sizes. Actual CPU burst behavior depends on host load. These are Phase 1 minimum allocations; auto-scaling triggers are documented in §10.
+
+#### Graceful Shutdown Behavior
+
+- **SIGTERM Handling**: DO App Platform sends `SIGTERM` to containers during rolling deployments and scale-down events. The platform allows a **configurable drain period** (default: 30s on DO App Platform) before sending `SIGKILL`.
+- **API Server**: On SIGTERM, stop accepting new connections, drain in-flight HTTP requests (30s timeout), then exit. Express/Fastify built-in graceful shutdown handles this.
+- **Workflow Worker**: On SIGTERM, stop polling for new Inngest events, allow in-progress workflow steps to complete (bounded by Inngest step timeout, typically ≤120s), then exit. Inngest memoization ensures incomplete workflows resume from last completed step on new container.
+- **BullMQ Worker**: On SIGTERM, stop processing new jobs, allow current job to complete (bounded by job timeout), then exit. Stalled jobs are auto-retried by BullMQ's stall detection (default: 30s stall interval).
+- **Implementation Note**: All containers MUST handle SIGTERM. Node.js requires explicit `process.on('SIGTERM', ...)` handler — the default behavior terminates immediately without drain.
+
+> **Worker Health Check Model (Phase 1)**: The workflow worker runs as a separate DO App Platform **worker** component (not a web service). Workers do not expose HTTP ports. Health is determined by: (1) Process liveness — DO App Platform restarts workers that exit unexpectedly; (2) Inngest heartbeat — the Inngest SDK maintains a connection to Inngest Cloud; if the worker disconnects, Inngest redistributes pending work to other instances. Phase 1 runs a single worker instance. Phase 2: Add explicit health check endpoint on a diagnostic port for custom monitoring.
+
+> **Phase 2+ PostgreSQL HA — Design Target (NOT YET OPERATIONAL)**: The following design parameters must be documented before Phase 2 go-live:
+> - **Failover Trigger**: DigitalOcean managed HA databases use automatic primary promotion on health check failure. Document: health check interval, failure threshold, promotion time (typically 15–30s for managed PostgreSQL HA). Application must handle brief connection interruption during promotion.
+> - **Replication Mode**: DigitalOcean managed HA uses streaming replication (asynchronous by default). Document: expected replication lag under normal load, RPO during failover (potential loss of uncommitted transactions), per-schema impact assessment (`aptivo_trading` financial data vs. `aptivo_hr` operational data).
+> - **Failback Procedure**: After standby promotion, the old primary becomes a new standby. Document: whether failback is automatic or manual, data verification steps post-failover, connection string update requirements (managed service typically handles transparently via connection pooler).
+> - **Connection Pool Behavior**: Document: pool per schema/domain, connection string failover handling, application retry behavior during promotion window.
 
 ##### Redis Cache — Critical (Shared Infrastructure)
 
@@ -240,7 +301,7 @@ Every component declares its failure boundary, blast radius, propagation charact
 | **Propagation Outcome** | **Cascading** — regional outage takes down all services simultaneously. |
 | **Impacted Components** | All services and infrastructure |
 | **Isolation Mechanisms** | Health checks (liveness, readiness, startup probes) trigger container restarts for individual container failures; rolling deployment with rollback; auto-scaling 1–3 containers. These mitigate container-level failures but not regional outages. |
-| **Fallback Behavior** | Container failure: automatic restart via health checks. Regional outage: restore to alternate region manually (RTO < 4h per RUNBOOK §8.6). Feature flags for instant rollback of new functionality. Phase 2+: multi-region DR with DNS failover. |
+| **Fallback Behavior** | Container failure: automatic restart via health checks. Regional outage: restore to alternate region manually (RTO < 4h per RUNBOOK §8.6). Rollback via redeployment with previous container image (Phase 1: no runtime feature flag service — see §5.5 Feature Flag State). Phase 2+: multi-region DR with DNS failover. |
 
 ##### BullMQ (Job Queue) — Standard
 
@@ -253,6 +314,47 @@ Every component declares its failure boundary, blast radius, propagation charact
 | **Impacted Components** | MCP rate-limited request processing, outbound webhook delivery |
 | **Isolation Mechanisms** | Job deduplication by `jobId`; inherits Redis availability. |
 | **Fallback Behavior** | Jobs remain in Redis and resume processing when BullMQ workers reconnect. No data loss for enqueued jobs (Redis persistence). |
+
+#### 2.3.3 Resilience Triad Reference
+
+Every external dependency must document timeout, retry, and circuit breaker (CB) policies. The MCP Integration Layer (§5.2) uses cockatiel for the full triad composition; other dependencies document their policies below.
+
+| Dependency | Criticality | Timeout | Retry | Circuit Breaker | Fallback |
+|------------|-------------|---------|-------|-----------------|----------|
+| **MCP Servers** | Standard | 10s per attempt (cockatiel `timeout`) | 3 attempts, exponential backoff (cockatiel `retry`) | 5 consecutive failures → open, 30s half-open (cockatiel `circuitBreaker`) | Workflow error path |
+| **LLM Providers** | Standard | 30s per request (connection: 5s, read: 30s) | 2 attempts on 5xx/timeout, exponential backoff (1s base); no retry on 4xx except 429 | 3 consecutive 5xx → open per provider, 60s half-open; fallback to secondary provider while open | Provider fallback (primary → secondary) |
+| **Inngest Cloud** | Critical | Event send: 5s; step scheduling: managed by Inngest SDK | 2 attempts on network failure with 1s backoff; SDK handles internal retries | Not applicable — Inngest SDK manages connectivity; app monitors via health check | Workflows resume from last step on recovery |
+| **Novu Cloud** | Standard | 5s per API call | 2 attempts on 5xx/timeout with 500ms backoff | 5 consecutive failures → open, 60s half-open | Phase 1: no fallback (single notification path); HITL falls back to TTL timeout |
+| **Supabase Auth** | Critical | Token validation: 2s; magic link send: 5s; OAuth redirect: 10s | Token validation: 1 attempt after 100ms; magic link: no retry (safe to re-request); OAuth: no retry | Not applicable — JWKS caching (1h TTL, 24h stale-if-error) provides resilience for token validation; magic link/OAuth depend on live Supabase | JWKS cache for existing sessions (up to 24h); new logins fail with friendly error |
+| **PostgreSQL** | Critical | Statement: 30s; connection acquire: 5s; idle connection: 10min | Connection acquire: 3 attempts with 500ms backoff on pool exhaustion; no retry on query timeout (application handles) | Not applicable — connection pool (max 20, Phase 1) acts as concurrency limiter; pool exhaustion returns error immediately | Application reconnects on recovery; restore from backup (RPO < 24h) |
+| **Redis** | Critical | Operation: 500ms; connection: 2s | Connection: 3 attempts with 500ms backoff; operation: no retry (callers handle per fallback policy) | Not applicable — per-consumer fallback policies (§2.3.2) activate immediately on error | Per-consumer: fail-closed (idempotency), fail-open (rate limiting, dedup, sessions) |
+| **File Storage (S3)** | Standard | Upload: 30s; download: 15s; presign: 2s | 3 attempts with 2s linear backoff on 5xx/timeout | 5 consecutive failures → open, 30s half-open | Workflow error path; file metadata remains accessible |
+| **ClamAV** | Standard | 30s per file scan (configurable) | 2 attempts on timeout/connection error with 5s backoff | 3 consecutive failures → open, 60s half-open; files flagged `scan_pending` while open | Files quarantined as `scan_pending` until scanner recovers |
+
+> **Coherence Note**: For the MCP layer, the cockatiel composition wraps `timeout` (innermost) inside `circuitBreaker` inside `retry` (outermost). Each attempt gets the full 10s timeout. Total retry budget: 3 × 10s + backoff ≈ 37s. This must be less than the Inngest step-level timeout (default: 120s). For other dependencies, timeout values are per-operation, not total.
+
+##### MCP Triad Coherence Calculation
+
+The MCP resilience triad (timeout × retry × circuit breaker) must satisfy: **total retry budget < Inngest step timeout**.
+
+| Parameter | Value | Source |
+|---|---|---|
+| Per-attempt timeout | 10s | cockatiel `timeout` |
+| Retry attempts | 3 | cockatiel `retry` (maxAttempts) |
+| Backoff (exponential) | 1s, 2s, 4s | cockatiel `ExponentialBackoff` |
+| Total retry budget | 3 × 10s + (1s + 2s + 4s) = 37s | Calculated |
+| Circuit breaker threshold | 5 consecutive failures → open | cockatiel `ConsecutiveBreaker(5)` |
+| Circuit breaker half-open | 30s | cockatiel `halfOpenAfter` |
+| Inngest step timeout | 120s (default) | Inngest SDK |
+| **Coherence check** | **37s < 120s ✓** | Total retry < step timeout |
+
+> **Constraint**: If the MCP retry budget (37s) ever approaches the Inngest step timeout (120s), increase the Inngest step timeout or reduce MCP retry attempts. The cockatiel composition wraps: `retry(circuitBreaker(timeout(fn)))` — timeout is innermost, retry is outermost.
+
+> **Inngest Durability Guarantees**: Inngest provides at-least-once execution with step-level memoization. Completed steps are not re-executed on workflow replay. For Inngest's SLA and durability commitments, see [Inngest Terms of Service](https://www.inngest.com/terms) and §10 SLA Commitments below.
+
+> **Cross-Reference — TSD Resilience Values**: Concrete timeout, retry, and circuit breaker configuration values are specified in TSD `configuration.md` §7.2 (Resilience Configuration). The ADD documents the architectural patterns and policies; the TSD documents the exact numeric values used in code. If values in this document conflict with the TSD, the TSD takes precedence for implementation.
+
+> **Phase 1 Scope**: PostgreSQL and Redis triads use managed-service defaults augmented by application-level configuration. Phase 2+ will add connection pool per schema/domain, statement timeouts per domain, and separate Redis instances for job queues vs. cache.
 
 ---
 
@@ -813,6 +915,17 @@ function generateDeterministicUUID(...components: string[]): string {
 }
 ```
 
+#### HITL TTL Cascade Behavior
+
+When a HITL request's TTL expires:
+
+1. The `step.waitForEvent()` call in the parent workflow returns `null` (no event received within timeout).
+2. The workflow follows its **TIMEOUT error path** — typically: log timeout, mark workflow as `timed_out`, notify admin.
+3. **Dependent workflows**: If the timed-out workflow was itself a step in a parent workflow (nested execution), the parent receives the timeout result and follows its own error path.
+4. **Cascade depth**: In Phase 1, workflows are not nested (no parent-child workflow chains). HITL timeout affects only the single workflow containing the approval gate.
+5. **Data impact**: No data is modified on HITL timeout. The workflow step that was gated by approval is simply skipped (or the workflow is marked as failed, depending on the error path design).
+6. **Notification**: On HITL timeout, a notification is sent to the workflow owner and the approver(s) indicating the approval request expired without a decision.
+
 ---
 
 ## 5. MCP Integration Layer
@@ -861,7 +974,7 @@ interface MCPServerConfig {
   rateLimit?: RateLimitConfig;
   cacheTTL?: Record<string, number>;
   enabled: boolean;
-  supportsIdempotency?: boolean; // server supports X-Idempotency-Key header
+  supportsIdempotency?: boolean; // server supports Idempotency-Key header (IETF standard)
 }
 
 interface MCPInvokeOptions {
@@ -1020,6 +1133,14 @@ async function executeWithValidation(
 }
 ```
 
+#### 5.3.1 MCP Response Size Limits
+
+- **Maximum response payload**: 1 MiB per tool call response. Responses exceeding this limit are truncated and the tool call returns a `RESPONSE_TOO_LARGE` error.
+- **Memory budget**: MCP tool responses are buffered in memory during schema validation. The 1 MiB limit prevents OOM from unbounded responses.
+- **Truncation behavior**: For streaming responses, the client stops reading after 1 MiB. For non-streaming, the response is rejected if `Content-Length` exceeds the limit.
+- **Configuration**: Per-server override available via `MCPServerConfig.maxResponseSize` (default: 1 MiB, max: 10 MiB).
+- **Rationale**: Protects against denial-of-service from MCP servers returning unbounded data (e.g., paginating an entire database into a single response).
+
 ### 5.4 Rate Limit Queueing
 
 **FRD Reference**: FR-CORE-MCP-003 (queue, not reject)
@@ -1148,6 +1269,68 @@ class MCPRegistry {
 | Social posts | 15min | Engagement lag |
 | Security scans | 24h | Contract code static |
 | Calendar availability | 5min | Meeting changes |
+
+**Cache Key Strategy**: `mcp:cache:{serverId}:{toolName}:{argsHash}` where `argsHash` is SHA-256 of canonical JSON args (first 16 hex chars).
+
+**Stale-Read Behavior** (per data type):
+
+| Data Type | On Cache Miss | On MCP Server Unavailable (CB Open) | Rationale |
+|-----------|---------------|--------------------------------------|-----------|
+| Price data | Fetch from source | **Return error** (do not serve stale price) | Financial decisions require fresh data |
+| Transactions | Fetch from source | **Return error** (do not serve stale tx state) | Transaction status must be current |
+| Social posts | Fetch from source | **Serve stale** with `X-Cache-Stale: true` header | Engagement data tolerates staleness |
+| Security scans | Fetch from source | **Serve stale** (contract code is immutable) | Static analysis results don't change |
+| Calendar availability | Fetch from source | **Return error** (scheduling requires fresh data) | Double-booking risk |
+
+> **Freshness SLO**: Data served from cache is guaranteed to be no older than the TTL value. During normal operation, event-driven invalidation may refresh data sooner. When stale-read returns error, the workflow step follows its error path.
+
+> **Cross-Reference — Cache Invalidation Patterns**: For the standard cache-aside pattern with TTL used across the platform, see `docs/04-specs/common-patterns.md` §6.2 (Cache Patterns). The ADD §5.6 documents cache-specific policies (TTLs, freshness SLOs, invalidation rationale); common-patterns documents the generic implementation pattern.
+
+#### 5.6.1 Cache Freshness SLO
+
+| Cache Type | TTL | Freshness SLO | Rationale |
+|---|---|---|---|
+| MCP tool responses (price data) | 60s | ≤60s stale | Financial decisions require near-real-time data |
+| MCP tool responses (social) | 15min | ≤15min stale | Engagement data tolerates moderate staleness |
+| Permission/RBAC cache | 5min | ≤5min stale | Accepted risk: revoked permissions active for up to 5 minutes (see §8.3) |
+| Session cache | JWT lifetime | ≤JWT expiry | Session validity bounded by JWT expiration |
+| Workflow definition cache | N/A (not cached) | Always fresh | Read from PostgreSQL on each trigger |
+
+> **SLO Statement**: Data served from platform caches is guaranteed to be no older than the configured TTL. The permission cache has an accepted risk window of up to 5 minutes where revoked permissions remain active (documented in §8.3). No event-driven cache invalidation exists in Phase 1 — all caches rely on TTL expiry only (see §5.6.3 rationale).
+
+#### 5.6.2 Session Cache Invalidation
+
+- **Phase 1 Decision**: TTL-only invalidation. No event-driven session cache invalidation.
+- **Rationale**: Supabase Auth manages sessions externally. The platform validates JWTs on each request using cached JWKS public keys (1h TTL, 24h stale-if-error). Session revocation is handled by Supabase — when a session is revoked, the JWT becomes invalid at its next natural expiry. The gap between revocation and JWT expiry is bounded by the access token lifetime (configured in §8.4).
+- **Implication**: A revoked session may remain "valid" for up to the access token TTL (e.g., 15 minutes if `accessTokenLifetime = 15min`). This is an accepted risk for Phase 1.
+- **Phase 2**: If tighter revocation is required, add a Redis-based token blacklist checked on each request.
+
+#### 5.6.3 Cache Cold Start Expectations
+
+- **First-request latency**: On container startup or after cache flush, all cache entries are empty. First requests for cached data experience full round-trip latency to the data source (PostgreSQL, MCP servers, Supabase).
+- **Expected cold start penalties**:
+
+  | Cache Type | Cold Start Latency | Warm Latency |
+  |---|---|---|
+  | JWKS keys | ~200ms (Supabase JWKS endpoint) | <1ms (memory) |
+  | Permission/RBAC | ~10ms (PostgreSQL query) | <1ms (Redis) |
+  | MCP tool responses | 1-30s (depending on external API) | <1ms (Redis) |
+
+- **Warm-up strategy**: Phase 1 uses lazy cache population (on-demand). No pre-warming on startup. This is acceptable because: (1) Rolling deployments ensure at least one warm container serves traffic; (2) Cold start penalty is bounded and transient; (3) Pre-warming adds startup complexity for minimal benefit at Phase 1 scale.
+- **Phase 2**: Consider pre-warming critical caches (JWKS, permission) on container startup to eliminate first-request penalty.
+
+#### 5.6.4 TTL-Only Invalidation Rationale
+
+> **Design Decision — TTL-Only Cache Invalidation (Phase 1)**: All platform caches use time-based expiry (TTL) without event-driven invalidation (no Redis pub/sub, no cache-aside pattern with invalidation events). Rationale: (1) Phase 1 has a single API container (1–3 instances) — cache coherence across instances is trivially managed by TTL since all instances share the same Redis. (2) Event-driven invalidation requires: defining invalidation events for each cache entry, subscribing to PostgreSQL LISTEN/NOTIFY or Redis pub/sub, handling missed invalidation events, and testing invalidation race conditions. This adds ~2 weeks of development for marginal freshness improvement at Phase 1 scale. (3) The accepted staleness windows (5min for permissions, 60s for prices) are within business tolerance. (4) Phase 2 trigger: If the platform scales beyond 3 containers or if permission staleness causes user-visible issues, implement event-driven invalidation for the permission cache first (highest business impact).
+
+### 5.7 PostgreSQL Projection Divergence Reconciliation
+
+- **Context**: Workflow execution state is authoritatively owned by Inngest (§3.5). The `workflow_executions` table in PostgreSQL is a read-optimized projection updated by Inngest lifecycle events.
+- **Divergence scenario**: If an Inngest lifecycle event is lost (network partition, event delivery failure), the PostgreSQL projection may diverge from Inngest's authoritative state (e.g., workflow shows `running` in PostgreSQL but is actually `completed` in Inngest).
+- **Detection**: Scheduled reconciliation job (daily, Inngest-triggered) compares PostgreSQL `workflow_executions` status with Inngest API for all workflows in `running` or `suspended` state longer than their expected TTL.
+- **Resolution**: On divergence detection, update PostgreSQL projection to match Inngest state. Log reconciliation as audit event. Alert if divergence count exceeds threshold (>5 per reconciliation run).
+- **Phase 1 scope**: Manual reconciliation via admin API endpoint. Scheduled daily reconciliation via Inngest cron function.
+- **Phase 2**: Real-time reconciliation via Inngest webhook events for state changes.
 
 ---
 
@@ -1459,6 +1642,27 @@ async function trackUsage(
 }
 ```
 
+### 7.3 LLM Output Validation Strategy
+
+- **Threat**: LLM responses are **untrusted external input**. They may contain: injection attempts (HTML/JS for display contexts), hallucinated data that could corrupt downstream records, PII from training data leakage, or adversarial content designed to influence HITL approvers.
+- **Phase 1 Validation Pipeline**:
+  1. **Structural validation**: All LLM responses are parsed as JSON and validated against Zod schemas (§14.5.1). Invalid responses trigger provider fallback or workflow error path.
+  2. **Content sanitization before storage**: LLM-generated text stored in PostgreSQL (e.g., workflow step results, HITL summaries) is sanitized: HTML tags stripped, script injection patterns removed, maximum field lengths enforced.
+  3. **Content sanitization before display**: LLM-generated text displayed in HITL approval screens is HTML-escaped. No `innerHTML` or `dangerouslySetInnerHTML` — use text content only.
+  4. **No direct database writes**: LLM output never directly populates SQL queries. All LLM-derived data flows through typed interfaces and parameterized queries (Drizzle ORM).
+- **Phase 2**: Add content filtering classifier for harmful/inappropriate content; hallucination detection against ground truth; output token scanning for PII patterns.
+
+### 7.4 LLM Retry Cost Management
+
+- **Problem**: LLM retries (on timeout, 5xx, or provider fallback) incur duplicate token costs. Unlike MCP tool calls, LLM completions are non-idempotent — each retry generates a new response and is billed separately.
+- **Cost protection mechanisms**:
+  1. **Retry budget cap**: Maximum 2 retry attempts per LLM request (§2.3.3). Total cost exposure: 3× single request cost.
+  2. **Provider fallback cost awareness**: Fallback provider may have different per-token pricing. The LLM Gateway logs cost for both primary and fallback attempts.
+  3. **Inngest memoization**: At the workflow level, `step.run()` memoization prevents re-executing LLM steps on workflow replay. Only the first execution (and its retries) incur cost.
+  4. **Budget enforcement**: Daily ($50) and monthly ($500) caps (§7.2) are checked before each attempt, including retries. A retry that would exceed the budget is blocked.
+  5. **Exponential backoff on 429**: Rate limit responses (429) trigger backoff rather than immediate fallback, reducing unnecessary cost from hitting the secondary provider.
+- **Worst-case cost per request**: 3 attempts × max_tokens (4096) × highest provider rate = ~$0.50. With daily cap of $50, maximum ~100 worst-case requests per day.
+
 ---
 
 ## 8. Identity Service Architecture
@@ -1550,6 +1754,30 @@ async function hasPermission(userId: string, resource: string, action: string): 
 }
 ```
 
+#### 8.3.1 Access Control Matrix
+
+Mapping of API operations to required roles. `*` = any authenticated user. Deny-by-default: unlisted operations require `admin`.
+
+| Resource | Operation | Roles | Notes |
+|----------|-----------|-------|-------|
+| Health checks | GET /health/* | public | No auth required |
+| Auth | POST /auth/magic-link, /auth/callback | public | No auth required |
+| Workflows | list, get, create, update, delete | admin, user | Viewers excluded |
+| Workflows | validate | admin, user | Pre-deployment check |
+| Workflows | export | admin, user | Interop export |
+| HITL requests | list, get | * | Filtered by involvement |
+| HITL decisions | approve, reject, request-changes | * | Must hold valid HITL action token |
+| Audit logs | list, get | admin | Compliance access |
+| Audit exports | create, list, get, download | admin | Creates audit trail entry |
+| Files | upload-url, get, download-url, delete | * | Access inherited from linked entity (§9.7) |
+| Users | list | admin | User management |
+| User roles | assign | admin | Audited role changes |
+| Webhooks | list, create, update, delete, test | admin | Webhook configuration |
+| Inbound webhooks | receive | public | HMAC signature auth, not JWT |
+| Domain roles | list, create, update, delete | admin | Domain role management |
+
+> **Phase 1 Note**: Service-to-service auth is not applicable — Phase 1 is a monolith deployment. The Inngest Cloud → app boundary is secured via INNGEST_SIGNING_KEY (§14.8). Inbound webhooks use HMAC signature verification (§12.3). Phase 2: add internal API key scheme when services are split.
+
 ### 8.4 Session Management (Supabase Managed)
 
 Supabase Auth handles session management automatically:
@@ -1573,7 +1801,79 @@ async function validateSession(req: Request): Promise<User | null> {
 ### 8.5 Phase 2: WebAuthn/Passkeys
 
 Full WebAuthn support deferred to Phase 2. Supabase Auth roadmap includes passkey support; evaluate when available.
-```
+
+> **Secrets Management (Phase 1)**: Secrets are stored as encrypted environment variables on DigitalOcean App Platform (see RUNBOOK §4.3 for the full inventory). The BRD's reference to "HashiCorp Vault or equivalent" (BRD §8.1) describes the target architecture; Phase 1 uses DO App Platform's encrypted env var storage as an interim solution. Migration to a dedicated secrets manager is a Phase 2+ consideration triggered by: >20 secrets, need for dynamic secret rotation, or multi-cloud deployment.
+
+### 8.6 MFA Step-Up Flow
+
+- **FRD Requirement**: FRD references MFA enforcement for sensitive operations.
+- **Phase 1 Design**: Supabase Auth supports TOTP-based MFA (Time-based One-Time Password). The platform implements a **step-up authentication** pattern:
+  1. **Standard login**: Magic link or OAuth → session with `aal1` (Authenticator Assurance Level 1).
+  2. **MFA enrollment**: Users optionally enroll TOTP via Supabase MFA API. After enrollment, login produces `aal2`.
+  3. **Step-up trigger**: Sensitive operations require `aal2`. If current session is `aal1` and user has MFA enrolled, API returns `403` with `mfa_required` error code. Client prompts for TOTP verification.
+  4. **Sensitive operations requiring step-up**: Role assignment changes, webhook secret rotation, audit export, domain admin actions.
+- **Supabase MFA Integration**:
+  ```typescript
+  // check assurance level
+  const { data: { currentLevel } } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (currentLevel === 'aal1' && requiredLevel === 'aal2') {
+    return res.status(403).json({ error: 'MFA_REQUIRED', message: 'This action requires MFA verification' });
+  }
+  ```
+- **Phase 1 scope**: MFA is **optional enrollment**, not mandatory. Step-up is required only for the operations listed above. Phase 2: Evaluate mandatory MFA for admin roles.
+
+### 8.7 Supabase Session Configuration
+
+| Parameter | Value | Rationale |
+|---|---|---|
+| `jwt.exp` (access token lifetime) | 900s (15 min) | Short-lived access tokens limit exposure window |
+| Refresh token rotation | Enabled (one-time use) | Each refresh produces new access + refresh token pair |
+| Refresh token reuse interval | 10s | Grace period for concurrent requests using same refresh token |
+| Refresh token lifetime | 7 days (604,800s) | Balance between UX (stay logged in) and security |
+| Session idle timeout | None (Supabase default) | Idle timeout managed by refresh token expiry |
+| Max sessions per user | Unlimited (Supabase default) | Phase 1: no limit. Phase 2: consider limiting to 5 concurrent sessions |
+
+> **Configuration Location**: These values are configured in Supabase Dashboard → Authentication → Settings → Session. They are NOT managed in application code. Changes require Supabase dashboard access (admin only).
+
+> **JWT Lifetime Summary**: Access tokens expire after 15 minutes. Refresh tokens expire after 7 days with one-time-use rotation. HITL approval tokens have per-policy TTLs (24h–7d, see §4.1). JWKS public keys are cached for 1 hour with 24h stale-if-error (see §2.3.2 Identity Service).
+
+> **Rotation Cadence SSOT**: Secret rotation cadences are authoritatively documented in RUNBOOK §4.3. The ADD references rotation requirements but defers to the Runbook for specific cadences, procedures, and rollback steps. See also `docs/04-specs/configuration.md` §4 for environment variable naming conventions.
+
+### 8.8 Secret Rotation Cadences
+
+| Secret | Env Variable | Rotation Cadence | Procedure |
+|---|---|---|---|
+| Supabase JWT Secret | `SUPABASE_JWT_SECRET` | 90 days | Supabase Dashboard → Settings → JWT |
+| DO Spaces Access Key | `DO_SPACES_ACCESS_KEY`, `DO_SPACES_SECRET_KEY` | 180 days | DO Control Panel → API → Spaces Keys |
+| Novu API Key | `NOVU_API_KEY` | 180 days | Novu Dashboard → Settings → API Keys |
+| Inngest Signing Key | `INNGEST_SIGNING_KEY` | 180 days | Inngest Dashboard → Manage → Signing Key |
+| Inngest Event Key | `INNGEST_EVENT_KEY` | 180 days | Inngest Dashboard → Manage → Event Key |
+| HITL Signing Secret | `HITL_SECRET` | 180 days | Generate new HS256 key, deploy, invalidate old tokens |
+| Webhook HMAC Secrets | `WEBHOOK_SECRET_*` | 180 days | Regenerate per-source, notify webhook providers |
+| LLM Provider API Keys | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. | 90 days | Provider dashboard → API Keys |
+| Database URL | `DATABASE_URL` | On compromise only | DO Managed DB → Connection Pool → Reset |
+| Redis URL | `REDIS_URL` | On compromise only | DO Managed Redis → Reset Password |
+
+> **SSOT**: This table is the authoritative source for rotation cadences. The Runbook §4.3 contains step-by-step rotation procedures and rollback steps for each secret. See also `docs/04-specs/configuration.md` §4 for the complete environment variable inventory.
+
+### 8.9 Per-Secret Access Control
+
+| Secret | Accessed By | Access Method | Notes |
+|---|---|---|---|
+| `SUPABASE_URL`, `SUPABASE_ANON_KEY` | API Server | Env var (process.env) | Public key — safe to expose to client |
+| `SUPABASE_SERVICE_ROLE_KEY` | API Server | Env var (process.env) | Admin access — NEVER expose to client |
+| `SUPABASE_JWT_SECRET` | API Server | Env var (process.env) | JWT verification |
+| `DATABASE_URL` | API Server, Workflow Worker | Env var (process.env) | Connection string with credentials |
+| `REDIS_URL` | API Server, Workflow Worker | Env var (process.env) | Connection string with credentials |
+| `DO_SPACES_ACCESS_KEY/SECRET_KEY` | API Server | Env var (process.env) | File storage access |
+| `NOVU_API_KEY` | API Server | Env var (process.env) | Notification delivery |
+| `INNGEST_SIGNING_KEY` | API Server | Env var (process.env) | Inngest webhook verification |
+| `INNGEST_EVENT_KEY` | API Server, Workflow Worker | Env var (process.env) | Inngest event sending |
+| `HITL_SECRET` | API Server | Env var (process.env) | HITL token signing |
+| `WEBHOOK_SECRET_*` | API Server | Env var (process.env) | Per-source webhook HMAC |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | API Server (LLM Gateway) | Env var (process.env) | LLM provider access |
+
+> **Phase 1 Limitation**: All env vars are accessible to all processes on the same container. No per-component secret scoping exists. Phase 2: Consider DO App Platform component-level env var scoping or a secrets manager with per-service access policies.
 
 ---
 
@@ -1842,6 +2142,99 @@ async function enforceRetention(): Promise<void> {
 }
 ```
 
+#### 9.4.2 PII Data Retention and Lifecycle
+
+**FRD Reference**: BRD §2.2 (data retention framework), BRD §8.2 (Philippine DPA, DOLE, BIR)
+
+The platform provides a data lifecycle framework for all PII data types. Domain addendums may override with domain-specific policies (e.g., HR domain addendum §3.3).
+
+**Retention Periods by Data Type**:
+
+| Data Type | Classification | Retention Period | Legal Basis | Regulation |
+|-----------|---------------|-----------------|-------------|------------|
+| User account (email, name) | PII | Active account + 30 days post-closure | Contractual necessity | DPA RA 10173 |
+| Candidate profile (email, phone, address) | PII | Per domain policy (HR: consent withdrawal + 30 days) | Consent | DPA RA 10173 |
+| Salary/compensation data | Financial | 7 years from contract end | Legal obligation | BIR, DOLE |
+| Employment contracts | Financial | 7 years from contract end | Legal obligation | BIR, DOLE |
+| Trade execution records | Financial | 10 years | Legal obligation | Financial regulations |
+| Uploaded files (resumes, identity docs) | PII | Linked entity retention + 90 days | Same as linked entity | DPA RA 10173 |
+| Uploaded files (contracts, financial) | Financial | 7 years from upload | Legal obligation | BIR, DOLE |
+| HITL request/decision metadata | May contain PII | 7 years (inherits audit retention) | Legitimate interest | Compliance audit |
+| Session data | Quasi-PII | 24 hours after expiry | Contractual necessity | DPA RA 10173 |
+| Notification logs | May contain PII | 90 days | Legitimate interest | Operational |
+| LLM usage logs | Non-PII | 2 years | Legitimate interest | Cost tracking |
+| Audit logs | Contains anonymized PII | 7 years (default), domain overrides | Legal obligation | DPA, BIR, DOLE |
+| Application logs | May contain PII (redacted) | 30d hot / 90d warm / 1yr cold | Legitimate interest | Operational |
+| Analytics/aggregated data | Non-PII (anonymized) | Indefinite (must be fully anonymized, no PII) | Legitimate interest | N/A |
+
+> **BRD §2.2 clarification**: "Longer/indefinite retention for analytics data" applies ONLY to fully anonymized, aggregated data that cannot be re-identified. Any data containing PII or that could be linked to individuals must follow the PII retention periods above.
+
+**Deletion and Anonymization Procedures**:
+
+```typescript
+interface DataDeletionRequest {
+  subjectId: string;           // user or candidate ID
+  requestType: 'erasure' | 'account_closure';
+  requestedAt: Date;
+  completionDeadline: Date;    // 30 days from request (DPA requirement)
+}
+
+// deletion cascade across all storage locations
+async function executeDataDeletion(request: DataDeletionRequest): Promise<DeletionReport> {
+  const report: DeletionReport = { subjectId: request.subjectId, actions: [] };
+
+  // 1. Primary database: anonymize or delete PII fields
+  await db.users.anonymize(request.subjectId);           // email → hash, name → '[deleted]'
+  await db.candidates?.anonymize(request.subjectId);     // domain-specific
+  report.actions.push({ target: 'postgresql', status: 'anonymized' });
+
+  // 2. File storage: delete uploaded files linked to subject
+  const files = await db.files.findByOwner(request.subjectId);
+  for (const file of files) {
+    await s3.deleteObject(file.storagePath);
+    await db.files.delete(file.id);
+  }
+  report.actions.push({ target: 's3_files', status: 'deleted', count: files.length });
+
+  // 3. Redis cache: invalidate all cached data for subject
+  await redis.del(`user:${request.subjectId}:*`);
+  report.actions.push({ target: 'redis_cache', status: 'invalidated' });
+
+  // 4. Audit logs: anonymize actor_id references (do NOT delete — compliance requirement)
+  await db.auditLogs.anonymizeActor(request.subjectId);  // actor_id → null, metadata PII masked
+  report.actions.push({ target: 'audit_logs', status: 'anonymized' });
+
+  // 5. Notification logs: delete or anonymize
+  await db.notificationLogs.deleteByRecipient(request.subjectId);
+  report.actions.push({ target: 'notification_logs', status: 'deleted' });
+
+  // 6. Third-party systems: request deletion
+  //    - Sentry: user feedback deletion API
+  //    - Novu: subscriber deletion API
+  report.actions.push({ target: 'third_party', status: 'deletion_requested' });
+
+  // 7. Application logs: cannot selectively delete from log aggregators
+  //    Mitigation: PII redaction at source (§14.3.1) prevents PII in logs
+  report.actions.push({ target: 'application_logs', status: 'pii_redacted_at_source' });
+
+  // audit the deletion itself
+  await auditService.log({
+    action: 'DATA_DELETION_EXECUTED',
+    resourceType: 'data_subject',
+    metadata: { report, requestType: request.requestType },
+  });
+
+  return report;
+}
+```
+
+**DSAR (Data Subject Access Request) Process**:
+1. Subject requests data export via admin API or direct request
+2. System collects all data linked to subject across: users, candidates, files, audit logs, notification logs
+3. PII exported in JSON format with field descriptions
+4. Export audited (§9.5 pattern)
+5. Completion within 30 days (DPA requirement)
+
 ### 9.5 Audit Export with Integrity
 
 **FRD Reference**: FR-CORE-AUD-002
@@ -1889,7 +2282,7 @@ async function exportAuditLogs(params: AuditExport, requestedBy: string): Promis
   if (existing && existing.status === 'completed') {
     return {
       downloadUrl: generatePresignedUrl(`exports/${exportId}.${params.format}`),
-      checksum: existing.checksum,
+      checksumSha256: existing.checksumSha256,
       recordCount: existing.recordCount,
       idempotent: true,
     };
@@ -1911,8 +2304,8 @@ async function exportAuditLogs(params: AuditExport, requestedBy: string): Promis
     ? JSON.stringify(logs, null, 2)
     : convertToCSV(logs);
 
-  // compute checksum for integrity verification
-  const checksum = computeSHA256(content);
+  // compute checksum for integrity verification (FRD FR-CORE-AUD-002)
+  const checksumSha256 = computeSHA256(content);
 
   // store export metadata (idempotent via exportId)
   await db.auditExports.upsert({
@@ -1921,18 +2314,31 @@ async function exportAuditLogs(params: AuditExport, requestedBy: string): Promis
     requestedAt: new Date(),
     params,
     recordCount: logs.length,
-    checksum,
+    checksumSha256,
     status: 'completed',
     expiresAt: addDays(new Date(), 7),
   });
 
   return {
     downloadUrl: generatePresignedUrl(`exports/${exportId}.${params.format}`),
-    checksum,
+    checksumSha256,
     recordCount: logs.length,
   };
 }
 ```
+
+**Checkpoint and Recovery**: The audit export process has implicit checkpoints via idempotent operations:
+
+| Checkpoint | State After | Recovery on Crash |
+|-----------|-------------|-------------------|
+| Export ID generated | `audit_exports` row does not exist yet | Re-request generates same ID (deterministic); no side effects |
+| Audit action logged | Audit entry exists; export not started | Re-request finds no completed export; re-generates (audit log is idempotent via deterministic ID) |
+| Logs queried + content generated | In-memory only; not persisted | Lost on crash; re-request re-queries and re-generates |
+| Export upserted as `completed` | `audit_exports` row with checksum and metadata | Re-request finds completed export; returns cached result (idempotent) |
+
+**Recovery trigger**: Exports are user-initiated (API request). A crashed export leaves no `completed` row, so the next identical request within the 1-hour bucket regenerates it. No automatic retry or monitoring required — the user simply re-requests the export.
+
+**Data at risk**: Between log query and upsert, the generated content exists only in memory. On crash, the work is lost but can be safely re-executed (all operations are read-only or idempotent).
 
 ### 9.6 File Storage
 
@@ -2137,6 +2543,116 @@ async function generateDownloadUrl(fileId: string, userId: string): Promise<Resu
 }
 ```
 
+### 9.9 Access Log PII Policy
+
+- **Platform access logs** (DigitalOcean App Platform load balancer) contain: client IP addresses, request URLs (may contain UUIDs/IDs), User-Agent strings, and response codes.
+- **PII fields in access logs**:
+
+  | Field | PII Risk | Mitigation |
+  |---|---|---|
+  | Client IP | Yes (quasi-PII) | Phase 1: stored by DO LB, outside app control. Phase 2: evaluate IP anonymization |
+  | Request URL | Low (UUIDs only, no PII in query params by design) | API design ensures no PII in URL paths or query parameters |
+  | User-Agent | Low (browser fingerprinting risk) | Truncated in audit logs (§14.3.1) |
+  | Request/Response body | Not logged at LB level | Application logs redact PII (§14.3.1) |
+
+- **Policy**: Application-level access logging (Pino HTTP request logs) applies the PII redaction rules in §14.3.1. Infrastructure-level access logs (DO LB) are retained per DO's data retention policy and are outside application control.
+- **Phase 2**: Evaluate DO log forwarding with IP anonymization or request DO to implement GDPR-compliant log redaction.
+
+### 9.10 Log Retention Alignment
+
+| Log Type | Retention | Source of Truth | Notes |
+|---|---|---|---|
+| Application logs (Pino) | 30d hot / 90d warm / 1yr cold | Observability doc §3.4 | PII redacted at source |
+| Audit logs (PostgreSQL) | 7 years (default), domain overrides | ADD §9.4 | Append-only, anonymizable |
+| Infrastructure access logs (DO LB) | Per DO policy (~30 days) | DO platform default | Outside app control |
+| Inngest execution logs | Per Inngest retention policy | Inngest Cloud | Workflow step data |
+| Novu notification logs | Per Novu retention policy | Novu Cloud | Notification delivery records |
+| Error tracking (Sentry) | 90 days | Sentry plan default | PII stripped by beforeSend hook |
+
+> **Alignment Rule**: Application log retention (30d/90d/1yr) MUST NOT exceed audit log retention (7yr) for the same data. PII data in application logs is redacted at source (§14.3.1), making log retention a storage cost concern rather than a compliance concern. The Observability doc (`docs/05-guidelines/05d-Observability.md` §3.4) is the SSOT for application log retention tiers.
+
+### 9.11 Legal Basis per Data Type (GDPR Art. 6 / DPA RA 10173)
+
+| Data Type | Legal Basis | GDPR Article | DPA RA 10173 Basis | Notes |
+|---|---|---|---|---|
+| User account (email, name) | Contractual necessity | Art. 6(1)(b) | §12(a) — contract performance | Required for platform access |
+| Candidate PII (phone, address) | Consent | Art. 6(1)(a) | §12(a) — consent | Explicit consent at data collection |
+| Salary/compensation | Legal obligation | Art. 6(1)(c) | §12(c) — legal obligation | BIR/DOLE record-keeping requirements |
+| Employment contracts | Legal obligation | Art. 6(1)(c) | §12(c) — legal obligation | Labor law compliance |
+| Trade execution records | Legal obligation | Art. 6(1)(c) | §12(c) — legal obligation | Financial regulation |
+| Audit logs (anonymized) | Legitimate interest | Art. 6(1)(f) | §12(e) — legitimate interest | Compliance and security monitoring |
+| Session data | Contractual necessity | Art. 6(1)(b) | §12(a) — contract performance | Required for authentication |
+| LLM usage logs | Legitimate interest | Art. 6(1)(f) | §12(e) — legitimate interest | Cost tracking and budget enforcement |
+| Notification logs | Legitimate interest | Art. 6(1)(f) | §12(e) — legitimate interest | Delivery verification |
+| Analytics (anonymized) | Legitimate interest | Art. 6(1)(f) | §12(e) — legitimate interest | Must be fully anonymized |
+
+### 9.12 Consent Management
+
+- **Consent collection**: Consent is captured at the point of data collection via explicit UI consent checkboxes (not pre-checked). Each consent action records: subject ID, consent type (e.g., `candidate_data_processing`), timestamp, IP address (anonymized), and consent text version.
+- **Consent storage**: Consent records stored in PostgreSQL `public.consent_records` table. Consent is never inferred — always explicitly captured.
+- **Consent withdrawal**: Subjects can withdraw consent via: (1) Self-service UI (Phase 2), or (2) Admin-assisted DSAR request (Phase 1). Withdrawal triggers the data deletion cascade (§9.4.2) within 30 days.
+- **Consent granularity**: Consent is collected per-purpose (e.g., "process my application data", "send me notifications"), not blanket consent. Each purpose maps to specific data types and processing activities.
+- **Audit trail**: Consent grants and withdrawals are recorded as audit events (§9.2) with deterministic IDs for idempotency.
+
+### 9.13 Deletion Cascade Map
+
+When a data subject requests erasure (§9.4.2), deletions must cascade across all storage systems:
+
+| Storage System | Data Affected | Deletion Method | Verification |
+|---|---|---|---|
+| PostgreSQL (`public`) | `users` (email, name) | Anonymize: email → hash, name → '[deleted]' | Query returns anonymized data |
+| PostgreSQL (domain) | `candidates`, `contracts` | Anonymize or delete per domain policy | Domain-specific verification |
+| DO Spaces (S3) | Uploaded files (resumes, docs) | `DeleteObject` API call | HEAD returns 404 |
+| Redis | Session cache, user preferences | `DEL` with pattern `user:{id}:*` | Key scan returns empty |
+| Novu | Subscriber profile | Novu subscriber delete API | Subscriber lookup returns 404 |
+| Inngest | Workflow metadata referencing user | No direct deletion — data ephemeral in execution context | Event data auto-expires per Inngest retention |
+| Audit logs | Actor references | Anonymize `actor_id` (do NOT delete — compliance requirement) | actor_id is null/anonymized |
+| Application logs | PII-redacted at source | No action needed — PII not present in logs | Confirm via log search |
+| Sentry | Error context | `DELETE /api/0/issues/{id}/` or auto-expire (90d) | Issue lookup returns 404 |
+
+> **Cascade order**: PostgreSQL first (authoritative), then object storage, then cache, then third-party systems. Each step is logged as a checkpoint in the deletion workflow (Inngest function). Partial failures are retried individually — the workflow does not fail atomically.
+
+### 9.14 Infrastructure Budget Caps
+
+| Resource | Provider | Phase 1 Budget Cap | Free Tier Included | Exceed Behavior |
+|---|---|---|---|---|
+| Compute (App Platform) | DigitalOcean | $50/mo | $0 (pay-as-you-go) | Auto-scale stopped at 3 containers; alert at 80% |
+| PostgreSQL (Managed DB) | DigitalOcean | $15/mo | $0 (smallest plan) | No auto-upgrade; manual plan change required |
+| Redis (Managed) | DigitalOcean | $15/mo | $0 (smallest plan) | No auto-upgrade; eviction policy activates |
+| Object Storage (Spaces) | DigitalOcean | $5/mo | 250 GiB included | $0.02/GiB overage |
+| LLM API calls | OpenAI, Anthropic, Google | $50/day, $500/mo per domain | Varies by provider | Budget enforcement blocks requests (§7.2) |
+| Notifications (Novu) | Novu Cloud | $0/mo | 10K events/mo | See §9.15 |
+| Workflow execution (Inngest) | Inngest Cloud | $0/mo | 50K steps/mo | See §9.15 |
+| Error tracking (Sentry) | Sentry | $0/mo | 5K errors/mo | Events dropped after quota |
+
+> **Total Phase 1 infrastructure budget target**: ~$85-100/mo (excluding LLM API costs). LLM costs are domain-budgeted separately.
+
+### 9.15 SaaS Free-Tier Exceed Behavior
+
+| SaaS | Free Tier Limit | Exceed Behavior | Monitoring | Mitigation |
+|---|---|---|---|---|
+| **Novu Cloud** | 10,000 events/mo | Notifications silently dropped (no error returned) | Novu dashboard usage metrics; application-level delivery rate monitoring | Phase 2: self-host Novu ($20/mo) |
+| **Inngest Cloud** | 50,000 steps/mo | New function invocations rejected; in-flight workflows complete | Inngest dashboard usage; application health check monitors step failures | Upgrade to Pro tier ($20/mo) or self-host |
+| **Supabase Auth** | 50,000 MAU | New signups rejected; existing sessions continue | Supabase dashboard MAU counter | Well above Phase 1 needs (~10-50 users) |
+| **Sentry** | 5,000 errors/mo | New error events dropped; existing data retained | Sentry quota usage dashboard | Increase sample rate; evaluate Sentry alternatives |
+
+> **Critical risk**: Novu's silent-drop behavior means the platform has no signal when notifications are not delivered. Application-level monitoring must track expected vs. actual notification delivery rates.
+
+### 9.16 Non-LLM Cost Attribution Model
+
+- **Problem**: LLM costs are tracked per-domain via `llm_usage_logs` (§7.2). Infrastructure costs (compute, database, storage) are shared across domains and lack per-tenant attribution.
+- **Phase 1 approach**: Static allocation based on expected usage split:
+
+  | Resource | Crypto Domain % | HR Domain % | Platform Core % | Basis |
+  |---|---|---|---|---|
+  | Compute (API) | 40% | 40% | 20% | Estimated request volume |
+  | PostgreSQL | 30% | 40% | 30% | Estimated data volume |
+  | Redis | 50% | 20% | 30% | MCP idempotency keys (crypto-heavy) |
+  | Object Storage | 10% | 70% | 20% | HR document uploads dominate |
+  | Novu notifications | 30% | 50% | 20% | HR has more notification types |
+
+- **Phase 2**: Dynamic cost attribution via per-domain resource tagging: PostgreSQL query tagging (`SET application_name`), Redis key prefix accounting, S3 bucket-per-domain, compute request routing metrics.
+
 ---
 
 ## 10. Deployment Architecture
@@ -2207,6 +2723,85 @@ services:
 - **Decision**: Use DigitalOcean App Platform
 - **Status**: Active
 - **Review Trigger**: Any K8s upgrade trigger met, or quarterly review
+
+### 10.4 SLA Commitments and Measurement
+
+#### 10.4.1 HITL Latency Measurement Point
+
+- **BRD SLO**: "HITL delivery latency <10s P95"
+- **Measurement point**: From the moment `step.waitForEvent()` is called (HITL request created) to the moment the approval notification is **delivered to the notification channel** (Novu delivery confirmation or Telegram/email send confirmation).
+- **What is NOT measured**: Approver response time (human latency), notification transport delay (email delivery time from provider to inbox), client-side rendering.
+- **Instrumentation**: OpenTelemetry span from `hitl.request.created` event to `notification.delivered` event. Span attributes: `hitl.request_id`, `notification.channel`, `notification.delivery_status`.
+
+#### 10.4.2 Audit Integrity — Phase 1 Scope
+
+> **Audit Integrity (Phase 1)**: The Phase 1 audit system guarantees **completeness** (every auditable action produces an audit entry), NOT **tamper-proofness** (cryptographic proof that entries have not been modified). Completeness is enforced by: deterministic audit IDs preventing missed entries on retry (§9.3), `REVOKE UPDATE, DELETE` on `audit_logs` table preventing application-level modification, and append-only insert pattern. Tamper-proofness (hash-chaining, external anchoring) is deferred to Phase 3+ when regulatory compliance demands it (§9.3 "Phase 3+: Cryptographic Hash-Chaining"). The `audit_integrity > 99.9%` SLO in BRD §5 measures completeness: ratio of expected audit events (derived from auditable actions) to actual audit entries.
+
+#### 10.4.3 PostgreSQL SPOF — Error Budget Allowance
+
+> **Accepted Risk — PostgreSQL Single Point of Failure**: PostgreSQL is a single shared instance in Phase 1 (§2.3.2). This is a known SPOF that can cause total platform outage. This risk is accepted within the error budget because: (1) BRD SLO targets >99% monthly uptime (~7.3h allowed downtime/month). DigitalOcean Managed Database SLA provides 99.95% uptime, which is within budget. (2) RPO <24h is met by automated daily backups. (3) RTO <4h is documented in RUNBOOK §8.5 (database recovery). (4) Phase 2 mitigation: upgrade to HA-tier managed database ($30/mo → $60/mo) for automatic failover, reducing SPOF to a multi-region failure scenario. The error budget allows this tradeoff because Phase 1 is pre-production/early production with low user volume.
+
+#### 10.4.4 Novu Single-Path Acceptance
+
+> **Accepted Risk — Single Notification Provider**: Novu Cloud is the sole notification delivery path (§2.3.2 Notification Bus). No fallback SMTP, no backup Telegram bot. Acceptance rationale: (1) HITL TTL timeout path provides a safety net — workflows do not permanently stall if notifications fail. (2) Adding a fallback notification path adds ~1 week of development with marginal reliability improvement. (3) Novu Cloud availability has been adequate for similar-scale projects. Phase 2: If Novu reliability becomes an issue, add direct SMTP fallback for critical HITL notifications.
+
+#### 10.4.5 Database Connection Pool Calculation
+
+| Parameter | Value | Notes |
+|---|---|---|
+| DO Managed DB max connections | 25 (db-s-1vcpu-1gb plan) | Plan-determined limit |
+| Reserved for superuser/maintenance | 3 | DO reserves for replication and monitoring |
+| Available for application | 22 | 25 - 3 |
+| API server pool size | 10 | Per container |
+| Workflow worker pool size | 5 | Per container |
+| API server containers (max) | 3 | Auto-scale limit |
+| Workflow worker containers | 1 | Single worker Phase 1 |
+| **Maximum application connections** | **3 × 10 + 1 × 5 = 35** | **Exceeds available (22)** |
+
+> **CRITICAL**: Maximum scaled connections (35) exceed available connections (22). Mitigation: (1) API pool size should be set to `Math.floor(22 / (maxContainers + workers))` = `Math.floor(22/4)` = 5 per container. (2) Or use a connection pooler (PgBouncer on DO) to multiplex. (3) Phase 1 with 1 API + 1 worker = 15 connections, which is within budget. **Action**: Set pool size to 5 per container to stay safe at max scale.
+
+#### 10.4.6 Redis Memory Budget
+
+| Consumer | Key Pattern | Estimated Keys | Estimated Memory | TTL |
+|---|---|---|---|---|
+| MCP idempotency | `mcp:idempotency:*` | ~1,000 active | ~2 MiB | 24h |
+| MCP cache | `mcp:cache:*` | ~500 active | ~10 MiB | 60s–24h |
+| Webhook dedup | `webhooks:processed:*` | ~5,000 active | ~1 MiB | 7d |
+| Session cache | `sess:*` | ~100 active | ~0.5 MiB | JWT lifetime |
+| BullMQ jobs | `bull:*` | ~200 active | ~5 MiB | Job lifetime |
+| Rate limit counters | `rl:*` | ~50 active | ~0.1 MiB | Window duration |
+| **Total estimated** | | **~6,850** | **~19 MiB** | |
+
+- **Available memory**: 1 GiB (db-s-1vcpu-1gb plan). Actual usable: ~800 MiB after Redis overhead.
+- **Eviction policy**: `allkeys-lru` — when memory is full, evict least-recently-used keys across all consumers.
+- **Alert threshold**: Alert at 70% memory usage (560 MiB). Investigate at 80%.
+- **OOM prevention**: BullMQ job accumulation is the highest risk for OOM (unbounded job data). Mitigation: configure `maxStalledCount` and `removeOnComplete`/`removeOnFail` with age limit (7 days).
+
+#### 10.4.7 Auto-Scaling Triggers
+
+| Metric | Scale-Up Trigger | Scale-Down Trigger | Cooldown |
+|---|---|---|---|
+| CPU usage (per container) | >70% sustained for 5 min | <30% sustained for 15 min | 5 min between scale events |
+| Memory usage (per container) | >80% sustained for 5 min | <40% sustained for 15 min | 5 min |
+| HTTP request queue depth | >50 pending requests | <10 pending requests | 3 min |
+| Response latency (P95) | >2s sustained for 5 min | <500ms sustained for 15 min | 5 min |
+
+- **Scale range**: 1–3 API server containers (DO App Platform limit for basic plan).
+- **Worker scaling**: Workflow worker does NOT auto-scale in Phase 1 (single instance). Phase 2: Add Inngest-based scaling signals.
+- **Configuration**: DO App Platform auto-scaling is configured in the App Spec YAML (`instance_count`, `instance_size_slug`, `autoscaling`).
+
+#### 10.4.8 SLO-Alert Mapping
+
+| SLO (BRD §5) | Target | Alert Rule | Severity | Runbook |
+|---|---|---|---|---|
+| Workflow success rate | >99% monthly | `workflow_success_rate < 0.99` over 1h window | SEV-2 | RUNBOOK §8.1 |
+| HITL delivery latency | <10s P95 | `hitl_delivery_p95 > 10s` over 15min window | SEV-2 | RUNBOOK §8.2 |
+| API availability | >99.5% monthly | `api_5xx_rate > 0.5%` over 5min window | SEV-1 | RUNBOOK §8.3 |
+| MCP tool success rate | >95% per tool | `mcp_tool_error_rate > 5%` over 30min window | SEV-3 | RUNBOOK §8.4 |
+| Audit integrity | >99.9% | `audit_missing_events > 0` daily check | SEV-1 | RUNBOOK §8.7 |
+| LLM budget compliance | 100% enforcement | `llm_daily_spend > $45` (90% threshold) | SEV-3 | RUNBOOK §8.8 |
+
+> **Implementation Note**: Alert rules are implemented via Grafana Cloud alerting (see Observability doc §4). Phase 1 uses threshold-based alerting. Phase 2: Add burn-rate alerting for multi-window SLO tracking.
 
 ---
 
@@ -2529,6 +3124,37 @@ const webhookWorker = new Worker('send-webhook', async (job) => {
 });
 ```
 
+#### 12.2.3 Outbound Webhook Event Payload Schema
+
+All outbound webhook payloads follow a standard envelope. Consumers MUST use the envelope structure for integration; the `data` field varies by event type.
+
+**Standard Envelope**:
+```typescript
+interface WebhookEventPayload<T = Record<string, unknown>> {
+  id: string;              // unique event ID (for deduplication via X-Webhook-ID)
+  event: string;           // event type (e.g., 'workflow.completed')
+  timestamp: string;       // ISO 8601 event timestamp
+  workflowId: string;      // originating workflow ID
+  data: T;                 // event-specific payload (see below)
+}
+```
+
+**Event Types and Payload Schemas**:
+
+| Event Type | Trigger | `data` Fields |
+|------------|---------|---------------|
+| `workflow.completed` | Workflow reaches terminal state | `{ instanceId, status: 'completed' \| 'failed', result?, error?, duration }` |
+| `workflow.failed` | Workflow exhausts retries | `{ instanceId, status: 'failed', error, failedStep, attemptCount }` |
+| `hitl.requested` | HITL approval gate reached | `{ requestId, requestType, summary, expiresAt, approvalUrl }` |
+| `hitl.approved` | HITL decision made (approved) | `{ requestId, decision: 'approved', decidedBy, decidedAt, comment? }` |
+| `hitl.rejected` | HITL decision made (rejected) | `{ requestId, decision: 'rejected', decidedBy, decidedAt, comment? }` |
+| `entity.created` | Domain entity created by workflow | `{ entityType, entityId, domain, createdBy }` |
+| `entity.updated` | Domain entity updated by workflow | `{ entityType, entityId, domain, changes: string[], updatedBy }` |
+
+**Schema Compatibility**: Outbound webhook event payloads follow the same backward-compatible evolution rules as internal events (see common-patterns.md §5.3). New optional fields may be added to `data` without version change. Breaking changes (field removal, type change) require a new event type name.
+
+**Consumer Contract**: Consumers MUST ignore unknown fields in the `data` payload (forward compatibility). Consumers SHOULD validate against the documented schema but MUST NOT fail on additional fields.
+
 ### 12.3 Inbound Webhooks
 
 **FRD Reference**: FR-CORE-INT-002
@@ -2625,6 +3251,23 @@ router.post('/api/v1/webhooks/inbound/:sourceId', async (req, res) => {
   res.status(200).json({ received: true });
 });
 ```
+
+### 12.4 Event Dead-Letter Queue (DLQ) Strategy
+
+- **Scope**: Events that fail schema validation, exceed retry limits, or encounter permanent processing errors are routed to a dead-letter queue for inspection and manual replay.
+- **DLQ routing**:
+
+  | Event Source | Failure Type | DLQ Mechanism | Retention |
+  |---|---|---|---|
+  | Inngest events | Schema validation failure | Inngest `system.event.dlq` function | 30 days |
+  | Inngest events | Step retry exhaustion | Inngest built-in failure handling | Per Inngest retention |
+  | BullMQ jobs | Max attempts exceeded | BullMQ `failedReason` + move to failed set | 7 days |
+  | Inbound webhooks | Signature verification failure | Logged and rejected (HTTP 401) | Application logs (30d) |
+  | Inbound webhooks | Processing error after dedup | Retry up to 3x, then log as failed delivery | 7 days |
+
+- **DLQ inspection**: Phase 1: Admin API endpoint to list and inspect DLQ entries. Phase 2: Grafana dashboard for DLQ monitoring.
+- **Manual replay**: Admin can replay a DLQ event via API endpoint. Replay uses the original event ID for idempotency — already-processed events are safely deduplicated.
+- **Alerting**: Alert when DLQ depth exceeds 10 events in 1 hour (indicates systematic failure).
 
 ---
 
@@ -2733,6 +3376,64 @@ When documenting a new trust-boundary operation, consider these retry sources:
 **Max retry depth calculation**: Multiply all applicable sources.
 Example: client 3x × LB 2x × workflow 3x = 18x potential executions.
 
+### 13.6 Workflow POST Idempotency
+
+- **Problem**: `POST /api/v1/workflows` creates a new workflow definition. Without idempotency, client retries on network timeout could create duplicate definitions.
+- **Strategy**: Client-generated `Idempotency-Key` header (IETF draft standard).
+- **Mechanism**:
+  1. Client generates a UUID v4 and sends as `Idempotency-Key` header.
+  2. Server checks Redis for existing key → if found, return cached response (201 or original error).
+  3. If not found, process request, cache response in Redis with 24h TTL, return 201.
+  4. If `Idempotency-Key` is absent, request is processed normally (no dedup).
+- **Response caching**: Both success (201) and client error (4xx) responses are cached. Server errors (5xx) are NOT cached (allow retry).
+- **Window**: 24 hours (Redis TTL on idempotency key).
+
+### 13.7 Role Assignment Idempotency
+
+- **Endpoint**: `PUT /api/v1/users/:userId/roles` (assign roles to user).
+- **Semantics**: PUT with full replacement — the request body contains the complete list of roles. The server replaces existing roles with the provided set.
+- **Idempotency**: Inherently idempotent via PUT semantics. Sending the same role set twice produces the same result. No `Idempotency-Key` needed.
+- **Upsert behavior**: `DELETE FROM user_roles WHERE user_id = $1; INSERT INTO user_roles (user_id, role) VALUES ...` within a transaction.
+- **Audit**: Each role change (add or remove) generates an audit event with the previous and new role sets.
+
+### 13.8 API Deprecation and Sunset Policy
+
+- **Current version**: `v1` (all endpoints under `/api/v1/`).
+- **v1 support commitment**: v1 will be supported for a minimum of **12 months** after v2 general availability. During the overlap period, both v1 and v2 endpoints are operational.
+- **Sunset signaling**: When v2 is released, v1 responses include `Sunset` header (RFC 8594) with the EOL date, and `Deprecation` header (RFC 9745) with the deprecation date.
+- **Breaking change definition**: See §13.9.
+- **Migration support**: v1 → v2 migration guide published at v2 GA. Automated migration tooling provided where feasible.
+- **Timeline** (projected):
+
+  | Phase | API Version | Status |
+  |---|---|---|
+  | Phase 1 | v1 | Active (current) |
+  | Phase 2 | v1 | Active |
+  | Phase 3 | v1 + v2 | v1 deprecated, v2 active |
+  | Phase 3 + 12mo | v2 | v1 sunset |
+
+### 13.9 Backward Compatibility Rules
+
+**Non-breaking changes** (allowed in minor versions, no version bump):
+- Adding new optional fields to response bodies
+- Adding new optional query parameters
+- Adding new endpoints
+- Adding new enum values to response fields (consumers MUST handle unknown values)
+- Adding new webhook event types
+- Relaxing validation constraints (accepting wider input)
+
+**Breaking changes** (require major version bump, v1 → v2):
+- Removing or renaming existing response fields
+- Changing field types (string → number, etc.)
+- Removing or renaming endpoints
+- Adding required fields to request bodies
+- Changing error response structure
+- Tightening validation constraints (rejecting previously-valid input)
+- Changing pagination strategy (cursor format, default limits)
+- Removing enum values from response fields
+
+> **Consumer contract**: API consumers MUST ignore unknown fields in response bodies (forward compatibility). Consumers SHOULD NOT depend on field ordering. Consumers MUST handle new enum values gracefully (log and skip, not crash).
+
 ---
 
 ## 14. Security Threat Analysis
@@ -2793,13 +3494,40 @@ This section applies STRIDE-based threat modeling to the platform's attack surfa
 | **T** | Unauthorized data modification | Single-owner write model per table (§9.1), audit logging on all mutations (§9.2) | Database admin has direct write access |
 | **R** | Data modification without trail | All mutations create audit entries with deterministic IDs (§9.2-9.3); append-only enforcement | N/A |
 | **I** | Bulk data exfiltration | RBAC limits access; audit export audited (§9.5); API pagination limits per-request volume | Authorized user with export access — no anomaly detection |
-| **I** | PII leakage in application logs | Pino logger with field redaction (Coding Guidelines §6.1) | PII fields (email, phone) not in default redaction list |
+| **I** | PII leakage in application logs | Pino logger with comprehensive PII redaction (see §14.3.1) | Unstructured PII in free-text error messages |
 | **I** | Cross-schema data access | Schema isolation per domain (§9.1), application-level tenant context | Shared PostgreSQL — cross-schema queries possible with connection credentials |
 | **I** | Backup data exposure | Managed daily backups (Runbook §8.5), encrypted at rest (BRD §8.1) | Backup restoration to unauthorized environment |
 | **D** | Database resource exhaustion | Connection pool limits, statement timeouts (§2.3.2) | Single shared instance — cross-domain contention |
 | **E** | Privilege escalation via domain role | Domain roles scoped to specific domain (§8.3), admin-only role assignment | Cross-domain escalation if isolation misconfigured |
 
-> **Accepted Residual Risk**: Pino log redaction covers `password`, `token`, `secret` but not PII fields. Configure Pino redaction paths for all TSD §5.2 PII-classified fields before production deployment.
+#### 14.3.1 PII Handling in Logs and Telemetry
+
+**Application Log Redaction (Pino)**:
+Pino logger redaction paths cover both credentials AND PII fields:
+```typescript
+const redactPaths = [
+  // credentials (existing)
+  'password', 'token', 'secret', 'authorization', 'cookie', 'apiKey',
+  // PII fields (TSD §5.2 classification)
+  '*.email', '*.name', '*.firstName', '*.lastName', '*.phone',
+  '*.address', '*.ssn', '*.creditCard',
+  // nested request context
+  'req.headers.authorization', 'req.headers.cookie',
+  'input.email', 'input.name', 'input.phone', 'input.address',
+];
+```
+
+**Audit Log PII Handling**:
+- `ip_address`: Stored with last octet zeroed for anonymization (e.g., `192.168.1.0/24`). Full IP retained only for the first 24 hours in a separate `ip_address_full` column for abuse detection, then automatically nulled by a scheduled job.
+- `user_agent`: Truncated to browser family and major version (e.g., `Chrome/120`) — no full fingerprint stored.
+- `metadata` (JSONB): PII fields within metadata are automatically masked before storage using the same redaction allowlist. FRD FR-CORE-AUD-001: "Sensitive PII in metadata is automatically masked or hashed based on configuration."
+
+**Third-Party Export Filtering**:
+- OTLP export pipeline (Grafana Cloud/Honeycomb): Application-level Pino redaction applies before log emission. No raw PII reaches the OTLP collector.
+- Sentry: `sanitizeForLogging()` function strips PII fields (email, name, phone, address) from error context before `captureException()`. Sentry SDK `beforeSend` hook provides secondary redaction.
+- Access logs (DO App Platform LB): IP addresses in infrastructure access logs are outside application control. Phase 2: evaluate DO log forwarding with IP anonymization.
+
+> **Residual Risk**: Unstructured PII in free-text error messages cannot be caught by field-level redaction. Developers must follow Observability guideline §11.1 (PII should "Never" be logged). Phase 2: add regex-based PII scanning in the OTLP pipeline.
 
 > **Accepted Residual Risk**: No anomaly detection for bulk data access patterns. Phase 2: implement audit-based threshold alerts on large query result sets and export operations.
 
@@ -2840,7 +3568,30 @@ LangGraph.js runs inside Inngest `step.run()` activities for AI reasoning tasks 
 | **D** | Cost manipulation via token-maximizing prompts | Daily/monthly budget caps (§7.2) | Attacker staying below threshold |
 | **E** | Jailbreaking → unauthorized tool calls | MCP tool calls subject to idempotency (§5.1.1) and HITL gates (§5.1 `requiresApproval`) | Sophisticated jailbreak bypassing content filters |
 
-> **Accepted Residual Risk (Phase 1)**: Direct and indirect prompt injection are unmitigated at the input layer. Compensating controls: (1) HITL approval gates provide human verification, (2) MCP idempotency keys prevent duplicate tool calls, (3) schema validation constrains tool argument structure. **Phase 2**: add prompt injection detection, output validation guardrails, and structured output enforcement.
+#### 14.5.1 LLM Safety Envelope
+
+**Prompt-Injection Defenses (Phase 1)**:
+- **System/user message separation**: All LLM requests use provider SDK message arrays with distinct `system` and `user` roles. User-supplied data is NEVER concatenated into system prompts.
+- **Input boundary markers**: System prompts use delimiter tokens (`<<<USER_DATA>>>...<<<END_USER_DATA>>>`) to structurally separate trusted instructions from untrusted input.
+- **MCP data isolation**: Data retrieved from MCP tools is placed in `user` role messages, not `system` role, preventing indirect prompt injection from overriding system instructions.
+- **Compensating controls**: HITL approval gates verify human oversight of all LLM-influenced decisions (§4.1); MCP idempotency keys prevent duplicate tool calls (§5.1.1); Zod schema validation constrains tool argument structure (§5.3).
+- **Phase 2**: Add regex-based injection pattern scanning, prompt injection detection classifier, and anomaly monitoring for unusual prompt patterns.
+
+**Output Validation (Phase 1)**:
+- **Structured output enforcement**: All LLM completion requests specify JSON response format via provider SDK `response_format` parameter. Responses are parsed and validated against Zod schemas before use in workflow logic.
+- **Schema-invalid rejection**: Responses that fail Zod validation are treated as LLM errors, triggering provider fallback (§7.1) or workflow error path.
+- **No direct user display**: LLM responses in Phase 1 flow into workflow context and HITL approval screens, not directly to end users. Human approvers verify LLM recommendations before action.
+- **Phase 2**: Add content filtering for harmful/inappropriate content, hallucination detection against ground truth data, and output sanitization for any user-facing LLM responses.
+
+**Fallback Strategy**: Provider fallback on 429/5xx errors (§7.1). Budget exceeded returns explicit `Result.err` that workflows handle gracefully.
+
+**Token/Cost Limits**:
+- Per-domain daily ($50) and monthly ($500) budget caps with enforcement (§7.2)
+- Per-request: `max_tokens` parameter set per workflow step (default: 4096 output tokens)
+- Per-user rate limits: Deferred to Phase 2 (Phase 1 workflows are system-initiated, not user-triggered in real-time)
+- Provider-side rate limits: Handled via retry with exponential backoff and provider fallback
+
+> **Residual Risk (Phase 1)**: Prompt injection defenses rely on structural separation (system/user messages, delimiter tokens) and compensating controls (HITL). No active injection detection or content-based filtering exists. Phase 2 adds detection classifiers and output guardrails.
 
 ### 14.6 File Upload & Storage
 
@@ -2908,10 +3659,10 @@ The Inngest SDK serves an HTTP endpoint that receives events from Inngest Cloud 
 | ID | Surface | Risk | Likelihood | Impact | Status | Phase |
 |----|---------|------|------------|--------|--------|-------|
 | RR-1 | MCP §14.4 | Env secret exfiltration via compromised npm MCP server | Medium | Critical | **Pre-production blocker** — SP-06 | 1 |
-| RR-2 | LLM §14.5 | Direct prompt injection via user-supplied data | Medium | High | Accepted — HITL compensating control | 1 |
-| RR-3 | LLM §14.5 | Indirect prompt injection via MCP-retrieved data | Low | High | Accepted — schema validation | 1 |
+| RR-2 | LLM §14.5 | Direct prompt injection via user-supplied data | Medium | High | Mitigated — structural separation + HITL (§14.5.1); no active detection | 2 (injection classifier) |
+| RR-3 | LLM §14.5 | Indirect prompt injection via MCP-retrieved data | Low | High | Mitigated — MCP data in user role + schema validation (§14.5.1) | 2 (content filtering) |
 | RR-4 | HITL §14.2 | HS256 symmetric key compromise | Low | Critical | Accepted — encrypted storage, rotation | 2 (asymmetric) |
-| RR-5 | PII §14.3 | PII leakage in application logs | Medium | Medium | **Pre-production blocker** — extend Pino redaction | 1 |
+| RR-5 | PII §14.3 | PII leakage in application logs | Low | Medium | Mitigated — comprehensive Pino redaction (§14.3.1); residual risk: unstructured free-text PII | 2 (regex PII scanning) |
 | RR-6 | PII §14.3 | No bulk exfiltration detection | Low | High | Accepted — audit logging covers trail | 2 (anomaly detection) |
 | RR-7 | Webhooks §14.7 | Outbound SSRF via user-supplied URL | Medium | Medium | **Pre-production blocker** — URL validation | 1 |
 | RR-8 | File §14.6 | Content-type spoofing | Low | Low | Accepted | 1 |

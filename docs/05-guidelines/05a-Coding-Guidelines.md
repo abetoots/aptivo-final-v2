@@ -685,7 +685,16 @@ export const logger = pino({
     environment: env.NODE_ENV,
   },
   timestamp: () => `,"timestamp":"${new Date().toISOString()}"`,
-  redact: ['password', 'token', 'secret', 'authorization', 'cookie'],
+  redact: [
+    // credentials
+    'password', 'token', 'secret', 'authorization', 'cookie', 'apiKey',
+    // PII fields (ADD §14.3.1, TSD §5.2 classification)
+    '*.email', '*.name', '*.firstName', '*.lastName', '*.phone',
+    '*.address', '*.ssn', '*.creditCard',
+    // nested request context
+    'req.headers.authorization', 'req.headers.cookie',
+    'input.email', 'input.name', 'input.phone', 'input.address',
+  ],
 });
 
 // create child logger with request context

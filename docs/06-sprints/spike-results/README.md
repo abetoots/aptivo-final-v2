@@ -11,23 +11,23 @@ This directory contains the results of Sprint 0 technical spikes.
 
 ## Spike Status Overview
 
-| Spike | Name | Status | Owner | Security-Critical |
-|-------|------|--------|-------|-------------------|
-| SP-01 | Inngest + AgentKit | Pending | Senior | |
-| SP-02 | Inngest HITL | Pending | Senior | |
-| SP-03 | Supabase Auth | Pending | Web Dev 1 | |
-| SP-04 | Novu Integration | Pending | Web Dev 2 | |
-| SP-05 | MCP stdio Transport | Pending | Senior | |
-| SP-06 | MCP Security | Pending | Senior | ⚠️ Yes |
-| SP-07 | Durability at Scale | Pending | Senior | |
-| SP-08 | LLM Streaming Costs | Pending | Web Dev 2 | |
-| SP-09 | Schema Isolation | Pending | Web Dev 1 | |
-| SP-10 | Circuit Breaker + Inngest | Pending | Web Dev 1 | |
-| SP-11 | HITL Token Security | Pending | Web Dev 2 | ⚠️ Yes |
-| SP-12 | E2E Latency | Pending | Senior | |
-| SP-13 | MCP Supply-Chain Integrity | Pending | Senior | ⚠️ Yes |
-| SP-14 | Event Authenticity & Anti-Replay | Pending | Senior | ⚠️ Yes |
-| SP-15 | Third-Party Degradation & Fallback | Pending | Web Dev 1 | |
+| Spike | Name | Status | Owner | Security-Critical | WARNINGs Validated |
+|-------|------|--------|-------|-------------------|--------------------|
+| SP-01 | Inngest + AgentKit | Pending | Senior | | S7-W9 |
+| SP-02 | Inngest HITL | Pending | Senior | | S7-W8, S7-W20 |
+| SP-03 | Supabase Auth | Pending | Web Dev 1 | | S7-W3, S7-W21 |
+| SP-04 | Novu Integration | Pending | Web Dev 2 | | T1-W24, S3-W7 |
+| SP-05 | MCP stdio Transport | Pending | Senior | | — |
+| SP-06 | MCP Security | Pending | Senior | ⚠️ Yes | — |
+| SP-07 | Durability at Scale | Pending | Senior | | S5-W6, S5-W8, S5-W12 |
+| SP-08 | LLM Streaming Costs | Pending | Web Dev 2 | | S7-W18 |
+| SP-09 | Schema Isolation | Pending | Web Dev 1 | | S7-W7, S7-W19 |
+| SP-10 | Circuit Breaker + Inngest | Pending | Web Dev 1 | | S7-W2, S7-W13, S7-W23 |
+| SP-11 | HITL Token Security | Pending | Web Dev 2 | ⚠️ Yes | — |
+| SP-12 | E2E Latency | Pending | Senior | | — |
+| SP-13 | MCP Supply-Chain Integrity | Pending | Senior | ⚠️ Yes | — |
+| SP-14 | Event Authenticity & Anti-Replay | Pending | Senior | ⚠️ Yes | S7-W10, S7-W11 |
+| SP-15 | Third-Party Degradation & Fallback | Pending | Web Dev 1 | | S6-W8, S7-W4, S7-W5, S7-W6, S7-W12, S7-W15, S7-W16, S7-W17, S7-W22 |
 
 **Note**: Security-critical spikes (SP-06, SP-11, SP-13, SP-14) require **implemented mitigations**, not just documentation, to pass.
 
@@ -67,6 +67,12 @@ This directory contains the results of Sprint 0 technical spikes.
 ## Decision
 
 [Pass/Fail decision and rationale]
+
+## WARNINGs Validated
+
+| WARNING | Finding | Result | Closed? |
+|---------|---------|--------|---------|
+| [ID] | [Finding summary] | [Pass/Fail + evidence] | [Yes/No] |
 
 ## Follow-up Actions
 

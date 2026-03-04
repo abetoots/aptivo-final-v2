@@ -2,9 +2,9 @@
 id: RUNBOOK-DEPLOYMENT
 title: 6.a Deployment & Operations
 status: Draft
-version: 2.1.0
+version: 2.2.0
 owner: "@owner"
-last_updated: "2026-02-03"
+last_updated: "2026-03-04"
 parent: ../03-architecture/platform-core-add.md
 ---
 
@@ -20,7 +20,7 @@ Last updated time: January 15, 2026
 
 _Aptivo Agentic Platform_
 
-_v2.1.0 – [February 3, 2026]_
+_v2.2.0 – [March 4, 2026]_
 
 _Aligned with: TSD v3.0.0, ADD v2.0.0, Coding Guidelines v3.0.0, Testing Strategies v2.0.0_
 
@@ -64,10 +64,10 @@ The system uses a container-based deployment model with progressive delivery:
 | -------------------- | ------------------------------------------------- | ------------- |
 | Application Services | Rolling deploy with instant rollback (DO App Platform) | < 5 minutes   |
 | Database Migrations  | Forward-only with rollback scripts                | < 15 minutes  |
-| Feature Releases     | Feature flags (instant toggle)                    | Immediate     |
-| Gradual Rollout      | Feature flag percentage ramp (canary substitute)  | Immediate     |
+| Feature Releases     | Compile-time feature flags with env var escape hatches | Per-deploy    |
+| Gradual Rollout      | Deployment-gated rollout via environment promotion | Per-deploy    |
 
-> **Note**: DigitalOcean App Platform does not support native percentage-based canary traffic splitting (that requires Kubernetes + service mesh). Gradual rollout is achieved via feature flags (Section 2.4) which provide equivalent risk mitigation with finer control.
+> **Note**: Phase 1 feature flags are compile-time constants toggled via environment variables and deployment-gated rollouts — NOT a runtime feature flag service. See Section 2.4 for details. Percentage-based canary traffic splitting requires Kubernetes + service mesh (not available on DO App Platform).
 
 ### 2.2 Environments (Trunk-Based Development)
 
@@ -136,35 +136,42 @@ PR → pr-validation.yml → Merge → build.yml → SHA-tagged image
 
 ### 2.4 Feature Flag Management
 
-Feature flags enable safe, incremental rollouts and instant rollback without code deployment.
+> **Phase 1 Reality**: Feature flags are **compile-time constants with environment variable escape hatches** — NOT a runtime feature flag service. "Feature flag management" means toggling environment variables and performing deployment-gated rollouts. There is no percentage-based traffic splitting, no runtime toggle UI, and no gradual rollout within a single deployment.
+>
+> A dedicated feature flag service (LaunchDarkly, Unleash, etc.) is a Phase 2+ consideration if runtime percentage rollouts are needed without redeployment.
+>
+> See [`docs/04-specs/configuration.md` §5](../04-specs/configuration.md#5-feature-flags) for implementation details.
 
 #### Flag Lifecycle
 
 ```
-Created → Staging Test → Gradual Rollout → Full Release → Cleanup
+Defined in code → Env var override (optional) → Deploy to staging → Validate → Deploy to production → Remove flag (cleanup)
 ```
 
-#### Rollout Strategy
+#### Rollout Strategy (Deployment-Gated)
 
-| Phase    | Audience        | Duration | Success Criteria            |
-| -------- | --------------- | -------- | --------------------------- |
-| Canary   | 1% of traffic   | 1 hour   | No error spike, P95 < 500ms |
-| Limited  | 10% of traffic  | 4 hours  | Error rate < 0.1%           |
-| Expanded | 50% of traffic  | 24 hours | No degradation              |
-| Full     | 100% of traffic | -        | Stable for 1 week           |
+| Phase       | Mechanism                                 | Duration | Success Criteria            |
+| ----------- | ----------------------------------------- | -------- | --------------------------- |
+| Development | Flag enabled in `.env` locally            | -        | Unit/integration tests pass |
+| Staging     | Flag enabled via env var in staging deploy | 1–2 days | QA sign-off                 |
+| Production  | Flag enabled via env var in production deploy | -     | Error rate < 0.1%, P95 < 500ms |
+| Cleanup     | Remove flag constant and conditional code | 1 sprint | Code simplified             |
 
 #### Flag Operations
 
 ```bash
-# enable feature for percentage of users
-aptivo-cli feature enable user-dashboard-v2 --percent 10
+# enable a feature flag via environment variable (requires redeployment)
+doctl apps update <app-id> --spec .do/app.yaml
+# where app.yaml includes: FEATURE_USER_DASHBOARD_V2=true
 
-# disable feature immediately (emergency)
-aptivo-cli feature disable user-dashboard-v2 --immediate
+# disable a feature flag (requires redeployment)
+# set FEATURE_USER_DASHBOARD_V2=false in app spec and redeploy
 
-# check flag status
-aptivo-cli feature status user-dashboard-v2
+# emergency disable: set env var to false and trigger immediate redeploy
+doctl apps create-deployment <app-id> --force-rebuild
 ```
+
+> **Important**: Because flags require redeployment to change, "instant rollback" via flag toggle is not available in Phase 1. Emergency rollback uses application rollback (§9.1) or env var change + redeploy.
 
 ---
 
@@ -212,6 +219,24 @@ aptivo-cli feature status user-dashboard-v2
 | **ClamAV**         | ~$6/mo        | Single container  | Malware scanning (see ADD §9.8.2); runs as DO App Platform worker or external Docker service |
 
 **Cost Estimate**: ~$55-110/mo for staging + production (vs. $200-400/mo for managed K8s)
+
+#### 3.2.1 Cost Controls and Budget Caps
+
+| Resource | Monthly Budget | Alert Threshold | Exceed Behavior | Cost Attribution |
+|----------|---------------|-----------------|-----------------|------------------|
+| **App Service (auto-scale)** | $50/mo | DigitalOcean billing alert at $40 (80%) | Max 3 containers (hard cap in app spec); alert on-call if sustained at max | Platform — shared infrastructure |
+| **PostgreSQL** | $25/mo | DO billing alert at $20 | Vertical scaling requires manual approval | Platform — shared infrastructure |
+| **Redis** | $20/mo | DO billing alert at $15 | Single node (no auto-scale); alert on memory > 80% | Platform — shared infrastructure |
+| **Spaces** | $15/mo | DO billing alert at $12 | Storage growth alert; review file retention policies | Platform — shared infrastructure |
+| **ClamAV** | $10/mo | N/A (fixed cost) | Fixed container | Platform — security |
+| **LLM API** | $500/mo (all domains) | Application-level at 90% (ADD §7.2) | Hard cap per domain (daily $50, monthly $500) | Per-domain attribution (ADD §7.2) |
+| **Novu** | Free tier (10K events/mo) | Application-level at 8K events | No fallback provider (accepted risk — ADD §10.4.4); alert ops; manual intervention | Platform — notifications |
+| **Inngest** | Free tier (Phase 1) | Monitor function run count monthly | Review pricing tiers; alert if approaching limit | Platform — workflows |
+| **Supabase Auth** | Free tier (50K MAU) | Monitor MAU monthly | N/A for Phase 1 (< 100 users) | Platform — identity |
+| **Sentry** | Free tier | Error event volume monitoring | Rate-limit noisy errors; alert on quota usage | Platform — observability |
+| **Grafana Cloud** | Free tier | Telemetry volume monitoring | Reduce trace sampling rate; alert on quota usage | Platform — observability |
+
+**Spend Observability**: DigitalOcean billing alerts configured for all managed resources. Monthly cost review by platform team. LLM spend visible via application dashboard (ADD §7.2).
 
 ### 3.3 App Platform Configuration
 
@@ -297,7 +322,8 @@ export const env = createEnv({
     AUTH_SECRET: z.string().min(32),
     OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url(),
     SENTRY_DSN: z.string().url(),
-    FEATURE_FLAG_API_KEY: z.string().min(1),
+    // Feature flags are compile-time constants with env var escape hatches (§2.4)
+    FEATURE_USER_DASHBOARD_V2: z.coerce.boolean().default(false),
   },
   client: {
     NEXT_PUBLIC_APP_URL: z.string().url(),
@@ -326,9 +352,16 @@ All secrets managed via DigitalOcean App Platform encrypted environment variable
 | Secret Type          | Storage                            | Rotation              |
 | -------------------- | ---------------------------------- | --------------------- |
 | Database credentials | DO App Platform (encrypted)        | 90 days               |
-| API keys             | DO App Platform (encrypted)        | 90 days               |
-| JWT signing keys     | DO App Platform (encrypted)        | 180 days              |
+| API keys (S3, LLM providers) | DO App Platform (encrypted)  | 90 days               |
+| Novu API Key         | DO App Platform (encrypted)        | 180 days              |
+| Webhook HMAC secrets | PostgreSQL (encrypted column)      | 180 days              |
+| HITL_SECRET          | DO App Platform (encrypted)        | 180 days              |
+| INNGEST_SIGNING_KEY  | DO App Platform (encrypted)        | 180 days              |
+| INNGEST_EVENT_KEY    | DO App Platform (encrypted)        | 180 days              |
+| JWT signing keys     | Supabase-managed                   | 90 days               |
 | TLS certificates     | DO Managed (auto-renewal)          | Automatic             |
+
+> **SSOT**: Canonical rotation cadences are defined in ADD §8.8 (Secret Rotation Cadences). This table mirrors those values. On conflict, ADD §8.8 takes precedence.
 
 ```bash
 # example: update secret via doctl CLI
@@ -373,7 +406,7 @@ All services emit telemetry via OpenTelemetry SDK with direct OTLP export (App P
 | **Database Replication Lag** | Prometheus      | > 30 seconds       | PagerDuty P1      | On-Call SRE (Phase 2+: HA-tier only) |
 | **Health Check Failures**    | App Platform    | Container unhealthy 3x | PagerDuty P1  | On-Call SRE     |
 | **Application Errors**       | Sentry/OTel     | New error type     | Slack #ops-errors | On-Call Support |
-| **Feature Flag Errors**      | Custom metric   | Any toggle failure | Slack #ops-alerts | DevOps Team     |
+| **Feature Flag Misconfig**   | Startup logs    | Env var parse failure | Slack #ops-alerts | DevOps Team     |
 
 ### 5.3 Health Check Endpoints
 
@@ -611,8 +644,8 @@ graph LR
 - [ ] Review audit logs for suspicious activity
 - [ ] Apply security patches to container base images
 - [ ] Run SCA scan and review new vulnerabilities
-- [ ] Test feature flag toggles in staging
-- [ ] Review and clean up old feature flags (> 30 days enabled)
+- [ ] Verify feature flag env vars are consistent across environments
+- [ ] Review and clean up old feature flags in code (> 30 days since full rollout)
 
 ### 7.3 Monthly Tasks
 
@@ -763,7 +796,31 @@ Alert Received
 7. **Verify services** - Run smoke tests
 8. **Communicate** - Update status page, notify stakeholders
 
-#### Phase 2+: Multi-Region DR (Future)
+#### Phase 1 Failback Procedure
+
+> **Context**: After restoring to an alternate region (steps 1–8 above), use this procedure to return to the primary region when the original outage is resolved.
+
+1. **Confirm primary region recovery** — Verify DO status page shows all services operational in original region for ≥ 1 hour
+2. **Provision primary region infrastructure** — Re-create App Platform app and managed databases in original region
+3. **Migrate data** — Export PostgreSQL from alternate region, import to primary; sync S3/Spaces objects
+4. **Verify data integrity** — Compare row counts, audit log continuity, latest workflow execution timestamps
+5. **DNS cutover** — Update DNS to point back to primary region; set TTL low (60s) during cutover window
+6. **Smoke test** — Run full smoke test suite against primary region endpoints
+7. **Decommission alternate** — After 24h stable operation, tear down alternate region infrastructure
+8. **Post-failback review** — Document lessons learned, update RTO/RPO estimates based on actual times
+
+**Decision Criteria for DR Activation:**
+
+| Condition | Action |
+|-----------|--------|
+| DO status page shows ETA < 1 hour | Wait; reassess every 30 minutes |
+| DO status page shows ETA > 2 hours or no ETA | Begin DR procedure (steps 1–8 above) |
+| DO status page shows ETA 1–2 hours | Wait 1 hour; if no improvement, begin DR |
+| Data corruption suspected (not just unavailability) | Begin DR immediately from last clean backup |
+
+#### Phase 2+: Multi-Region DR (Design Target)
+
+> **NOT YET OPERATIONAL** — The following defines design requirements for Phase 2 multi-region DR. Operational procedures will be created as part of Phase 2 architecture design. Do not reference these as current capabilities.
 
 **Prerequisites (not yet met):**
 
@@ -772,6 +829,16 @@ Alert Received
 - [ ] Cross-region database replication active
 - [ ] DNS failover configured (CloudFlare)
 - [ ] Runbook tested quarterly
+
+**Design Parameters (must be documented before Phase 2 go-live):**
+
+| Parameter | Requirement | Notes |
+|-----------|-------------|-------|
+| **Failover Trigger** | Define: automatic (DNS health check failure count/duration) vs. manual (operator decision tree) | DO managed DB HA uses automatic promotion; app-layer needs DNS-based trigger |
+| **Data Consistency Mode** | Define: synchronous vs. asynchronous replication; RPO during failover | Async replication = potential data loss; document acceptable RPO per schema (public, aptivo_trading, aptivo_hr) |
+| **Failback Procedure** | Document: primary region recovery verification, data reconciliation between regions, DNS cutover back, verification steps | Must handle data written to secondary during outage |
+| **Regional Isolation Mapping** | Document: which SaaS dependencies (Inngest, Novu, Supabase) are region-independent and continue operating during DO regional outage | Prevents confusion during incident response |
+| **Quarterly DR Test** | Define: test scope, success criteria, data verification steps, documented results | Must validate actual RTO/RPO against targets |
 
 ### 8.7 Playbook 4: Redis Outage
 
@@ -854,7 +921,82 @@ Alert Received
 
 **Recovery:** Verify notification delivery resumes. Check for queued notifications being delivered (potential burst). Monitor for duplicate notifications.
 
-### 8.9 Component Criticality & Recovery Priority
+### 8.9 Playbook 6: HITL Gateway Failure
+
+**Trigger:** HITL decision API errors > 5% for 5 minutes, OR pending approval count growing without decisions being recorded, OR `hitl_decision_errors` alert fires.
+
+**Severity:** SEV-2 (approval-gated workflows blocked)
+
+**Blast Radius:** All approval-gated workflows (trade execution, hiring decisions, compliance approvals) stall in SUSPENDED state. Core platform operations (non-HITL workflows, auth, MCP) continue.
+
+**Immediate Actions:**
+
+1. Check HITL decision endpoint health: `GET /api/v1/health/ready` — verify database connectivity
+2. Query pending HITL requests: `SELECT count(*) FROM hitl_requests WHERE status = 'pending' AND created_at > now() - interval '1 hour'`
+3. Check for database lock contention on `hitl_requests` / `hitl_decisions` tables
+4. Verify Inngest `step.waitForEvent` is receiving decision events (check Inngest dashboard → Events → `hitl.decision.*`)
+5. If approval tokens are failing validation: check JWKS cache status and Supabase Auth connectivity
+
+**Recovery:**
+
+1. If database lock contention: identify blocking query (`SELECT * FROM pg_stat_activity WHERE state = 'active'`), terminate if safe
+2. If Inngest event delivery failing: verify Inngest Cloud status, check event send logs
+3. Restart API container if HITL service is in a bad state: `doctl apps restart <app-id> --component api`
+4. After recovery: verify pending approvals can be processed by submitting a test approval
+
+**Escalation:** If not resolved within 30 minutes → SEV-1. Contact: Engineering Manager (always available per §8.2). For Inngest issues: [Inngest Status](https://status.inngest.com) and support channel.
+
+### 8.10 Playbook 7: Audit Service Degradation
+
+**Trigger:** Audit write latency > 500ms for 5 minutes, OR HITL decision recording latency spikes, OR `audit_write_timeout` alert fires.
+
+**Severity:** SEV-2 (compliance logging degraded; critical paths may be blocked)
+
+**Blast Radius:** Synchronous audit writes block callers: HITL decision recording, file access logging, retention enforcement, workflow audit events. Core platform operations without audit writes continue.
+
+**Immediate Actions:**
+
+1. Check `audit_logs` table size and bloat: `SELECT pg_size_pretty(pg_total_relation_size('audit_logs'))`
+2. Check for lock contention: `SELECT * FROM pg_locks WHERE relation = 'audit_logs'::regclass AND NOT granted`
+3. Check index health: `SELECT indexrelname, idx_scan, idx_tup_read FROM pg_stat_user_indexes WHERE schemaname = 'public' AND relname = 'audit_logs'`
+4. Monitor current write latency: check application metrics for `audit_write_duration_ms` P99
+
+**Recovery:**
+
+1. If table bloat: run `VACUUM ANALYZE audit_logs` (non-blocking in PostgreSQL)
+2. If index bloat: schedule `REINDEX CONCURRENTLY` during low-traffic window
+3. If disk pressure: check managed database disk usage via DigitalOcean console; consider archiving old audit records per retention policy (§9.4)
+4. **Interim mitigation**: If writes consistently > 1s, consider adding application-level write timeout (500ms) with dead-letter queue for failed entries — prevents blocking critical paths while preserving compliance (no silent drops)
+
+**Escalation:** If HITL decisions are being blocked > 15 minutes → SEV-1. For database issues: DigitalOcean managed database support.
+
+### 8.11 Playbook 8: Database Connection Pool Exhaustion
+
+**Trigger:** `db_connection_pool_usage > 80%` alert fires (Runbook §5.2), OR application errors with "connection pool timeout" or "too many connections," OR API latency spikes across all endpoints simultaneously.
+
+**Severity:** SEV-1 (all database-dependent operations fail)
+
+**Blast Radius:** Total platform degradation. All components using PostgreSQL become slow or unavailable: Workflow Engine, HITL Gateway, Audit Service, Identity Service (RBAC), File Storage (metadata), LLM Gateway (usage logs).
+
+**Immediate Actions:**
+
+1. Check current connections: `SELECT count(*), state FROM pg_stat_activity GROUP BY state`
+2. Identify long-running queries: `SELECT pid, now() - query_start AS duration, query FROM pg_stat_activity WHERE state = 'active' ORDER BY duration DESC LIMIT 10`
+3. Identify idle-in-transaction connections: `SELECT pid, now() - xact_start AS duration FROM pg_stat_activity WHERE state = 'idle in transaction' ORDER BY duration DESC`
+4. Kill idle-in-transaction connections older than 5 minutes: `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE state = 'idle in transaction' AND xact_start < now() - interval '5 minutes'`
+
+**Recovery:**
+
+1. If a single long-running query is consuming connections: terminate it (`SELECT pg_terminate_backend(<pid>)`) — this may cause the originating workflow step to retry
+2. If connection leak (connections not being returned to pool): restart API containers: `doctl apps restart <app-id>`
+3. If legitimate load spike: increase connection pool size in database configuration (DigitalOcean console) — note: managed database has a max based on plan tier
+4. After recovery: verify connection count returns to normal; check application logs for the root cause (missing connection release, slow query, etc.)
+
+**Prevention:** Phase 1 pool size is 20 connections (managed database default). Monitor `db_connection_pool_usage` metric. Phase 2+: connection pool per schema/domain to prevent cross-domain exhaustion.
+
+**Escalation:** If not resolved within 15 minutes → contact DigitalOcean managed database support. Engineering Manager for SEV-1 incident management.
+
+### 8.12 Component Criticality & Recovery Priority
 
 During multi-component incidents, recover in this order:
 
@@ -873,11 +1015,259 @@ During multi-component incidents, recover in this order:
 | 11 | File Storage | Document management |
 | 12 | BullMQ | Queued job processing |
 
+### 8.13 Playbook 9: MCP Circuit Breaker Sustained Open
+
+**Severity**: SEV-3
+**Symptoms**: MCP tool calls returning `circuit_open` errors; Grafana alert `mcp_tool_error_rate > 5%`; workflow steps failing with `ExternalServiceError`.
+
+**Triage**:
+1. Check which MCP server(s) have open circuit breakers: `GET /api/v1/admin/mcp/health` (or check logs for `circuit breaker open` entries)
+2. Verify if the external service is actually down (check provider status pages)
+3. Check if the issue is network-related (DNS, firewall, proxy)
+
+**Resolution**:
+1. If external service is down: Wait for recovery. Circuit breaker will auto-close after 30s half-open test succeeds.
+2. If network issue: Fix network. Circuit breaker auto-recovers.
+3. If persistent: Disable the MCP server in config (`MCPServerConfig.enabled = false`), deploy. Workflows will follow error path.
+4. Manual circuit breaker reset: Restart the API container (clears in-memory circuit breaker state).
+
+**Escalation**: If circuit breaker remains open for >1 hour with no external service issue, escalate to engineering.
+
+### 8.14 Playbook 10: LLM Provider Failure / Budget Exhaustion
+
+**Severity**: SEV-2 (if both providers down), SEV-3 (single provider, fallback active)
+**Symptoms**: Workflow steps with LLM calls failing; `LLMError` in logs; `DAILY_BUDGET_EXCEEDED` or `MONTHLY_BUDGET_EXCEEDED` errors; Grafana alert on LLM error rate.
+
+**Triage**:
+1. Check provider status pages: [status.openai.com](https://status.openai.com), [status.anthropic.com](https://status.anthropic.com)
+2. Check budget status: `GET /api/v1/admin/llm/budget` or query `SELECT SUM(cost_usd) FROM llm_usage_logs WHERE timestamp >= date_trunc('day', NOW())`
+3. Check if fallback provider is active
+
+**Resolution — Provider Down**:
+1. Single provider down: Verify fallback is working. No action needed — automatic failover.
+2. Both providers down: Wait for recovery. AI-dependent workflows will fail gracefully (error path).
+3. Persistent issue: Contact provider support (see Vendor Contacts below).
+
+**Resolution — Budget Exceeded**:
+1. Check for anomalous usage: `SELECT workflow_id, SUM(cost_usd) FROM llm_usage_logs WHERE timestamp >= date_trunc('day', NOW()) GROUP BY workflow_id ORDER BY 2 DESC`
+2. If legitimate spike: Temporarily increase daily budget via env var `LLM_DAILY_BUDGET_USD` and redeploy.
+3. If runaway workflow: Identify and cancel the workflow. Investigate root cause.
+4. Monthly budget: requires business approval to increase.
+
+**Escalation**: Vendor contacts section below.
+
+### 8.15 Playbook 11: File Storage / ClamAV Failure
+
+**Severity**: SEV-3
+**Symptoms**: File uploads returning 500 errors; `scan_pending` files accumulating; ClamAV health check failing; S3/Spaces connection errors.
+
+**Triage**:
+1. Check DO Spaces status: [status.digitalocean.com](https://status.digitalocean.com)
+2. Check ClamAV container health: `doctl apps list-deployments` → check clamav component status
+3. Check ClamAV logs: `doctl apps logs <app-id> --component clamav`
+4. Check if issue is Spaces or ClamAV or both
+
+**Resolution — Spaces Down**:
+1. Verify DO Spaces status page
+2. File uploads will fail; existing file metadata remains in PostgreSQL
+3. No action needed — file operations retry when Spaces recovers
+4. If prolonged: Notify users that file operations are temporarily unavailable
+
+**Resolution — ClamAV Down**:
+1. Check ClamAV container logs for OOM (signature DB update uses ~2.4 GiB peak)
+2. If OOM: Restart container. Consider increasing memory limit.
+3. If signature update failed: Check internet connectivity from container. ClamAV updates from `database.clamav.net`.
+4. Files will queue as `scan_pending` and be scanned when ClamAV recovers
+5. `scan_pending` files cannot be downloaded (quarantine policy)
+
+**Escalation**: DO support for Spaces issues. ClamAV community for scanner issues.
+
+### 8.16 Playbook 12: BullMQ Job Queue Stall
+
+**Severity**: SEV-3
+**Symptoms**: Rate-limited MCP requests not draining; outbound webhooks not delivering; BullMQ dashboard showing stalled jobs; Redis memory increasing.
+
+**Triage**:
+1. Check Redis connectivity: `redis-cli -u $REDIS_URL ping`
+2. Check BullMQ worker status: application logs for `bullmq` entries
+3. Check stalled job count: BullMQ admin API or direct Redis query
+4. Check Redis memory: `redis-cli -u $REDIS_URL info memory`
+
+**Resolution**:
+1. If Redis down: BullMQ cannot process jobs. See Redis recovery playbook (§8.7).
+2. If worker crashed: Restart worker container. Stalled jobs auto-retry after stall interval (30s).
+3. If jobs stuck in `active` state: BullMQ stall detection will move them back to `waiting` after `stalledInterval` (30s default). If not: manually move with BullMQ admin API.
+4. If Redis near OOM: Check for job accumulation (`LLEN bull:mcp-requests:wait`). Clear completed/failed jobs older than 7 days.
+5. Manual job retry: Use BullMQ admin API to retry specific failed jobs.
+
+**Escalation**: Engineering for persistent stalls. Redis scaling for memory issues.
+
+### 8.17 Playbook 13: ClamAV Operations
+
+**Deployment**:
+- Container image: `ajilach/clamav-rest` or `benzino77/clamav-rest-api`
+- Minimum RAM: 1.2 GiB (2.4 GiB peak during signature updates)
+- API port: HTTP POST `/api/v1/scan` (multipart/form-data)
+- Scan timeout: 30s per file (configurable)
+
+**Monitoring**:
+- Health check: `GET /api/v1/version` returns ClamAV version and signature date
+- Signature freshness: Signatures should be ≤24h old. Alert if `freshclam` last update >48h.
+- Memory usage: Monitor for OOM during daily signature updates (~2.4 GiB peak)
+
+**Signature Updates**:
+- Automatic: `freshclam` runs daily inside the container (built-in to docker image)
+- Manual trigger: `docker exec <container> freshclam`
+- Mirror: `database.clamav.net` (default). Consider private mirror if rate-limited.
+
+**Troubleshooting**:
+1. Scan always returns "error": Check if ClamAV daemon is running inside container (`clamd` process)
+2. High scan latency: Check file size (>50MB files may timeout); check container CPU/memory
+3. Signature update failing: Check DNS resolution; check if ClamAV mirror is accessible; check disk space
+
 ---
 
-## **9. Infrastructure as Code**
+## **9. Rollback Procedures**
 
-### 9.1 App Spec Workflow
+### 9.1 Application Rollback
+
+**When**: Deployment introduces bugs, performance regression, or unexpected behavior.
+
+**Procedure (DO App Platform)**:
+1. List recent deployments: `doctl apps list-deployments <app-id>`
+2. Identify the last known-good deployment ID
+3. Rollback: `doctl apps create-deployment <app-id> --force-rebuild` (with previous commit SHA)
+4. Alternative: Revert the git commit and push to trigger new deployment
+5. Verify: Check health endpoint `GET /health/ready` returns 200
+
+**Manual Fallback** (if doctl fails):
+1. Go to DO App Platform dashboard → App → Deployments
+2. Click the last successful deployment → "Rollback to this deployment"
+3. Monitor deployment progress
+
+**Notes**:
+- Rolling deployments ensure zero-downtime during rollback
+- In-flight requests complete before old containers are terminated
+- Verify health checks pass before declaring rollback complete
+
+### 9.2 Database Migration Rollback
+
+**When**: Migration introduces schema errors, data corruption, or performance issues.
+
+**Procedure**:
+1. Identify the failed migration: Check `drizzle` migration history table
+2. Run down migration: `pnpm drizzle-kit down` (or project-specific command)
+3. Verify schema state: `pnpm drizzle-kit check`
+4. If down migration fails: Manually execute the reverse SQL (documented in each migration file)
+
+**Pre-flight (CI validation)**:
+- All migrations MUST have corresponding down/reverse migrations
+- CI runs `up` then `down` on a test database to validate reversibility
+- Data-destructive migrations (DROP COLUMN, ALTER TYPE) must be reviewed manually
+
+**Data Recovery** (if data corrupted):
+1. Stop application: Scale API containers to 0
+2. Restore from backup: `doctl databases backups list <db-id>` → select backup → restore
+3. Re-run migrations up to the last-known-good version
+4. Restart application
+
+**Notes**:
+- Migration scripts are in `packages/database/drizzle/` (or project-specific path)
+- Always take a backup before running migrations in production
+
+### 9.3 Secret Rotation Rollback
+
+**When**: Rotated secret causes authentication failures, API errors, or integration breakage.
+
+**Procedure**:
+1. **Dual-key window**: During rotation, both old and new secrets should be valid. If the new secret is not working:
+   a. Revert the environment variable to the old secret value
+   b. Redeploy: `doctl apps create-deployment <app-id>`
+   c. Verify functionality
+
+2. **Per-secret rollback**:
+
+   | Secret | Rollback Method |
+   |--------|----------------|
+   | Supabase JWT Secret | Supabase Dashboard → Settings → JWT → revert |
+   | DO Spaces Key | DO Control Panel → regenerate or use backup key |
+   | Novu API Key | Novu Dashboard → regenerate previous key |
+   | Inngest Signing Key | Inngest Dashboard → revert signing key |
+   | HITL_SECRET | Set env var to old value, redeploy. Old HITL tokens become valid again. |
+   | Webhook HMAC | Set env var to old value, redeploy. Notify webhook providers. |
+   | LLM API Keys | Provider dashboard → use backup key |
+
+3. **Post-rollback**: Investigate why the new secret didn't work before attempting rotation again.
+
+**Notes**:
+- Always maintain the old secret value for at least 24 hours after rotation (dual-key window)
+- Document the old secret value securely before rotation (password manager, not plaintext)
+
+### 9.4 Infrastructure Rollback
+
+**When**: Infrastructure change (App Spec, networking, scaling config) causes issues.
+
+**Procedure (DO App Platform App Spec)**:
+1. App Spec is version-controlled in the repository (`.do/app.yaml` or equivalent)
+2. Revert the App Spec change in git
+3. Push to trigger redeployment: `git push`
+4. Or apply previous spec directly: `doctl apps update <app-id> --spec .do/app.yaml`
+
+**Compute/Networking Changes**:
+- Instance size change: Update App Spec `instance_size_slug`, redeploy
+- Scaling config: Update `instance_count` in App Spec
+- Environment variables: `doctl apps update <app-id> --spec` with previous values
+- Database plan change: Cannot downgrade in-place. Restore from backup to smaller plan if needed.
+
+**Notes**:
+- DO App Platform does not have native "undo" for App Spec changes
+- Treat App Spec as infrastructure-as-code: always commit changes to git first
+
+### 9.5 Inngest Workflow Rollback
+
+**When**: New workflow version has bugs, incorrect logic, or performance issues.
+
+**Behavior During Deployment**:
+- Inngest supports **version coexistence**: in-flight workflows continue with the code version that started them
+- New workflow invocations use the new code version
+- There is NO automatic rollback of in-flight workflows
+
+**Rollback Procedure**:
+1. Revert the workflow code change in git and deploy (§9.1 application rollback)
+2. In-flight workflows on the old (buggy) version will complete with that version's logic
+3. New invocations will use the reverted (correct) version
+4. If in-flight workflows are stuck: Cancel via Inngest Dashboard → Functions → Cancel Run
+5. If data was corrupted by buggy workflow: Manual data fix required
+
+**Drain Old Version**:
+1. Monitor Inngest Dashboard for active runs of the old version
+2. Wait for all old-version runs to complete (or cancel them)
+3. Verify no new runs are using the old version
+
+**Notes**:
+- Inngest memoization means completed steps are NOT re-executed even after code change
+- Rolling back code does not re-execute already-completed steps in in-flight workflows
+
+### 9.6 Multi-Component Rollback Order
+
+When multiple components need rollback simultaneously, follow this priority order:
+
+| Priority | Component | Reason | Rollback Method |
+|----------|-----------|--------|----------------|
+| 1 (First) | Database migrations | Data integrity; must be correct before app can function | §9.2 |
+| 2 | API Server | Serves user traffic; health checks validate database compatibility | §9.1 |
+| 3 | Workflow Worker | Depends on correct DB schema and API availability | §9.1 |
+| 4 | Secrets/Environment | Only if authentication/integration is broken | §9.3 |
+| 5 | Infrastructure (App Spec) | Lowest risk; config changes rarely cause data issues | §9.4 |
+| 6 (Last) | Inngest Workflows | In-flight workflows are isolated; new invocations affected by app rollback | §9.5 |
+
+**Critical Rule**: ALWAYS rollback database migrations BEFORE rolling back application code. The application may depend on the old schema, and running new application code against a rolled-back schema (or vice versa) can cause data corruption.
+
+---
+
+## **10. Infrastructure as Code**
+
+### 10.1 App Spec Workflow
 
 Infrastructure changes follow App Spec-based GitOps:
 
@@ -885,7 +1275,7 @@ Infrastructure changes follow App Spec-based GitOps:
 Developer PR (.do/app.yaml) → Review → Merge → GitHub Actions → doctl apps update
 ```
 
-### 9.2 Infrastructure Repository Structure
+### 10.2 Infrastructure Repository Structure
 
 ```
 .do/
@@ -901,7 +1291,7 @@ Developer PR (.do/app.yaml) → Review → Merge → GitHub Actions → doctl ap
 └── deploy-production.yml # Production deploy
 ```
 
-### 9.3 Configuration Management
+### 10.3 Configuration Management
 
 App Platform configuration is version-controlled in `.do/app.yaml`:
 
@@ -920,7 +1310,7 @@ Changes to infrastructure trigger PR review process before deployment.
 
 ---
 
-## **10. Roles & Responsibilities (RACI Matrix)**
+## **11. Roles & Responsibilities (RACI Matrix)**
 
 | Task                            | DevOps       | SRE          | Development | Management |
 | ------------------------------- | ------------ | ------------ | ----------- | ---------- |
@@ -944,6 +1334,86 @@ Changes to infrastructure trigger PR review process before deployment.
 
 ---
 
+## **12. Vendor Escalation Contacts**
+
+| Vendor | Service | Support Channel | SLA | Account Info |
+|--------|---------|----------------|-----|-------------|
+| **DigitalOcean** | App Platform, Managed DB, Spaces, Redis | [cloud.digitalocean.com/support](https://cloud.digitalocean.com/support) | Varies by plan (Basic: 24h, Premium: 1h) | Team account required |
+| **Supabase** | Auth, Database (if used) | [supabase.com/dashboard/support](https://supabase.com/dashboard/support) | Free: community only; Pro: email support | Project dashboard |
+| **Novu** | Notification delivery | [docs.novu.co](https://docs.novu.co) / Discord community | Free: community only | Organization dashboard |
+| **Inngest** | Workflow execution | [inngest.com/discord](https://inngest.com/discord) / support@inngest.com | Free: community; Pro: email | Account dashboard |
+| **OpenAI** | LLM API | [help.openai.com](https://help.openai.com) | Varies by tier | API dashboard |
+| **Anthropic** | LLM API | [support.anthropic.com](https://support.anthropic.com) | Email support | Console dashboard |
+| **Google AI** | Gemini API | [ai.google.dev/support](https://ai.google.dev/support) | Standard Google Cloud support | Cloud console |
+| **Sentry** | Error tracking | [sentry.io/support](https://sentry.io/support) | Free: community | Organization settings |
+
+**Escalation Protocol**:
+1. Check vendor status page first (saves time if known outage)
+2. Search vendor documentation/community for known issue
+3. File support ticket with: error details, timestamps, affected component, business impact
+4. If SEV-1: Escalate via phone/chat if available; mention production impact
+
+---
+
+## **13. Disaster Recovery Test Procedure**
+
+**Frequency**: Quarterly (or after major infrastructure changes)
+**Objective**: Validate RTO <4h and RPO <24h claims
+
+### 13.1 Pre-Drill Checklist
+- [ ] Notify team members of scheduled drill
+- [ ] Ensure recent backup exists (check `doctl databases backups list`)
+- [ ] Document current application version and deployment ID
+- [ ] Prepare alternate region deployment configuration
+
+### 13.2 Drill Procedure — Simulated Database Failure
+1. **Simulate**: Create a new database from latest backup in alternate region
+2. **Validate backup integrity**: Connect to restored DB, verify table counts and sample data
+3. **Measure RPO**: Compare latest restored record timestamps to current time
+4. **Deploy application**: Point staging environment to restored database
+5. **Validate functionality**: Run smoke tests (health check, create workflow, HITL flow)
+6. **Measure RTO**: Record time from "failure declared" to "application functional"
+7. **Document results**: Record RPO achieved, RTO achieved, issues encountered
+
+### 13.3 Drill Procedure — Simulated Regional Failure
+1. **Simulate**: Deploy application to alternate DO region (use staging App Spec)
+2. **Configure**: Point to new database, Redis, Spaces in alternate region
+3. **Validate**: Run smoke tests
+4. **Measure RTO**: Record total time from "region down" to "alternate region operational"
+5. **Document results**: Record issues, missing configurations, manual steps required
+
+### 13.4 Post-Drill Actions
+- [ ] Clean up alternate-region resources (delete test database, app)
+- [ ] File findings as issues for any RTO/RPO violations
+- [ ] Update runbook with lessons learned
+- [ ] Schedule next drill (quarterly)
+
+**Success Criteria**: RPO < 24h AND RTO < 4h for database failure scenario.
+
+---
+
+## **14. Regional SaaS Isolation Map**
+
+During a DigitalOcean regional failure, the following SaaS dependencies are affected:
+
+| SaaS Service | Hosted Region | Affected by DO Regional Failure? | Impact |
+|-------------|---------------|----------------------------------|--------|
+| **DO App Platform** | User-selected (e.g., NYC1) | **YES** — all containers down | Total platform outage |
+| **DO Managed PostgreSQL** | Same region as app | **YES** — database unavailable | No data access |
+| **DO Managed Redis** | Same region as app | **YES** — cache unavailable | No caching, no BullMQ |
+| **DO Spaces** | Region-specific | **YES** — file storage unavailable | File operations fail |
+| **Supabase Auth** | Supabase Cloud (AWS) | **NO** — independent infrastructure | Auth continues if cached JWKS valid |
+| **Novu Cloud** | Novu infrastructure | **NO** — independent | Notifications can be sent (but no app to trigger them) |
+| **Inngest Cloud** | Inngest infrastructure | **NO** — independent | Events queued; workflows resume when app recovers |
+| **OpenAI/Anthropic/Google** | Provider clouds | **NO** — independent | LLM available but no app to call them |
+| **Sentry** | Sentry infrastructure | **NO** — independent | Error tracking continues for other apps |
+
+**Key Insight**: A DO regional failure takes down ALL DO-hosted services simultaneously (App Platform, PostgreSQL, Redis, Spaces). SaaS services hosted on other clouds (Supabase, Novu, Inngest, LLM providers) remain available but cannot be utilized because the application itself is down.
+
+**Recovery**: See §13 DR Test Procedure. Recovery requires deploying to an alternate DO region and restoring data from backups.
+
+---
+
 ## **Revision History**
 
 | Version | Date       | Author                | Changes                                                                                                                                                                                                |
@@ -952,3 +1422,4 @@ Changes to infrastructure trigger PR review process before deployment.
 | v1.0.1  | 2025-06-04 | Abe Caymo             | Added Result-based error reporting section                                                                                                                                                             |
 | v2.0.0  | 2026-01-15 | Document Review Panel | Major rewrite: aligned with TSD v3.0.0, ADD v2.0.0; added OpenTelemetry, health checks, feature flags, container orchestration (K8s), RFC 7807 operations, severity model, RTO/RPO targets, GitOps/IaC |
 | v2.1.0  | 2026-02-03 | Multi-Model Consensus | Aligned with ADD: replaced K8s with DigitalOcean App Platform, TBD environments, Build Once Deploy Many pipeline, added security scan status |
+| v2.2.0  | 2026-03-04 | Documentation Review  | Fixed feature flag §2.4 to reflect Phase 1 compile-time constants; added playbooks (MCP circuit breaker, LLM failure/budget, File Storage/ClamAV, BullMQ stall, ClamAV ops); added §9 Rollback Procedures (app, DB migration, secret rotation, infrastructure, Inngest workflow, multi-component order); added §12 Vendor Escalation Contacts; added §13 DR Test Procedure; added §14 Regional SaaS Isolation Map; renumbered sections 10–11 |

@@ -46,6 +46,17 @@ AUTH_CLIENT_ID=aptivo-app
 AUTH_CLIENT_SECRET=client-secret
 AUTH_SECRET=nextauth-secret  # 32+ chars
 
+# LLM Providers (at least one required)
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=sk-ant-...
+GOOGLE_AI_API_KEY=AIza...
+
+# Workflow Engine
+INNGEST_SIGNING_KEY=signkey-...
+
+# Notifications
+NOVU_API_KEY=...
+
 # Observability
 OTEL_EXPORTER_OTLP_ENDPOINT=https://otel-collector:4318
 OTEL_SERVICE_NAME=${SERVICE_NAME}
@@ -176,9 +187,16 @@ const validateEnvironment = () => {
 | Secret Type | Rotation Frequency | Automation |
 |-------------|-------------------|------------|
 | Database passwords | 90 days | Automated |
-| API keys | 180 days | Automated |
-| JWT signing keys | 365 days | Manual with overlap |
-| TLS certificates | Before expiry | Automated (cert-manager) |
+| API keys (S3, LLM providers) | 90 days | Manual via provider dashboard |
+| Novu API Key | 180 days | Manual via Novu dashboard |
+| Webhook HMAC secrets | 180 days | Manual (dual-key during transition) |
+| HITL_SECRET (HS256 signing) | 180 days | Manual with dual-key overlap |
+| INNGEST_SIGNING_KEY | 180 days | Manual via Inngest dashboard |
+| INNGEST_EVENT_KEY | 180 days | Manual via Inngest dashboard |
+| JWT signing keys (Supabase) | 90 days | Supabase-managed |
+| TLS certificates | Before expiry | Automated (DO managed) |
+
+> **SSOT**: Canonical rotation cadences are defined in ADD §8.8. This table mirrors those values.
 
 ### 3.3 Secret Injection Pattern
 
@@ -293,23 +311,31 @@ Health check paths are standardized across all documents:
 
 ## 5. Feature Flags
 
-### 5.1 Flag Definition
+> **Phase 1 Reality**: Feature flags are compile-time constants defined in code, with optional per-deployment overrides via environment variables. There is no runtime feature flag service in Phase 1. See ADD S3.5 for architecture decisions and Runbook S2.4 for operational procedures.
+
+### 5.1 Phase 1: Compile-Time Feature Constants
+
+In Phase 1, feature flags are simple constants with environment variable overrides:
 
 ```typescript
+// lib/features.ts
+
+/**
+ * Feature flags as compile-time constants.
+ * Override per deployment via environment variables (e.g., FEATURE_WORKFLOW_EXPORT=true).
+ * No runtime feature flag service in Phase 1.
+ */
 interface FeatureFlag {
   key: string;
   defaultValue: boolean;
   description: string;
-  rolloutPercentage?: number;  // 0-100
-  enabledFor?: string[];       // user IDs or roles
 }
 
 const FEATURE_FLAGS: FeatureFlag[] = [
   {
-    key: 'workflow_v2',
+    key: 'workflow_export',
     defaultValue: false,
-    description: 'Enable new workflow engine',
-    rolloutPercentage: 10,
+    description: 'Enable workflow definition export/import',
   },
   {
     key: 'advanced_search',
@@ -319,52 +345,50 @@ const FEATURE_FLAGS: FeatureFlag[] = [
   {
     key: 'beta_features',
     defaultValue: false,
-    description: 'Enable beta features',
-    enabledFor: ['role:admin', 'role:beta_tester'],
+    description: 'Enable beta features for testing',
   },
 ];
 ```
 
-### 5.2 Flag Evaluation
+### 5.2 Flag Evaluation (Phase 1)
 
 ```typescript
-interface FeatureFlagService {
-  isEnabled(key: string, context?: FlagContext): Promise<boolean>;
-  getAllFlags(context?: FlagContext): Promise<Record<string, boolean>>;
-}
-
-interface FlagContext {
-  userId?: string;
-  roles?: string[];
-  attributes?: Record<string, unknown>;
-}
-
-const isEnabled = async (key: string, context?: FlagContext): Promise<boolean> => {
+/**
+ * Evaluates feature flags using compile-time defaults + environment variable overrides.
+ *
+ * Override a flag per deployment by setting:
+ *   FEATURE_<FLAG_KEY_UPPER>=true|false
+ *
+ * Example: FEATURE_WORKFLOW_EXPORT=true enables the workflow_export flag
+ * for that specific deployment without code changes.
+ */
+const isEnabled = (key: string): boolean => {
   const flag = FEATURE_FLAGS.find((f) => f.key === key);
   if (!flag) return false;
 
-  // check environment override
+  // check environment variable override (e.g., FEATURE_WORKFLOW_EXPORT=true)
   const envOverride = process.env[`FEATURE_${key.toUpperCase()}`];
   if (envOverride !== undefined) {
     return envOverride === 'true';
   }
 
-  // check user/role targeting
-  if (flag.enabledFor && context) {
-    const userMatch = flag.enabledFor.includes(`user:${context.userId}`);
-    const roleMatch = context.roles?.some((r) => flag.enabledFor!.includes(`role:${r}`));
-    if (userMatch || roleMatch) return true;
-  }
-
-  // check rollout percentage
-  if (flag.rolloutPercentage !== undefined && context?.userId) {
-    const hash = hashUserId(context.userId, key);
-    return hash < flag.rolloutPercentage;
-  }
-
   return flag.defaultValue;
 };
+
+// Usage in application code:
+if (isEnabled('workflow_export')) {
+  // register export route
+}
 ```
+
+### 5.3 Phase 2: Runtime Feature Flag Service
+
+**Phase 2+**: Consider LaunchDarkly, Unleash, or similar for runtime percentage rollouts without redeployment. This becomes necessary when:
+- Multiple domain apps need independent rollout control
+- A/B testing or percentage-based rollouts are required
+- Non-developer stakeholders need to toggle features
+
+The Phase 1 `isEnabled()` interface is designed for forward compatibility -- the function signature remains the same, but the implementation switches from environment variable lookup to a remote flag service call.
 
 ---
 

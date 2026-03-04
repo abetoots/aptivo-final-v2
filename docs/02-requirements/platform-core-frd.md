@@ -208,7 +208,7 @@ The core architecture follows the **Durable Execution** pattern, ensuring that l
 - On startup, the core queries each MCP server for its capabilities
 - MCP tools can be registered with capabilities and access policies
 - Tools can be enabled/disabled without code changes
-- Tool list is queryable by domain and capability
+- Tool list is queryable by domain and capability (Phase 1: tool registration via configuration; Phase 2: runtime discovery API)
 - Unavailable servers are flagged but do not prevent system startup
 
 ### FR-CORE-MCP-002: Execute MCP Requests with Standard Error Handling
@@ -271,6 +271,7 @@ The core architecture follows the **Durable Execution** pattern, ensuring that l
 - Fallback events are logged as warnings
 - Workflow receives explicit error if no fallback available
 - Failure reason is logged and reported
+- Prompt caching strategy documented for cost optimization (referenced in BRD §3.1.4)
 
 ---
 
@@ -351,7 +352,7 @@ The core architecture follows the **Durable Execution** pattern, ensuring that l
 ## 8.5 File Storage Service
 
 **Purpose**: S3-compatible object storage for documents and system artifacts.
-**BRD Reference**: Section 3.2 (Out-of-Scope notes domain-specific schemas, but shared storage infrastructure is implicit platform capability)
+**BRD Reference**: Section 3.1.8 (File Storage Service — shared infrastructure for secure file upload, malware scanning, and storage management)
 
 > **Justification**: Both domains require file storage (HR: resumes, contracts; Crypto: trade charts, logs). Providing a unified storage interface in the core prevents duplicate implementations and ensures consistent access control patterns. This aligns with FS1-FS2 from the original FRD.
 
@@ -396,7 +397,7 @@ The core architecture follows the **Durable Execution** pattern, ensuring that l
 - No passwords are stored in the database
 - Account recovery is supported without storing passwords
 - Authentication events are auditable
-- Multi-Factor Authentication (MFA) enforced for users with elevated permissions
+- Multi-Factor Authentication (MFA): Phase 1 — optional enrollment with step-up for sensitive operations (see ADD §8.6). Phase 2 — mandatory MFA for admin roles
 - **Phase 1**: Magic links + social login (Google/GitHub OAuth) via Supabase Auth free tier
 - **Phase 2+**: SSO via standard protocols (OIDC/SAML) for enterprise deployments (requires Supabase Pro tier or equivalent)
 - **Phase 2+**: Integration with centralized Identity Provider for enterprise deployments

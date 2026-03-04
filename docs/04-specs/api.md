@@ -66,7 +66,7 @@ Content-Type: application/json
 Accept: application/json
 Authorization: Bearer {jwt_token}
 X-Request-ID: {correlation_id}  // optional, generated if not provided
-X-Idempotency-Key: {key}        // required for non-idempotent POST requests
+Idempotency-Key: {key}          // required for non-idempotent POST requests (IETF standard)
 ```
 
 ### 2.2 Successful Response Format
@@ -430,7 +430,7 @@ const corsConfig = {
     'Content-Type',
     'Authorization',
     'X-Request-ID',
-    'X-Idempotency-Key',
+    'Idempotency-Key',
   ],
   exposedHeaders: [
     'X-Request-ID',

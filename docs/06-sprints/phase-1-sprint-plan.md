@@ -54,10 +54,18 @@ See [spike-results/](./spike-results/) for individual spike outcomes.
 | **LLM-07: Budget Enforcement** | Senior | 3 | LLM-01, LLM-02 |
 | **LLM-08: Gateway Service** | Senior | 5 | All above |
 | **LLM-09: Unit Tests** | All | 3 | LLM-08 |
+| **LLM-10: Per-User Rate Limiting** *(S2-W1)* | Senior | 3 | LLM-08 |
+
+**WARNING-linked scope extensions**:
+- **LLM-06** extended: Add non-LLM cost attribution instrumentation *(S2-W11)* — track infrastructure and SaaS cost alongside LLM usage
+- **LLM-08** includes: LLM output validation *(S1-W13)* — validate/sanitize untrusted LLM responses before downstream use
+- **LLM-10**: Implement per-user/session token bucket rate limiting *(S2-W1)* — prevent single user from exhausting domain LLM budget
 
 ### Sprint 1 Definition of Done
 - [ ] LLM Gateway tracks cost per request
 - [ ] Budget limits block requests when exceeded
+- [ ] Per-user rate limiting prevents single-user budget exhaustion *(S2-W1)*
+- [ ] Cost attribution covers LLM + infrastructure resources *(S2-W11)*
 - [ ] 80%+ test coverage on gateway service
 - [ ] Documented in `packages/llm-gateway/README.md`
 
@@ -81,11 +89,16 @@ See [spike-results/](./spike-results/) for individual spike outcomes.
 | **HITL-08: Novu Notifications** | Web Dev 2 | 3 | SP-04 |
 | **HITL-09: Approval UI Page** | Web Dev 2 | 3 | HITL-06 |
 | **HITL-10: Integration Tests** | All | 3 | All above |
+| **HITL-11: Session Revocation API** *(S1-W5)* | Web Dev 1 | 2 | HITL-03 |
+
+**WARNING-linked scope extensions**:
+- **HITL-11**: Application-level session revocation endpoint *(S1-W5)* — enables immediate session invalidation beyond Supabase defaults
 
 ### Sprint 2 Definition of Done
 - [ ] Workflow can pause for human approval
 - [ ] Approval via web UI resumes workflow
 - [ ] Email notification sent with approve/reject links
+- [ ] Session revocation endpoint functional *(S1-W5)*
 - [ ] 80%+ test coverage
 
 ---
@@ -106,12 +119,24 @@ See [spike-results/](./spike-results/) for individual spike outcomes.
 | **MCP-06: Wrapper Service** | Senior | 5 | MCP-02 to MCP-05 |
 | **MCP-07: Mock MCP Server** | Web Dev 1 | 2 | Testing |
 | **MCP-08: Integration Tests** | All | 3 | MCP-06, MCP-07 |
+| **MCP-09: Event Schema Validation** *(S3-W11)* | Web Dev 2 | 3 | MCP-06 |
+| **MCP-10: Data Deletion Workflow** *(S4-W9)* | Senior | 3 | MCP-06 |
+| **MCP-11: ClamAV Health Check** *(S6-W20)* | Web Dev 1 | 1 | - |
+
+**WARNING-linked scope extensions**:
+- **MCP-06** includes: MCP response size enforcement *(S1-W14)* — enforce max response size and memory limits on tool call responses
+- **MCP-09**: Enforce Zod schema validation on Inngest event publish *(S3-W11)* — reject malformed events at publish-time, route failures to DLQ
+- **MCP-10**: Implement data deletion as multi-step Inngest workflow with per-storage checkpoints *(S4-W9)* — PostgreSQL, Redis, Spaces, Novu
+- **MCP-11**: Configure ClamAV container-level health check *(S6-W20)* — liveness probe on clamd socket
 
 ### Sprint 3 Definition of Done
 - [ ] Can call MCP tool from Inngest workflow
 - [ ] Rate limiting queues requests correctly
 - [ ] Circuit breaker trips on failures
 - [ ] Responses cached appropriately
+- [ ] Inngest events validated against Zod schemas at publish-time *(S3-W11)*
+- [ ] Data deletion workflow checkpoints per storage system *(S4-W9)*
+- [ ] ClamAV health check configured and monitored *(S6-W20)*
 
 ---
 
@@ -130,12 +155,72 @@ See [spike-results/](./spike-results/) for individual spike outcomes.
 | **INT-05: Error Handling Audit** | Web Dev 1 | 2 |
 | **INT-06: Security Hardening** | Senior | 3 |
 | **INT-07: Documentation** | All | 2 |
+| **INT-08: Trace Context Propagation** | Senior | 5 |
+
+#### INT-04 Extended: Alerting & Monitoring (7 WARNINGs)
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S5-W13 | Workflow success rate SLO alert | Alert fires when workflow success rate drops below 99% over 5-min window |
+| S5-W14 | HITL delivery latency SLO alert | Alert fires when HITL P95 latency exceeds 10s |
+| S5-W15 | MCP success rate SLO alert | Alert fires when MCP success rate drops below 99.5% |
+| S5-W16 | Audit integrity SLO alert | Alert fires on audit completeness gap (missing audit records for completed workflows) |
+| S2-W12 | LLM spend dashboard | Grafana dashboard: per-domain, per-provider, per-model spend with daily/monthly trends |
+| S4-W10 | Retention failed run detection | Alert fires when data retention workflow fails or skips records |
+| T1-W23 | Notification delivery monitoring | Alert fires when Novu delivery rate drops below threshold or latency exceeds 2s P95 |
+
+#### INT-05 Extended: Error Handling (3 WARNINGs)
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| T1-W21 | Audit sync → async with timeout + DLQ | Audit writes are async with 5s timeout; failures route to DLQ; no blocking on HITL/file access paths |
+| S6-W17 | Readiness/startup probes | DO App Spec updated with readiness and startup probe configuration for all services |
+| S6-W18 | Graceful shutdown implementation | SIGTERM handler drains in-flight requests; configurable drain period; clean BullMQ/Inngest shutdown |
+
+#### INT-06 Extended: Security Hardening (8 WARNINGs)
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| T1-W27 | Outbound webhook SSRF validation | Webhook URLs validated against SSRF blocklist (private IPs, localhost, metadata endpoints) |
+| T1-W28 | Inbound webhook body limits + HMAC | Body size limit enforced (256KB); HMAC signature required on all inbound webhooks |
+| T1-W29 | Health check info disclosure | Health endpoints return only status (no version, dependency details, or internal state) |
+| S2-W2 | PII-safe logging (`sanitizeForLogging`) | `sanitizeForLogging` redacts email, name, phone, address in addition to auth fields |
+| S2-W3 | Access log PII implementation | Platform-level access logs redact or hash PII (IPs, user agents, URL query params with PII) |
+| S1-W8 | Zero-downtime rotation implementation | Dual-key validation period implemented for secret rotation; zero-downtime procedure verified |
+| S1-W11 | Webhook body size enforcement | Inbound webhook body size limit (256KB per OpenAPI spec) enforced at gateway level |
+| S1-W12 | Global API body size/depth enforcement | JSON body size (1MB) and nesting depth (10 levels) enforced at gateway middleware |
+
+#### INT-08: Trace Context Propagation (6 WARNINGs) — *New*
+
+Implement W3C Trace Context propagation across all async boundaries.
+
+| WARNING | Finding | Acceptance Criteria |
+|---------|---------|---------------------|
+| S7-W24 | Inngest `waitForEvent()` trace propagation | `traceparent` propagated through HITL decision events; parent-child span relationship preserved |
+| S7-W25 | BullMQ job trace context | `traceparent` added to `QueuedMCPRequest` payload; worker extracts and continues trace |
+| S7-W26 | Novu notification trace context | `traceId` included in `novu.trigger()` payload; notification delivery spans linked to workflow trace |
+| S7-W27 | MCP tool call trace context | `traceparent` header sent on HTTP transport; `traceparent` field in stdio JSON-RPC metadata |
+| S7-W29 | Supabase JWT validation span | Explicit span wrapping JWT validation step; latency visible in traces |
+| S7-W30 | Outbound webhook trace context | `traceparent` header added to `WebhookEventPayload`; downstream can continue trace |
 
 ### Sprint 4 Definition of Done
 - [ ] Demo workflow: trigger → LLM analysis → HITL approval → MCP action
 - [ ] Basic admin UI to view LLM costs and pending approvals
 - [ ] Structured logging with correlation IDs
 - [ ] No critical security issues
+- [ ] SLO alerts configured for workflow success, HITL latency, MCP success, audit integrity *(S5-W13–W16)*
+- [ ] LLM spend dashboard operational *(S2-W12)*
+- [ ] Notification delivery monitored *(T1-W23)*
+- [ ] Audit writes async with DLQ fallback *(T1-W21)*
+- [ ] Readiness/startup probes configured *(S6-W17)*
+- [ ] Graceful shutdown with drain period *(S6-W18)*
+- [ ] SSRF validation on outbound webhooks *(T1-W27)*
+- [ ] Inbound webhook HMAC + body limits enforced *(T1-W28)*
+- [ ] Health check info disclosure mitigated *(T1-W29)*
+- [ ] PII-safe logging across application and access logs *(S2-W2, S2-W3)*
+- [ ] API body size/depth limits enforced at gateway *(S1-W11, S1-W12)*
+- [ ] Zero-downtime secret rotation verified *(S1-W8)*
+- [ ] Trace context propagated across all async boundaries *(S7-W24–W27, S7-W29, S7-W30)*
 
 ---
 
