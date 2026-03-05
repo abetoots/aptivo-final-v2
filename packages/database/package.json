@@ -1,0 +1,27 @@
+{
+  "name": "@aptivo/database",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:studio": "drizzle-kit studio",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist drizzle"
+  },
+  "dependencies": {
+    "drizzle-orm": "^0.45.1",
+    "pg": "^8.19.0"
+  },
+  "devDependencies": {
+    "@aptivo/typescript-config": "workspace:*",
+    "@types/pg": "^8.18.0",
+    "drizzle-kit": "^0.31.9",
+    "typescript": "5.9.2"
+  }
+}

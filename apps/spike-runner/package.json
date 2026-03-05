@@ -1,0 +1,23 @@
+{
+  "name": "@aptivo/spike-runner",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@aptivo/types": "workspace:*",
+    "inngest": "^3.52.6",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@aptivo/typescript-config": "workspace:*",
+    "typescript": "5.9.2",
+    "vitest": "^4.0.18"
+  }
+}

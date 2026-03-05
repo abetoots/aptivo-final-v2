@@ -1,0 +1,26 @@
+{
+  "name": "@aptivo/types",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@aptivo/typescript-config": "workspace:*",
+    "@vitest/coverage-v8": "^4.0.18",
+    "typescript": "5.9.2",
+    "vitest": "^4.0.18"
+  }
+}

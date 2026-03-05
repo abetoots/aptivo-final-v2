@@ -1,0 +1,17 @@
+{
+  "name": "@aptivo/benchmarks",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "sp-07": "tsx sp-07-durability-load.ts",
+    "sp-12": "tsx sp-12-e2e-benchmark.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@aptivo/typescript-config": "workspace:*",
+    "@types/node": "^25.3.3",
+    "tsx": "^4.21.0",
+    "typescript": "5.9.2"
+  }
+}
