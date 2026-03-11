@@ -21,14 +21,14 @@
 
 ### Tier 1: Foundational Correctness (5 concerns, 29 WARNINGs)
 
-| Concern | Severity | ERRORs | WARNINGs | NOTEs | Resolved | Open |
-|---------|----------|--------|----------|-------|----------|------|
-| feasibility-check | mixed | 2 resolved | 6 | 3 | 6 | 0 |
-| contradiction-scanner | mixed | 4 resolved | 8 | 4 | 8 | 0 |
-| failure-domain-isolation | ERROR | 7 resolved | 5 | 0 | 5 | 0 |
-| state-ownership-clarity | ERROR | 3 resolved | 5 | 0 | 2 | 3 |
-| threat-model-coverage | ERROR | 8 resolved | 5 | 0 | 2 | 3 |
-| **Total** | | **24 resolved** | **29** | **7** | **23** | **6** |
+| Concern | Severity | ERRORs | WARNINGs | NOTEs | Resolved | Accepted | Open |
+|---------|----------|--------|----------|-------|----------|----------|------|
+| feasibility-check | mixed | 2 resolved | 6 | 3 | 6 | 0 | 0 |
+| contradiction-scanner | mixed | 4 resolved | 8 | 4 | 8 | 0 | 0 |
+| failure-domain-isolation | ERROR | 7 resolved | 5 | 0 | 5 | 0 | 0 |
+| state-ownership-clarity | ERROR | 3 resolved | 5 | 0 | 4 | 1 | 0 |
+| threat-model-coverage | ERROR | 8 resolved | 5 | 0 | 5 | 0 | 0 |
+| **Total** | | **24 resolved** | **29** | **7** | **28** | **1** | **0** |
 
 ### Tier 2: Behavior Integrity (7 sessions, 126 findings)
 
@@ -62,20 +62,21 @@
 | Duplicates / overlaps | 6 | 5 within Tier 2 + 1 cross-tier (T1-W24 = S3-W7) |
 | **Unique WARNINGs** | **154** | 148 Tier 1+2 + 6 Tier 3 |
 | Resolved (no further action) | 122 | 23 T1 + 91 T2 + 9 T3 (excludes 8 T2 items with impl follow-ups) |
-| Resolved (doc done, impl pending) | 8 | Doc portion closed; implementation tracked in sprints |
+| Resolved (doc done, impl pending) | 0 | All implementation follow-ups completed across Sprints 1–7 |
 | Resolved → Sprint 0 | 25 | Bucket B — empirically validated ✓ |
-| Open → Sprints 1–4 | 24 | Bucket C — pure implementation |
-| Open → Bucket D | 5 | 2 accepted + 3 deferred |
-| **Total outstanding (needing action)** | **37** | 32 Sprints 1–4 + 5 Bucket D |
+| Resolved → Sprints 1–7 | 32 | Bucket C — all implemented ✓ |
+| Bucket D | 5 | 2 accepted + 3 deferred (Phase 2+) |
+| **Total outstanding (needing action)** | **0** | All 37 Sprint-mapped items resolved in Phase 1 |
 
-*The 32 Sprint 1–4 items include 24 open + 8 resolved-with-impl-follow-up.*
+*All 32 Sprint 1–7 items fully implemented and verified.*
 *All 9 Tier 3 findings (3 ERRORs + 6 WARNINGs) were resolved via documentation fixes.*
+*Bucket D items (2 accepted, 3 deferred) are Phase 2+ scope — not blocking.*
 
 ---
 
-## Outstanding Implementation Work
+## Implementation Work ✅ ALL COMPLETE
 
-Consolidated view of all WARNINGs requiring code, configuration, or empirical validation. For task ownership, story points, and completion status, see the [Sprint Plan](06-sprints/phase-1-sprint-plan.md).
+Consolidated view of all WARNINGs that required code, configuration, or empirical validation. All items resolved across Sprints 0–7. For task ownership, story points, and completion status, see the [Sprint Plan](06-sprints/phase-1-sprint-plan.md).
 
 ### Sprint 0: Empirical Validation (25 findings) ✅ ALL RESOLVED
 
@@ -94,7 +95,7 @@ All 25 findings empirically validated during spike week. 469 tests across 15 spi
 | SP-14 | S7-W10, S7-W11 | HITL race condition, webhook signature verification |
 | SP-15 | S6-W8, S7-W4, S7-W5, S7-W6, S7-W12, S7-W15, S7-W16, S7-W17, S7-W22 | Third-party degradation, boundary tests |
 
-### Sprint 1: LLM Gateway (3 items)
+### Sprint 1: LLM Gateway (3 items) ✅ ALL RESOLVED
 
 | WARNING | Finding | Task |
 |---------|---------|------|
@@ -102,18 +103,18 @@ All 25 findings empirically validated during spike week. 469 tests across 15 spi
 | S2-W11 | Non-LLM cost attribution instrumentation | LLM-06 *(implemented — `CostBreakdown` with infra overhead)* |
 | S1-W13 | LLM output validation | LLM-08 *(implemented — `validateOutput()` Zod validation)* |
 
-### Sprint 2: HITL Gateway + RBAC (1 item)
+### Sprint 2: HITL Gateway + RBAC (1 item) ✅ RESOLVED
 
 | WARNING | Finding | Task |
 |---------|---------|------|
-| S1-W5 | Session revocation endpoint | HITL-11 |
+| S1-W5 | Session revocation endpoint | HITL-11 *(implemented — `revokeSession()` in `@aptivo/hitl-gateway`)* |
 
-### Sprint 3: MCP Layer + File Storage (4 items) — 3 RESOLVED, 1 ADDRESSED
+### Sprint 3: MCP Layer + File Storage (4 items) ✅ ALL RESOLVED
 
 | WARNING | Finding | Task |
 |---------|---------|------|
 | S3-W11 | Inngest event schema validation at publish-time | MCP-09 *(implemented — `createValidatedSender()` in `@aptivo/mcp-layer/events`)* |
-| S4-W9 | Data deletion checkpoint workflow | MCP-10 *(addressed — `executeDataDeletion()` core logic done; Inngest function wrapper deferred to Sprint 4)* |
+| S4-W9 | Data deletion checkpoint workflow | MCP-10 *(resolved — `executeDataDeletion()` core + Inngest function wrapper wired in Sprint 5 composition root)* |
 | S1-W14 | MCP response size enforcement | MCP-06 *(implemented — `Buffer.byteLength` check in `mcp-wrapper.ts`)* |
 | S6-W20 | ClamAV health check | FS-03 *(implemented — `ClamAvScanner.healthCheck()` in `@aptivo/file-storage/scanner`)* |
 
@@ -123,9 +124,9 @@ All 25 findings empirically validated during spike week. 469 tests across 15 spi
 |---------|---------|------|
 | T1-W21 | Audit sync → async with timeout + DLQ | AUD-04 *(implemented — `createAsyncAuditWriter()` + DLQ + exponential backoff replay in `@aptivo/audit/async`)* |
 
-### Sprint 5: Integration & Hardening (23 items) — 21 RESOLVED, 1 N/A, 1 DEFERRED
+### Sprint 5: Integration & Hardening (23 items) ✅ 22 RESOLVED, 1 N/A
 
-#### INT-04: Alerting & Monitoring (7) — 6 RESOLVED, 1 DEFERRED to Sprint 7
+#### INT-04: Alerting & Monitoring (7) ✅ ALL RESOLVED
 
 | WARNING | Finding | Status |
 |---------|---------|--------|
@@ -231,19 +232,19 @@ All 25 findings empirically validated during spike week. 469 tests across 15 spi
 
 ### Concern 4: State Ownership Clarity
 
-**Date**: 2026-02-28 | **3 open WARNINGs**
+**Date**: 2026-02-28 | **All WARNINGs resolved** (1 accepted: T1-W22)
 
 | ID | Finding | Recommendation | Models | Disposition |
 |----|---------|----------------|--------|-------------|
 | T1-W20 | Redis cache invalidation strategy missing — ADD doesn't reference TSD CacheInvalidation interface | Reference TSD common-patterns.md §6.2 from ADD; document per-consumer invalidation protocol | Claude | **resolved** (documentation) |
 | T1-W21 | Audit Service synchronous writes — `await auditService.log()` blocks critical paths | Implement timeout + DLQ (ADD §2.3.2 already recommends this) | Gemini, Claude | **resolved** (implemented) — `createAsyncAuditWriter()` with 5s timeout + DB-backed DLQ + exponential backoff replay in `@aptivo/audit/async` (AUD-04) |
 | T1-W22 | PostgreSQL shared database — all components share single instance with schema isolation | Accepted Phase 1 risk; documented in ADD §2.3.2 with Phase 2 upgrade path | Gemini, Claude | accepted |
-| T1-W23 | Notification delivery monitoring — Novu failures are silent from platform perspective | Add monitoring for failed HITL notifications | Claude | accepted — mapped to Sprint 4 (INT-04) |
+| T1-W23 | Notification delivery monitoring — Novu failures are silent from platform perspective | Add monitoring for failed HITL notifications | Claude | **resolved** (implemented) — `notificationDeliveryAlert` evaluator in SLO cron (S6-CF-01) |
 | T1-W24 | Novu transactionId deduplication window unknown — should be validated during integration testing | Validate during integration testing | Claude | **resolved** (empirically validated — SP-04) |
 
 ### Concern 5: Threat Model Coverage
 
-**Date**: 2026-02-28 | **3 open WARNINGs (addressed by §14 threat models)**
+**Date**: 2026-02-28 | **All WARNINGs resolved**
 
 | ID | Finding | Recommendation | Models | Disposition |
 |----|---------|----------------|--------|-------------|
@@ -333,7 +334,7 @@ All 25 findings empirically validated during spike week. 469 tests across 15 spi
 | S4-W6 | cache-consistency | Cache warming / cold start behavior undocumented | Document cold-start latency expectations | Claude | **resolved** (documentation) |
 | S4-W7 | cache-consistency | TTL-only invalidation risk for some data patterns | Document rationale for TTL-only vs event-driven | Claude | **resolved** (documentation) |
 | S4-W8 | durable-persistence | Inngest durability guarantees not documented | Reference Inngest's SLA documentation | Claude, Codex | **resolved** (documentation) |
-| S4-W9 | durable-persistence | Data deletion has no checkpoint strategy | Implement as Inngest workflow with per-storage steps | Claude | **addressed** (core logic implemented) — `executeDataDeletion()` with `DeletionCheckpoint` types in `@aptivo/mcp-layer/workflows` (MCP-10); Inngest function wrapper deferred to Sprint 4 |
+| S4-W9 | durable-persistence | Data deletion has no checkpoint strategy | Implement as Inngest workflow with per-storage steps | Claude | **resolved** (implemented) — `executeDataDeletion()` with `DeletionCheckpoint` types in `@aptivo/mcp-layer/workflows` (MCP-10); Inngest function wrapper wired in Sprint 5 composition root |
 | S4-W10 | durable-persistence | Retention enforcement — no failed run detection | Add monitoring for failed retention runs | Claude | accepted — mapped to Sprint 4 (INT-04) |
 | S4-W11 | durable-persistence | PostgreSQL projection divergence — no reconciliation | Document divergence detection mechanism | Claude | **resolved** (documentation) |
 | S4-W12 | failure-mode | MCP circuit breaker sustained open — no runbook | Add runbook entry | Claude, Codex | **resolved** (documentation) |
@@ -475,9 +476,9 @@ Recurring patterns across multiple concerns and sessions:
 |-------|----------|-------------|------------|
 | **Novu single point of failure** | 3, 4 | T1-W18, T1-W23 | No fallback for Novu outage; notifications fail silently; HITL workflows timeout |
 | **PostgreSQL shared infrastructure** | 3, 4 | T1-W16, T1-W22 | Single instance, schema isolation ≠ failure isolation, Phase 1 accepted risk |
-| **Audit sync coupling** | 3, 4 | T1-W21 | Sync `await auditService.log()` blocks critical paths; recommended timeout+DLQ not yet implemented |
+| **Audit sync coupling** | 3, 4 | T1-W21 | Sync `await auditService.log()` blocks critical paths; resolved via `createAsyncAuditWriter()` + DLQ (AUD-04) ✓ |
 | **Stale K8s artifacts** | 2 | T1-W12, T1-W13, T1-W14 | Multiple docs had stale K8s/cloud references from pre-DO migration (all resolved) |
-| **Implementation pending from §14** | 5 | T1-W27, T1-W28, T1-W29 | Threat models documented but mitigations require code implementation |
+| **Implementation pending from §14** | 5 | T1-W27, T1-W28, T1-W29 | Threat models documented; mitigations implemented in Sprint 5 (INT-06) ✓ |
 
 ### Tier 2 Themes
 
@@ -503,12 +504,11 @@ Recurring patterns across multiple concerns and sessions:
 | Total ERRORs | 24 | 0 | 3 | 27 |
 | Total NOTEs | 7 | 1 | 2 | 10 |
 | Duplicates / overlaps | 0 | 5 | 0 | 6 (incl. T1-W24 = S3-W7) |
-| Resolved (no further action) | 23 | 91 | 9 | 123 |
-| Resolved (doc done, impl pending) | 0 | 8 | 0 | 8 |
-| Open: accepted | 3 | 21 | 0 | 24 |
-| Open: addressed (impl pending) | 3 | 0 | 0 | 3 |
-| Open: deferred (Phase 2+) | 0 | 3 | 0 | 3 |
-| **Unique open WARNINGs** | **6** | **24** | **0** | **30** |
+| Resolved (implemented or doc-only) | 28 | 99 | 9 | 136 |
+| Accepted (acknowledged, not blocking) | 1 | 21 | 0 | 22 |
+| Deferred (Phase 2+) | 0 | 3 | 0 | 3 |
+| N/A | 0 | 1 | 0 | 1 (S7-W25 BullMQ) |
+| **Open WARNINGs** | **0** | **0** | **0** | **0** |
 | Human review flagged | 0 | 2 | 0 | 2 (S3-W9, S6-W14) |
 
 ### WARNING Sprint Mapping (Reference Only)
@@ -522,8 +522,8 @@ Recurring patterns across multiple concerns and sessions:
 | **Sprint 2 (HITL Gateway + RBAC)** | 1 | HITL-11 |
 | **Sprint 3 (MCP Layer + File Storage)** | 4 | MCP-09, MCP-10, MCP-06 scope, FS-03 (was MCP-11) |
 | **Sprint 4 (Audit + Notification)** | 1 | AUD-04 (was T1-W21) ✓ |
-| **Sprint 5 (Integration & Hardening)** | 23 | 19 resolved ✓, 1 N/A (BullMQ), 3 deferred → Sprint 6 |
-| **Bucket D (no sprint)** | 5 | 2 accepted + 3 deferred |
-| **Total needing implementation** | **37** | 32 Sprints 1–5 + 5 Bucket D |
+| **Sprint 5 (Integration & Hardening)** | 23 | 22 resolved ✓, 1 N/A (BullMQ) |
+| **Bucket D (no sprint)** | 5 | 2 accepted + 3 deferred (Phase 2+) |
+| **Total mapped** | **37** | **All resolved** ✓ |
 
-*Sprint 0–6 total (32): All resolved. S4-W10 + T1-W23 resolved in Sprint 6 (SLO cron evaluators). S2-W12 resolved in Sprint 7 (LLM Usage Dashboard). 1 N/A (S7-W25, BullMQ not adopted).*
+*Sprint 0–7 total (32 mapped): All resolved. S4-W10 + T1-W23 resolved in Sprint 6 (SLO cron evaluators). S2-W12 resolved in Sprint 7 (LLM Usage Dashboard). 1 N/A (S7-W25, BullMQ not adopted). Bucket D: 2 accepted risks + 3 deferred to Phase 2+.*
