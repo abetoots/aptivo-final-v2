@@ -34,7 +34,7 @@ This document defines the observability strategy for Aptivo. It establishes stan
 
 - **ADD v2.0.0** - Section 8: Observability Architecture requirements
 - **[specs/observability.md](../04-specs/observability.md)** - Implementation checklist (quick reference)
-- **Coding Guidelines v3.0.0** - Section 6: Observability integration, ReaderResult wrapper
+- **Coding Guidelines v3.0.0** - Section 6: Observability integration, service span wrapper
 - **Testing Strategies v2.0.0** - Performance testing with P95 < 500ms targets
 - **Deployment Operations v2.0.0** - Metrics/alerts table, health checks, OTel companion workers
 - **Change Management v2.0.0** - Risk monitoring dashboards, validation queries
@@ -333,54 +333,53 @@ module.exports = {
 };
 ```
 
-### 4.3 ReaderResult Span Wrapper
+### 4.3 Service Operation Span Wrapper
 
-Per **Coding Guidelines v3.0.0**, wrap ReaderResult operations with spans:
+Per **Coding Guidelines v3.0.0**, wrap async service operations with spans:
 
 ```typescript
-// lib/observability/traced-reader-result.ts
+// lib/observability/traced-operation.ts
 import { trace, SpanKind, SpanStatusCode } from "@opentelemetry/api";
-import { Result, ReaderResult } from "@aptivo/domain";
+import type { Result } from "@aptivo/types";
 import { resultErrorsTotal } from "./metrics";
 
 const tracer = trace.getTracer("aptivo-app");
 
-export function traceReaderResult<D, T, E extends { _tag: string }>(
+export async function withSpan<T, E extends { _tag: string }>(
   name: string,
-  operation: ReaderResult<D, T, E>,
-): ReaderResult<D, T, E> {
-  return (deps: D) =>
-    tracer.startActiveSpan(name, { kind: SpanKind.INTERNAL }, async (span) => {
-      try {
-        const result = await operation(deps);
+  operation: () => Promise<Result<T, E>>,
+): Promise<Result<T, E>> {
+  return tracer.startActiveSpan(name, { kind: SpanKind.INTERNAL }, async (span) => {
+    try {
+      const result = await operation();
 
-        if (result.success) {
-          span.setStatus({ code: SpanStatusCode.OK });
-        } else {
-          // record error in span
-          span.setStatus({
-            code: SpanStatusCode.ERROR,
-            message: result.error._tag,
-          });
-          span.setAttribute("error.tag", result.error._tag);
+      if (result.ok) {
+        span.setStatus({ code: SpanStatusCode.OK });
+      } else {
+        // record error in span
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: result.error._tag,
+        });
+        span.setAttribute("error.tag", result.error._tag);
 
-          // increment error metric
-          resultErrorsTotal.inc({
-            operation: name,
-            error_tag: result.error._tag,
-            module: "unknown", // override in caller if needed
-          });
-        }
-
-        return result;
-      } catch (error) {
-        span.recordException(error as Error);
-        span.setStatus({ code: SpanStatusCode.ERROR });
-        throw error;
-      } finally {
-        span.end();
+        // increment error metric
+        resultErrorsTotal.inc({
+          operation: name,
+          error_tag: result.error._tag,
+          module: "unknown", // override in caller if needed
+        });
       }
-    });
+
+      return result;
+    } catch (error) {
+      span.recordException(error as Error);
+      span.setStatus({ code: SpanStatusCode.ERROR });
+      throw error;
+    } finally {
+      span.end();
+    }
+  });
 }
 ```
 

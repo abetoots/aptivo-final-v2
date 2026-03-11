@@ -1,0 +1,118 @@
+{
+  "status": "planning_complete",
+  "step_number": 1,
+  "total_steps": 1,
+  "metadata": {
+    "sprint": 5,
+    "theme": "Wire it all together, lock it down",
+    "capacity_sp": 30,
+    "total_estimated_sp": 48,
+    "priority": "Wiring > Security > Observability > Dashboards"
+  },
+  "plan_summary": "Sprint 5 transitions the platform from isolated packages with in-memory mocks to a fully integrated system using real DB adapters, S3 storage, and AgentKit MCP transports. Week 1 is dedicated to the 'Critical Path' of wiring (DB adapters, Inngest registration, E2E demo workflow). Week 2 focuses on 'Hardening' (SLO alerts, SSRF protection, body limits, PII-safe logging). Due to scope risk (48 SP vs 30 SP capacity), Admin Dashboards and full Trace Context are marked as stretch goals.",
+  "phases": [
+    {
+      "phase_number": 1,
+      "name": "Integration & Core Wiring",
+      "tasks": [
+        {
+          "id": "CF-01",
+          "name": "Update Monorepo Dependencies",
+          "sp": 1,
+          "description": "Add @inngest/agent-kit to mcp-layer and @aws-sdk/client-s3 to file-storage.",
+          "files": ["packages/mcp-layer/package.json", "packages/file-storage/package.json"],
+          "acceptance_criteria": ["Packages install without conflicts", "Types are available"]
+        },
+        {
+          "id": "CF-02",
+          "name": "Drizzle Store Adapters",
+          "sp": 8,
+          "description": "Implement Drizzle-backed adapters for Audit, DLQ, NotificationPrefs, DeliveryLog, Templates, McpRateLimit, and McpCache.",
+          "files": ["packages/database/src/adapters/"],
+          "dependencies": ["CF-01"],
+          "acceptance_criteria": ["All store interfaces implemented", "Integration tests pass against real PG"]
+        },
+        {
+          "id": "CF-03",
+          "name": "Real MCP & S3 Adapters",
+          "sp": 5,
+          "description": "Implement AgentKitTransportAdapter (MCP) and S3StorageAdapter (DO Spaces).",
+          "files": ["packages/mcp-layer/src/transport/agentkit-adapter.ts", "packages/file-storage/src/storage/s3-adapter.ts"],
+          "dependencies": ["CF-01"],
+          "acceptance_criteria": ["MCP tool calls reach real servers", "Files upload to DO Spaces"]
+        },
+        {
+          "id": "INT-01",
+          "name": "End-to-End Workflow Demo",
+          "sp": 5,
+          "description": "Wire real subsystems into a demo workflow: trigger → LLM analysis → HITL approval → MCP action → file storage → audit trail.",
+          "files": ["apps/web/src/lib/workflows/demo.ts", "apps/web/src/app/api/inngest/route.ts"],
+          "dependencies": ["CF-02", "CF-03"],
+          "acceptance_criteria": ["Full workflow completes with real side-effects recorded in DB/S3"]
+        }
+      ]
+    },
+    {
+      "phase_number": 2,
+      "name": "Hardening & Observability",
+      "tasks": [
+        {
+          "id": "INT-04",
+          "name": "Observability & SLO Alerts",
+          "sp": 5,
+          "description": "Configure SLO alerts (Success rate, HITL latency, Audit integrity) and LLM spend dashboard.",
+          "files": ["docs/06-operations/alerts.yml", "apps/web/src/lib/observability/"],
+          "acceptance_criteria": ["Alerts trigger in Grafana/CloudWatch based on synthetic failures"]
+        },
+        {
+          "id": "INT-06",
+          "name": "Security Hardening",
+          "sp": 5,
+          "description": "SSRF validation for outbound webhooks, body size limits (256KB), and PII-safe logging (sanitizeForLogging).",
+          "files": ["apps/web/src/middleware.ts", "packages/mcp-layer/src/security/"],
+          "acceptance_criteria": ["Private IP webhooks blocked", "Large payloads rejected at gateway"]
+        },
+        {
+          "id": "INT-08",
+          "name": "Trace Context Propagation",
+          "sp": 5,
+          "description": "Propagate traceparent across Inngest waitForEvent, BullMQ, Novu, and MCP tool calls.",
+          "files": ["packages/mcp-layer/src/transport/", "packages/notifications/src/adapters/"],
+          "acceptance_criteria": ["Single trace spans across async boundaries in Jaeger/OTel"]
+        }
+      ]
+    },
+    {
+      "phase_number": 3,
+      "name": "Stretch Goals",
+      "tasks": [
+        {
+          "id": "INT-02",
+          "name": "Admin Dashboard Basic",
+          "sp": 5,
+          "description": "Next.js UI to view pending approvals, LLM costs, and audit logs.",
+          "files": ["apps/web/src/app/admin/"],
+          "acceptance_criteria": ["Admin-only pages render real data from AuditStore/HitlStore"]
+        },
+        {
+          "id": "INT-05",
+          "name": "Error Handling: Probes & Shutdown",
+          "sp": 3,
+          "description": "Readiness/startup probes for DO App Platform and Graceful shutdown (SIGTERM).",
+          "files": ["apps/web/src/instrumentation.ts", "app.yaml"],
+          "acceptance_criteria": ["Containers drain in-flight requests before exit"]
+        }
+      ]
+    }
+  ],
+  "risks": [
+    {
+      "risk": "Scope Overrun",
+      "mitigation": "INT-02 (Admin Dashboard) and INT-05 (Error Handling) are lower priority than Wiring and Security; they will be deferred if Phase 1 slips."
+    },
+    {
+      "risk": "DB Adapter Complexity",
+      "mitigation": "Senior dev owns CF-02. Use Drizzle's relational queries to minimize boilerplate."
+    }
+  ]
+}

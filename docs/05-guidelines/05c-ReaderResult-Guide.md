@@ -1,13 +1,26 @@
 ---
 id: GUIDELINE-READER-RESULT
 title: 5.c ReaderResult Quick-Start Guide
-status: Draft
+status: Archived
 version: 1.0.0
 owner: "@owner"
-last_updated: "2026-01-21"
+last_updated: "2026-03-10"
 ---
 
 # 5.c ReaderResult Quick-Start Guide
+
+> **ARCHIVED (2026-03-10)** — This guide has been archived following a multi-model design review.
+> The ReaderResult monadic pattern was never adopted in production code. All 4 completed sprints
+> use factory functions (`createService(deps)`) with explicit `Result<T,E>` checking instead.
+> The factory-function pattern is now the official standard — see [05a-Coding-Guidelines.md](./05a-Coding-Guidelines.md) §4.2.
+>
+> **Decision record:** [READER_RESULT_DECISION_MULTI_REVIEW.md](../06-sprints/READER_RESULT_DECISION_MULTI_REVIEW.md)
+>
+> **Reasons for archival:**
+> - Shape incompatibility (`{ success, data }` vs Aptivo's `{ ok, value }`)
+> - Inngest's imperative step model is the primary composition surface; ReaderResult can't wrap durable boundaries
+> - Zero production adoption after 4 sprints, 6 packages, 500+ tests
+> - References non-existent `@aptivo/domain` package
 
 **Parent:** [05-guidelines/index.md](./index.md)
 

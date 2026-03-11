@@ -48,6 +48,10 @@ jobs:
         env:
           NODE_ENV: test
 
+      # CF-02: supply-chain pre-deploy verification gate
+      - name: Supply-chain verification
+        run: pnpm exec tsx tools/verify-supply-chain.ts
+
   # ═══════════════════════════════════════════════════════════
   # Job 2: Build Docker Images (Immutable Artifacts)
   # ═══════════════════════════════════════════════════════════

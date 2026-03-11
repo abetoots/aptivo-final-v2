@@ -459,6 +459,7 @@ export const llmUsageLogs = pgTable('llm_usage_logs', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   // workflow context
   workflowId: uuid('workflow_id'),
+  workflowStepId: varchar('workflow_step_id', { length: 100 }),
   domain: varchar('domain', { length: 50 }).notNull(),
   // provider details
   provider: varchar('provider', { length: 50 }).notNull(),
@@ -469,16 +470,41 @@ export const llmUsageLogs = pgTable('llm_usage_logs', {
   totalTokens: integer('total_tokens').notNull(),
   // cost (USD)
   costUsd: numeric('cost_usd', { precision: 10, scale: 6 }).notNull(),
-  // metadata
+  // request metadata
+  requestType: varchar('request_type', { length: 50 }),
   latencyMs: integer('latency_ms'),
+  // fallback tracking
   wasFallback: boolean('was_fallback').default(false),
+  primaryProvider: varchar('primary_provider', { length: 50 }),
   // timing
   timestamp: timestamp('timestamp', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
   workflowIdx: index('llm_usage_logs_workflow_id_idx').on(table.workflowId),
   domainIdx: index('llm_usage_logs_domain_idx').on(table.domain),
   timestampIdx: index('llm_usage_logs_timestamp_idx').on(table.timestamp),
+  providerIdx: index('llm_usage_logs_provider_idx').on(table.provider),
 }));
+```
+
+### 4.2b LLM Budget Configs
+
+```typescript
+export const llmBudgetConfigs = pgTable('llm_budget_configs', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  domain: varchar('domain', { length: 50 }).notNull().unique(),
+  // daily budget
+  dailyLimitUsd: numeric('daily_limit_usd', { precision: 10, scale: 2 }).notNull(),
+  dailyWarningThreshold: numeric('daily_warning_threshold', { precision: 3, scale: 2 }).default('0.90'),
+  // monthly budget
+  monthlyLimitUsd: numeric('monthly_limit_usd', { precision: 10, scale: 2 }).notNull(),
+  monthlyWarningThreshold: numeric('monthly_warning_threshold', { precision: 3, scale: 2 }).default('0.90'),
+  // behavior
+  blockOnExceed: boolean('block_on_exceed').default(true),
+  notifyOnWarning: boolean('notify_on_warning').default(true),
+  // audit
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull().$onUpdate(() => new Date()),
+});
 ```
 
 ### 4.3 HITL Requests
@@ -491,19 +517,22 @@ export const hitlStatusEnum = pgEnum('hitl_status', [
 export const hitlRequests = pgTable('hitl_requests', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
   workflowId: uuid('workflow_id').notNull(),
-  status: hitlStatusEnum('status').default('pending').notNull(),
-  token: varchar('token', { length: 2048 }).notNull().unique(),
-  tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }).notNull(),
+  workflowStepId: varchar('workflow_step_id', { length: 100 }),
+  domain: varchar('domain', { length: 50 }).notNull(),
   actionType: varchar('action_type', { length: 100 }).notNull(),
   summary: text('summary').notNull(),
   details: jsonb('details'),
-  domain: varchar('domain', { length: 50 }).notNull(),
+  approverId: uuid('approver_id').references(() => users.id).notNull(),
+  status: hitlStatusEnum('status').default('pending').notNull(),
+  // hash only — raw JWT never persisted (SP-11 security)
+  tokenHash: char('token_hash', { length: 64 }).notNull().unique(),
+  tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
   resolvedAt: timestamp('resolved_at', { withTimezone: true }),
 }, (table) => ({
   workflowIdx: index('hitl_requests_workflow_id_idx').on(table.workflowId),
-  statusIdx: index('hitl_requests_status_idx').on(table.status),
-  tokenIdx: uniqueIndex('hitl_requests_token_idx').on(table.token),
+  approverStatusIdx: index('hitl_requests_approver_status_idx').on(table.approverId, table.status),
+  statusExpiresIdx: index('hitl_requests_status_expires_idx').on(table.status, table.tokenExpiresAt),
 }));
 ```
 
@@ -511,7 +540,7 @@ export const hitlRequests = pgTable('hitl_requests', {
 
 ```typescript
 export const hitlDecisionEnum = pgEnum('hitl_decision', [
-  'approved', 'rejected', 'request_changes',
+  'approved', 'rejected',
 ]);
 
 export const hitlDecisions = pgTable('hitl_decisions', {
@@ -521,13 +550,58 @@ export const hitlDecisions = pgTable('hitl_decisions', {
   decision: hitlDecisionEnum('decision').notNull(),
   comment: text('comment'),
   channel: varchar('channel', { length: 50 }).notNull(),
+  ipAddress: varchar('ip_address', { length: 45 }),
+  userAgent: text('user_agent'),
   decidedAt: timestamp('decided_at', { withTimezone: true }).defaultNow().notNull(),
 }, (table) => ({
-  requestIdx: index('hitl_decisions_request_id_idx').on(table.requestId),
+  requestIdx: uniqueIndex('hitl_decisions_request_id_idx').on(table.requestId),
+  approverIdx: index('hitl_decisions_approver_idx').on(table.approverId),
 }));
 ```
 
-### 4.5 Notification Templates
+### 4.5 RBAC Tables (Sprint 2 — ID-01)
+
+```typescript
+export const userRoles = pgTable('user_roles', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  role: varchar('role', { length: 50 }).notNull(),
+  // null = platform-wide; set to domain name for domain-scoped roles
+  domain: varchar('domain', { length: 50 }),
+  // audit
+  grantedBy: uuid('granted_by').references(() => users.id).notNull(),
+  grantedAt: timestamp('granted_at', { withTimezone: true }).defaultNow().notNull(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }),
+}, (table) => [
+  index('user_roles_user_id_idx').on(table.userId),
+  index('user_roles_role_domain_idx').on(table.role, table.domain),
+  // prevent duplicate active role assignments per user+role+domain
+  uniqueIndex('user_roles_active_unique_idx')
+    .on(table.userId, table.role, table.domain)
+    .where(sql`revoked_at IS NULL`),
+]);
+
+export const rolePermissions = pgTable('role_permissions', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  role: varchar('role', { length: 50 }).notNull(),
+  permission: varchar('permission', { length: 100 }).notNull(),
+}, (table) => [
+  index('role_permissions_role_idx').on(table.role),
+  uniqueIndex('role_permissions_role_permission_idx').on(table.role, table.permission),
+]);
+```
+
+**Core roles** (seeded): `admin`, `user`, `viewer`
+
+**Domain roles** (extensible): e.g., `trader` in `crypto`, `recruiter` in `hr` — added via the `domain` column in Sprint 6-7.
+
+**Active role check**: `revokedAt IS NULL`. The partial unique index prevents duplicate active assignments.
+
+**Permission strings**: Colon-namespaced (e.g., `hitl:approve`, `llm:query`, `admin:users`).
+
+---
+
+### 4.6 Notification Templates
 
 ```typescript
 export const notificationTemplates = pgTable('notification_templates', {
@@ -544,7 +618,7 @@ export const notificationTemplates = pgTable('notification_templates', {
 });
 ```
 
-### 4.6 Sessions (Platform Core Identity)
+### 4.7 Sessions (Platform Core Identity)
 
 ```typescript
 export const sessions = pgTable('sessions', {
@@ -563,7 +637,7 @@ export const sessions = pgTable('sessions', {
 }));
 ```
 
-### 4.7 Authenticators (WebAuthn)
+### 4.8 Authenticators (WebAuthn)
 
 ```typescript
 export const authenticators = pgTable('authenticators', {

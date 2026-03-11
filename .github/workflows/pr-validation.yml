@@ -62,6 +62,10 @@ jobs:
         run: pnpm audit --audit-level=critical
         continue-on-error: false  # block on critical vulnerabilities
 
+      # CF-02: supply-chain pre-deploy verification gate
+      - name: Supply-chain verification
+        run: pnpm exec tsx tools/verify-supply-chain.ts
+
       - name: Upload test logs on failure
         if: failure()
         uses: actions/upload-artifact@v4

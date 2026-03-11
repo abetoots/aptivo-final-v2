@@ -25,7 +25,7 @@ last_updated: '2026-01-18'
 
 | Requirement | Source | How Addressed |
 |-------------|--------|---------------|
-| Functional architecture | ADD §4.1 | ReaderResult pattern, pure domain functions |
+| Functional architecture | ADD §4.1 | Factory functions with Result types, pure domain functions |
 | Zero Trust security | ADD §6 | Validation at boundaries, explicit auth |
 | Type safety | TSD §4.1 | TypeScript strict mode, Zod validation |
 | Error handling | TSD §4.2 | Result types, RFC 7807 Problem Details |
@@ -41,9 +41,9 @@ We follow a functional programming approach with clear separation of concerns:
 
 - **Pure Domain Functions:** All business logic is implemented as pure functions that return Result types. No exceptions, no side effects, no mutations.
 - **Result Types for Errors:** Business errors are data, not exceptions. Use `Result<T, E>` for all operations that can fail.
-- **ReaderResult for Dependencies:** Use ReaderResult pattern for dependency injection, making dependencies explicit and testable.
+- **Factory Functions for Dependencies:** Use `createService(deps)` factory functions with explicit `*Deps` interfaces for dependency injection, making dependencies explicit and testable.
 - **Immutable Data:** All data structures are immutable. Use spread operators or libraries for updates.
-- **Imperative Shell:** Side effects (DB, API calls, logging) are isolated at the edges using the ReaderResult pattern.
+- **Imperative Shell:** Side effects (DB, API calls, logging) are isolated at the edges using factory-function composition.
 
 ### 2.2 Zero Trust Security Posture
 
@@ -73,7 +73,7 @@ The project uses a monorepo structure with Turborepo + pnpm workspaces.
 ```
 apps/web/src/modules/{module}/
 ├── domain/           # pure business logic (no side effects)
-├── application/      # service layer using ReaderResult
+├── application/      # service layer using factory functions
 ├── infrastructure/   # external integrations & data access
 ├── interface/        # API endpoints & UI components
 └── tests/            # test files organized by layer
@@ -151,7 +151,7 @@ export const zodValidationError = (error: ZodError): CandidateError => ({
 
 ```typescript
 // domain/candidate.ts
-import { Result } from '@aptivo/domain';
+import { Result } from '@aptivo/types';
 import { CreateCandidateInputSchema, type Candidate, type CreateCandidateInput } from './validations';
 import type { CandidateError } from './errors';
 import { zodValidationError } from './errors';
@@ -199,43 +199,48 @@ export const validateStatusTransition = (
 };
 ```
 
-### 4.2 ReaderResult Pattern for Dependency Injection
+### 4.2 Factory Function Pattern for Dependency Injection
 
-ReaderResult combines dependency injection with explicit error handling. It enables:
+All service modules use factory functions with explicit dependency interfaces. This provides:
 
-- **Explicit dependencies:** No hidden global state
-- **Composable operations:** Chain with `pipe` and automatic error short-circuiting
-- **Testability:** Provide mock dependencies directly, no module-level mocking
-
-**Full Guide:** See [05c-ReaderResult-Guide.md](./05c-ReaderResult-Guide.md) for complete patterns and examples.
+- **Explicit dependencies:** No hidden global state — deps declared in a `*Deps` interface
+- **Testability:** Provide mock dependencies at construction time, no module-level mocking
+- **Readability:** Standard TypeScript — no monadic abstractions, debuggable with breakpoints
 
 **Key Rules:**
 
-1. Define dependencies in an interface extending `BaseDependencies`
-2. Use `pipe` with Do notation for multi-step workflows
-3. Use `ReaderResult.bind` for critical operations (DB, auth)
-4. Use `ReaderResult.tap` only for non-critical side effects (logging)
-5. Use `ReaderResult.tryCatch` for async operations that may throw
+1. Define dependencies in a `*Deps` interface
+2. Export a `createService(deps)` factory function returning an object with methods
+3. Each method returns `Promise<Result<T, E>>` for async operations or `Result<T, E>` for sync
+4. Use explicit `if (!result.ok)` checks for error propagation
+5. Store interfaces decouple from DB implementation (adapters live in `@aptivo/database`)
 
 ```typescript
-// minimal example - see 05c-ReaderResult-Guide.md for full patterns
-import { pipe, ReaderResult } from '@aptivo/domain';
+// standard factory function pattern (used across all packages)
+import { Result } from '@aptivo/types';
+import type { AuditStore } from './types.js';
 
-export const createEntity = (
-  data: unknown
-): ReaderResult<ServiceDeps, DomainError, Entity> =>
-  pipe(
-    ReaderResult.Do<ServiceDeps, DomainError>(),
-    ReaderResult.bind('_perm', () => requirePermission('entity:manage')),
-    ReaderResult.bind('entity', () => ReaderResult.fromResult(createEntityDomain(data))),
-    ReaderResult.bind('saved', ({ entity }) =>
-      ReaderResult.tryCatch(
-        (deps) => deps.repo.save(entity),
-        (e) => persistenceError('save', e as Error)
-      )
-    ),
-    ReaderResult.map(({ saved }) => saved)
-  );
+export interface AuditServiceDeps {
+  store: AuditStore;
+  masking: MaskingConfig;
+}
+
+export function createAuditService(deps: AuditServiceDeps) {
+  return {
+    async emit(input: AuditEventInput): Promise<Result<AuditRecord, AuditError>> {
+      const masked = maskMetadata(input.metadata, deps.masking);
+      const head = await deps.store.lockChainHead('global');
+      if (!head.ok) return head;
+
+      const hash = computeAuditHash(input, head.value);
+      const record = await deps.store.insert({ ...input, metadata: masked, hash });
+      if (!record.ok) return record;
+
+      await deps.store.updateChainHead('global', record.value.sequence, hash);
+      return record;
+    },
+  };
+}
 ```
 
 ### 4.3 RFC 7807 Problem Details Error Handling
@@ -462,23 +467,29 @@ export const processWebhook = (rawPayload: unknown): Result<WebhookEvent, Webhoo
 
 ```typescript
 // don't assume authorization passed at the gateway
-export const updateCandidateStatus = (
-  candidateId: string,
-  newStatus: CandidateStatus
-): ReaderResult<CandidateServiceDeps, CandidateError, Candidate> =>
-  pipe(
-    ReaderResult.Do<CandidateServiceDeps, CandidateError>(),
-    // explicit permission check
-    ReaderResult.tap(() => requirePermission('candidate:update')),
-    ReaderResult.bind('candidate', () => findCandidateById(candidateId)),
-    // verify user can access THIS candidate (resource-level auth)
-    ReaderResult.tap(({ candidate }) => ReaderResult.asks((deps) => {
-      if (!canAccessCandidate(deps.currentUser, candidate)) {
-        throw new UnauthorizedError('Cannot access this candidate');
+export function createCandidateService(deps: CandidateServiceDeps) {
+  return {
+    async updateStatus(
+      candidateId: string,
+      newStatus: CandidateStatus
+    ): Promise<Result<Candidate, CandidateError>> {
+      // explicit permission check
+      if (!hasPermission(deps.currentUser, 'candidate:update')) {
+        return Result.err({ _tag: 'AuthorizationError', action: 'candidate:update', resource: candidateId, reason: 'Missing permission' });
       }
-    })),
-    // proceed with update...
-  );
+
+      const candidate = await deps.candidateRepo.findById(candidateId);
+      if (!candidate.ok) return candidate;
+
+      // verify user can access THIS candidate (resource-level auth)
+      if (!canAccessCandidate(deps.currentUser, candidate.value)) {
+        return Result.err({ _tag: 'AuthorizationError', action: 'candidate:update', resource: candidateId, reason: 'Cannot access this candidate' });
+      }
+
+      // proceed with update...
+    },
+  };
+}
 ```
 
 #### Security Headers Middleware
@@ -566,10 +577,10 @@ export const getPermissionsForRole = pMemoize(
 
 **Key Rules:**
 
-1. Test Result types explicitly: check `result.success`, then `result.data` or `result.error._tag`
+1. Test Result types explicitly: check `result.ok`, then `result.value` or `result.error._tag`
 2. Use `vi.hoisted()` for mock state (vi.mock is hoisted)
 3. Test Zod schemas at domain layer boundaries
-4. Provide mock dependencies directly to `ReaderResult.run(deps)`
+4. Provide mock dependencies via factory function construction: `createService(mockDeps)`
 5. Use table-driven tests (`it.each`) for edge cases
 
 ### 4.8 Pipeline Pattern for Data Transformations
@@ -577,8 +588,8 @@ export const getPermissionsForRole = pMemoize(
 Use Pipeline for synchronous, multi-step data transformations:
 
 ```typescript
-import { Pipeline } from '@aptivo/domain';
-import { Result } from '@aptivo/domain';
+import { Pipeline } from '@aptivo/types';
+import { Result } from '@aptivo/types';
 
 // simple transformation pipeline
 const processUserData = (rawData: unknown) =>
@@ -598,8 +609,8 @@ const processUserData = (rawData: unknown) =>
     .value();
 ```
 
-> **When to use Pipeline vs ReaderResult:**
-> - Use `ReaderResult` for orchestrating workflows with dependencies, async operations, and cross-layer error handling
+> **When to use Pipeline vs factory functions:**
+> - Use factory functions (`createService(deps)`) for orchestrating workflows with dependencies, async operations, and cross-layer error handling
 > - Use `Pipeline` for synchronous data transformations within a single function
 
 ---
@@ -749,37 +760,37 @@ export const initTracing = () => {
 };
 ```
 
-### 6.3 Wrapping ReaderResult with Spans
+### 6.3 Wrapping Service Operations with Spans
 
 ```typescript
 import { trace, SpanStatusCode } from '@opentelemetry/api';
+import type { Result } from '@aptivo/types';
 
 const tracer = trace.getTracer('aptivo-app');
 
-// helper to wrap ReaderResult operations with tracing
-export const withSpan = <D, E, A>(
+// helper to wrap async service operations with tracing
+export async function withSpan<T, E>(
   name: string,
-  operation: ReaderResult<D, E, A>
-): ReaderResult<D, E, A> =>
-  ReaderResult.asks((deps: D) => {
-    return tracer.startActiveSpan(name, async (span) => {
-      try {
-        const result = await operation(deps);
-        if (result.success) {
-          span.setStatus({ code: SpanStatusCode.OK });
-        } else {
-          span.setStatus({ code: SpanStatusCode.ERROR });
-        }
-        return result;
-      } catch (error) {
+  operation: () => Promise<Result<T, E>>
+): Promise<Result<T, E>> {
+  return tracer.startActiveSpan(name, async (span) => {
+    try {
+      const result = await operation();
+      if (result.ok) {
+        span.setStatus({ code: SpanStatusCode.OK });
+      } else {
         span.setStatus({ code: SpanStatusCode.ERROR });
-        span.recordException(error as Error);
-        throw error;
-      } finally {
-        span.end();
       }
-    });
+      return result;
+    } catch (error) {
+      span.setStatus({ code: SpanStatusCode.ERROR });
+      span.recordException(error as Error);
+      throw error;
+    } finally {
+      span.end();
+    }
   });
+}
 ```
 
 ---
@@ -948,13 +959,50 @@ export const createCandidate = (data: unknown): Result<Candidate, CandidateError
 - [ ] API errors conform to RFC 7807 Problem Details
 - [ ] Dependencies are explicitly defined in interfaces
 - [ ] No side effects in domain functions
-- [ ] ReaderResult used for operations with dependencies
+- [ ] Factory functions used for services with injected dependencies
 - [ ] Authorization checks are explicit (Zero Trust)
 - [ ] Tests focus on pure functions (domain layer: 100% coverage)
 - [ ] No direct `process.env` access (use `env` object)
 - [ ] Observability: logging and tracing integrated
 - [ ] All data structures are immutable
 - [ ] UUID v7 used for primary keys
+
+---
+
+## 8b. Saga Pattern Enforcement (CF-01)
+
+When using Inngest `step.run()` in saga/compensation patterns, **never wrap `step.run()` in try/catch**. The Inngest test engine wraps errors, losing class information. Use return-value-based flow control instead.
+
+### Incorrect (anti-pattern)
+
+```typescript
+// DO NOT DO THIS — try/catch around step.run() loses error context
+try {
+  await step.run('do-thing', async () => { /* ... */ });
+} catch (err) {
+  await step.run('compensate', async () => { /* ... */ });
+}
+```
+
+### Correct (return-value pattern)
+
+```typescript
+const result = await step.run('do-thing', async () => {
+  try {
+    const data = await riskyOperation();
+    return { ok: true, data } as const;
+  } catch (err) {
+    return { ok: false, error: String(err) } as const;
+  }
+});
+
+if (!result.ok) {
+  await step.run('compensate', async () => { /* ... */ });
+  return;
+}
+```
+
+This pattern is enforced by the `safeSagaStep()` wrapper in `@aptivo/llm-gateway` and documented in SP-01 spike findings.
 
 ---
 
@@ -966,7 +1014,7 @@ This document establishes our functional programming approach aligned with TSD v
 |-----------|----------------|
 | **Pure Functions First** | Business logic in domain layer as pure functions |
 | **Explicit Error Handling** | Result types with Zod validation, RFC 7807 responses |
-| **Dependency Injection** | ReaderResult pattern for testable services |
+| **Dependency Injection** | Factory functions with `*Deps` interfaces for testable services |
 | **Zero Trust Security** | Validate everything, authorize explicitly |
 | **Observability** | OpenTelemetry tracing, structured logging |
 | **Type Safety** | Zod schemas, derived types, tagged unions |

@@ -143,7 +143,7 @@ describe('Candidate Domain Logic', () => {
 
 ### 3.2 Integration Testing (Application Layer)
 
-- **Description:** Testing service orchestration with mocked dependencies using the ReaderResult pattern. Verifies that application services correctly compose domain logic with infrastructure.
+- **Description:** Testing service orchestration with mocked dependencies using factory functions. Verifies that application services correctly compose domain logic with infrastructure.
 - **Tools:** Vitest 4.x (see [project-structure.md](../04-specs/project-structure.md) for canonical versions)
 - **Responsibility:** Developers
 - **Coverage:** **80% required**
@@ -156,7 +156,7 @@ import { createCandidate, updateCandidateStatus } from '../../application/candid
 import type { CandidateDeps } from '../../application/types';
 
 describe('CandidateService', () => {
-  // create mock dependencies for ReaderResult pattern
+  // create mock dependencies for factory function pattern
   const createMockDeps = (): CandidateDeps => ({
     candidateRepository: {
       findById: vi.fn(),
@@ -510,7 +510,7 @@ Test both success and error branches of Result-returning functions.
 ```typescript
 // apps/web/src/modules/candidate-management/tests/application/result-patterns.test.ts
 import { describe, it, expect } from 'vitest';
-import { Result } from '@aptivo/domain';
+import { Result } from '@aptivo/types';
 import { processCandidate } from '../../application/candidate-processor';
 
 describe('Result Type Testing Patterns', () => {
@@ -579,60 +579,49 @@ describe('Result Type Testing Patterns', () => {
 });
 ```
 
-### 4.5 Testing ReaderResult Composition
+### 4.5 Testing Factory Function Services
 
-Test service composition with the ReaderResult pattern.
+Test service composition with the factory function pattern.
 
 ```typescript
-// apps/web/src/modules/candidate-management/tests/application/composition.test.ts
+// example: testing a service created with createService(deps)
 import { describe, it, expect, vi } from 'vitest';
-import { pipe } from '@aptivo/domain';
-import {
-  findCandidate,
-  updateStatus,
-  publishEvent
-} from '../../application/candidate-operations';
+import { createCandidateService } from '../../application/candidate-service';
+import type { CandidateServiceDeps } from '../../application/types';
 
-describe('ReaderResult Composition', () => {
-  const mockDeps = createMockDeps();
+describe('CandidateService composition', () => {
+  const mockDeps: CandidateServiceDeps = {
+    candidateRepo: { findById: vi.fn(), save: vi.fn() },
+    eventPublisher: { publish: vi.fn() },
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  };
 
   it('should compose operations and propagate success', async () => {
-    mockDeps.repository.findById.mockResolvedValue({ id: '1', status: 'new' });
-    mockDeps.repository.save.mockResolvedValue({ id: '1', status: 'screening' });
-    mockDeps.eventPublisher.publish.mockResolvedValue(undefined);
+    vi.mocked(mockDeps.candidateRepo.findById).mockResolvedValue({ id: '1', status: 'new' });
+    vi.mocked(mockDeps.candidateRepo.save).mockResolvedValue({ id: '1', status: 'screening' });
 
-    const workflow = pipe(
-      findCandidate('1'),
-      ReaderResult.flatMap(updateStatus('screening')),
-      ReaderResult.tap(publishEvent('candidate.status.changed'))
-    );
+    const service = createCandidateService(mockDeps);
+    const result = await service.updateStatus('1', 'screening');
 
-    const result = await workflow(mockDeps);
-
-    expect(result.success).toBe(true);
+    expect(result.ok).toBe(true);
     expect(mockDeps.eventPublisher.publish).toHaveBeenCalledWith(
       'candidate.status.changed',
       expect.objectContaining({ status: 'screening' })
     );
   });
 
-  it('should short-circuit on first error', async () => {
-    mockDeps.repository.findById.mockResolvedValue(null); // not found
+  it('should return error and skip subsequent steps on failure', async () => {
+    vi.mocked(mockDeps.candidateRepo.findById).mockResolvedValue(null);
 
-    const workflow = pipe(
-      findCandidate('nonexistent'),
-      ReaderResult.flatMap(updateStatus('screening')),
-      ReaderResult.tap(publishEvent('candidate.status.changed'))
-    );
+    const service = createCandidateService(mockDeps);
+    const result = await service.updateStatus('nonexistent', 'screening');
 
-    const result = await workflow(mockDeps);
-
-    expect(result.success).toBe(false);
-    if (!result.success) {
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
       expect(result.error._tag).toBe('NotFoundError');
     }
     // subsequent operations should not be called
-    expect(mockDeps.repository.save).not.toHaveBeenCalled();
+    expect(mockDeps.candidateRepo.save).not.toHaveBeenCalled();
     expect(mockDeps.eventPublisher.publish).not.toHaveBeenCalled();
   });
 });

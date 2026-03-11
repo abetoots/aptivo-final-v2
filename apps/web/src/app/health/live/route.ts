@@ -1,10 +1,15 @@
 /**
- * FW-03: Next.js Shell
- * @task FW-03
- * @spec docs/04-specs/project-structure.md SS2
- * @spec docs/04-specs/configuration.md SS4 (Health Checks)
+ * INT-05: liveness probe
+ * @task INT-05
+ * @warning T1-W29 — no version info, no dependency details
  */
 
+import { isShuttingDown } from '../../../lib/shutdown';
+
 export async function GET() {
-  return Response.json({ status: 'ok', timestamp: new Date().toISOString() });
+  if (isShuttingDown()) {
+    return Response.json({ status: 'shutting_down' }, { status: 503 });
+  }
+
+  return Response.json({ status: 'ok' });
 }

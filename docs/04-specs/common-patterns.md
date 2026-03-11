@@ -529,5 +529,5 @@ All cursor-paginated endpoints use a default sort order of `createdAt DESC, id A
 | Implementation | Target Document | Section |
 |----------------|-----------------|---------|
 | Result Usage | 05a-Coding-Guidelines.md | Error Handling |
-| Result Testing | 05c-ReaderResult-Guide.md | Full Guide |
+| Result Testing | 05b-Testing-Strategies.md | Testing Guide |
 | Event Patterns | hr/workflow-automation.md | Event Catalog |

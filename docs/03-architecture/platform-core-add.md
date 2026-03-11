@@ -2810,12 +2810,11 @@ services:
 ### 11.1 Error Handling Pattern
 
 ```typescript
-// Result type for all fallible operations in domain layer
-import { Result } from '@satoshibits/functional';
+// result type for all fallible operations — see @aptivo/types
+import { Result } from '@aptivo/types';
 
-// ReaderResult for application/orchestration layer (explicit dependencies)
-// See: docs/05-guidelines/05c-ReaderResult-Guide.md
-type ReaderResult<R, E, A> = (deps: R) => Promise<Result<A, E>>;
+// factory function pattern for application/orchestration layer (explicit dependencies)
+// see: docs/05-guidelines/05a-Coding-Guidelines.md §4.2
 
 // domain errors are tagged unions
 type DomainError =

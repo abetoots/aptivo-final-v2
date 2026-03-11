@@ -8,22 +8,38 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --max-warnings 0",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf .next"
   },
   "dependencies": {
+    "@aptivo/audit": "workspace:*",
+    "@aptivo/database": "workspace:*",
+    "@aptivo/file-storage": "workspace:*",
+    "@aptivo/hitl-gateway": "workspace:*",
+    "@aptivo/llm-gateway": "workspace:*",
+    "@aptivo/mcp-layer": "workspace:*",
+    "@aptivo/notifications": "workspace:*",
+    "@aptivo/types": "workspace:*",
+    "drizzle-orm": "^0.45.1",
+    "inngest": "^3.52.6",
     "next": "^16.1.6",
+    "pg": "^8.19.0",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4"
+    "react-dom": "^19.2.4",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@aptivo/eslint-config": "workspace:*",
     "@aptivo/typescript-config": "workspace:*",
+    "@inngest/test": "^0.1.9",
     "@types/node": "^25.3.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "eslint": "^9.39.2",
     "tailwindcss": "^4.2.1",
-    "typescript": "5.9.2"
+    "typescript": "5.9.2",
+    "vitest": "^4.0.18"
   }
 }

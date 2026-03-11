@@ -149,6 +149,46 @@ aptivo/
 │   │   │   └── index.ts
 │   │   └── package.json
 │   │
+│   ├── types/                   # Shared types (Result, errors, RFC 7807)
+│   │   ├── src/
+│   │   │   ├── result.ts        # Result<T, E> discriminated union
+│   │   │   ├── errors.ts        # Tagged union error types + factories
+│   │   │   ├── problem-details.ts
+│   │   │   └── index.ts
+│   │   └── package.json
+│   │
+│   ├── llm-gateway/             # LLM provider abstraction + cost tracking
+│   │   ├── src/
+│   │   │   ├── providers/       # OpenAI, Anthropic provider implementations
+│   │   │   ├── cost/            # Pricing registry, cost calculator
+│   │   │   ├── budget/          # Budget enforcement service
+│   │   │   ├── usage/           # Usage logging
+│   │   │   ├── validation/      # LLM output validation (Zod)
+│   │   │   ├── rate-limit/      # Per-user token bucket
+│   │   │   ├── gateway/         # Main gateway factory
+│   │   │   └── index.ts
+│   │   └── package.json
+│   │
+│   ├── hitl-gateway/            # Human-in-the-loop approval gateway
+│   │   ├── src/
+│   │   │   ├── tokens/          # JWT generation, verification, hashing
+│   │   │   ├── events/          # Event signing, envelope types
+│   │   │   ├── replay/          # ReplayStore interface + InMemory/Redis (CF-03)
+│   │   │   ├── request/         # Create request service (HITL-05)
+│   │   │   ├── decision/        # Approve/reject decision service (HITL-06)
+│   │   │   ├── workflow/        # Inngest step factory + event schemas (HITL-07)
+│   │   │   ├── notifications/   # Novu notification adapter (HITL-08)
+│   │   │   ├── auth/            # RBAC middleware + session revocation (ID-02, HITL-11)
+│   │   │   └── index.ts
+│   │   └── package.json
+│   │
+│   ├── mcp-layer/               # MCP security + resilience patterns
+│   │   ├── src/
+│   │   │   ├── security/        # Allowlist, env sanitizer, scoped tokens, supply chain
+│   │   │   ├── resilience/      # Circuit breaker
+│   │   │   └── index.ts
+│   │   └── package.json
+│   │
 │   ├── events/                  # Event schemas, topic enums [Phase 2+]
 │   │   ├── src/
 │   │   │   ├── client.ts        # Event bus connection factory
@@ -179,9 +219,13 @@ aptivo/
 | `apps/web` | `@aptivo/web` | Next.js application |
 | `apps/worker` | `@aptivo/worker` | Background worker |
 | `apps/cli` | `@aptivo/cli` | CLI tool |
+| `packages/types` | `@aptivo/types` | Result type, errors, RFC 7807 |
 | `packages/database` | `@aptivo/database` | Database layer |
 | `packages/domain` | `@aptivo/domain` | Shared domain logic |
-| `packages/events` | `@aptivo/events` | Event bus client |
+| `packages/llm-gateway` | `@aptivo/llm-gateway` | LLM provider abstraction + cost tracking |
+| `packages/hitl-gateway` | `@aptivo/hitl-gateway` | HITL approval gateway (tokens, decisions, RBAC) |
+| `packages/mcp-layer` | `@aptivo/mcp-layer` | MCP security + resilience |
+| `packages/events` | `@aptivo/events` | Event bus client [Phase 2+] |
 | `packages/config` | `@aptivo/config` | Shared configs |
 
 ---

@@ -91,7 +91,7 @@ interface RequiredLogFields {
 - [ ] Configure service name, version, and namespace
 - [ ] Enable auto-instrumentations (HTTP, pg, Redis)
 - [ ] Ignore health/metrics endpoints in HTTP instrumentation
-- [ ] Wrap `ReaderResult` operations with `traceReaderResult`
+- [ ] Wrap service operations with `withSpan()` helper
 - [ ] Propagate context in Inngest function steps
 
 ### 4.2 Sampling Policy
