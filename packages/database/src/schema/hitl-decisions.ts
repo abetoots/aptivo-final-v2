@@ -1,8 +1,8 @@
 /**
- * FW-02: Database Package
- * @task FW-02
- * @spec docs/04-specs/database.md
- * @see docs/04-specs/common-patterns.md §2 (Result types for DB operations)
+ * HITL-02: Decision Schema
+ * @task HITL-02
+ * @frd FR-CORE-HITL-003
+ * @spec docs/04-specs/platform-core/hitl-gateway.md
  */
 
 import {
@@ -11,6 +11,7 @@ import {
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
@@ -29,8 +30,9 @@ export const hitlDecisions = pgTable(
     id: uuid('id')
       .primaryKey()
       .default(sql`gen_random_uuid()`),
+    // single-decision enforcement: unique constraint = first-writer-wins
     requestId: uuid('request_id')
-      .references(() => hitlRequests.id)
+      .references(() => hitlRequests.id, { onDelete: 'cascade' })
       .notNull(),
     approverId: uuid('approver_id')
       .references(() => users.id)
@@ -38,16 +40,17 @@ export const hitlDecisions = pgTable(
     decision: hitlDecisionEnum('decision').notNull(),
     comment: text('comment'),
     channel: varchar('channel', { length: 50 }).notNull(),
+    // audit metadata
+    ipAddress: varchar('ip_address', { length: 45 }),
+    userAgent: text('user_agent'),
+    // timing
     decidedAt: timestamp('decided_at', { withTimezone: true })
       .defaultNow()
       .notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true })
-      .defaultNow()
-      .notNull(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .defaultNow()
-      .notNull()
-      .$onUpdate(() => new Date()),
   },
-  (table) => [index('hitl_decisions_request_id_idx').on(table.requestId)]
+  (table) => [
+    // first-writer-wins: only one decision per request
+    uniqueIndex('hitl_decisions_request_id_idx').on(table.requestId),
+    index('hitl_decisions_approver_idx').on(table.approverId),
+  ]
 );

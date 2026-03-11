@@ -14,5 +14,31 @@ export {
   hitlDecisionEnum,
   hitlDecisions,
   llmUsageLogs,
+  llmBudgetConfigs,
   auditLogs,
+  auditChainHeads,
+  dlqStatusEnum,
+  auditWriteDlq,
+  userRoles,
+  rolePermissions,
+  mcpServers,
+  mcpTools,
+  files,
+  fileEntityLinks,
+  notificationTemplates,
+  notificationPreferences,
+  deliveryStatusEnum,
+  notificationDeliveries,
 } from './schema/index.js';
+
+// domain seeds (S6-INF-SEED)
+export {
+  seedAllCrypto,
+  seedCryptoRoles,
+  seedCryptoTemplates,
+  seedCryptoMcpServers,
+  seedAllHr,
+  seedHrRoles,
+  seedHrTemplates,
+  seedHrMcpServers,
+} from './seeds/index.js';
