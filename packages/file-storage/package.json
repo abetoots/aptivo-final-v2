@@ -1,0 +1,32 @@
+{
+  "name": "@aptivo/file-storage",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./storage": "./src/storage/index.ts",
+    "./access": "./src/access/index.ts",
+    "./scanner": "./src/scanner/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@aptivo/types": "workspace:*",
+    "@aws-sdk/client-s3": "^3.800.0",
+    "@aws-sdk/s3-request-presigner": "^3.800.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@aptivo/typescript-config": "workspace:*",
+    "@types/node": "^25.3.3",
+    "typescript": "5.9.2",
+    "vitest": "^4.0.18"
+  }
+}

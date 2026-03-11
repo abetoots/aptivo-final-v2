@@ -25,15 +25,46 @@ const BLOCKED_ENV_PATTERNS = [
   /KEY/i,
 ] as const;
 
+/** safe vars always included (system-level, never sensitive) */
+const SAFE_SYSTEM_VARS = [
+  'NODE_ENV',
+  'PATH',
+  'HOME',
+  'LANG',
+  'LC_ALL',
+  'TZ',
+  'TERM',
+] as const;
+
+/**
+ * Sanitizes environment variables for an MCP child process.
+ *
+ * Only vars explicitly listed in `allowlist` (plus safe system vars) are
+ * passed through. Any var matching BLOCKED_ENV_PATTERNS is rejected even
+ * if it appears in the allowlist — blocked patterns always win.
+ *
+ * @param env - source environment (typically `process.env`)
+ * @param allowlist - explicit list of var names the server needs
+ * @returns clean env with no undefined values
+ */
 export function sanitizeEnvForMcp(
-  _env: Record<string, string | undefined>,
-  _allowlist?: string[],
+  env: Record<string, string | undefined>,
+  allowlist: string[] = [],
 ): Record<string, string> {
-  // TODO: Implement in SP-06 spike execution
-  // Filter env vars: only pass allowlisted vars, block all matching BLOCKED_ENV_PATTERNS
-  throw new Error('Not implemented — SP-06 spike pending');
+  const permitted = new Set([...SAFE_SYSTEM_VARS, ...allowlist]);
+  const result: Record<string, string> = {};
+
+  for (const name of permitted) {
+    const value = env[name];
+    if (value === undefined) continue;
+    if (isBlockedEnvVar(name)) continue; // blocked patterns override allowlist
+    result[name] = value;
+  }
+
+  return result;
 }
 
+/** returns true if a var name matches any blocked pattern */
 export function isBlockedEnvVar(name: string): boolean {
   return BLOCKED_ENV_PATTERNS.some((pattern) => pattern.test(name));
 }
