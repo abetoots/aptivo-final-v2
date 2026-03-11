@@ -42,7 +42,8 @@ The LLM Gateway provides provider abstraction and cost tracking for all AI opera
 | Per-workflow cost logging | ✅ | ✅ |
 | Daily/monthly budget caps | ✅ | ✅ |
 | Multi-provider routing | ❌ | ✅ |
-| Fallback strategies | ❌ | ✅ |
+| Basic one-hop fallback | ✅ | ✅ |
+| Advanced routing/optimization | ❌ | ✅ |
 | Model benchmarking | ❌ | ✅ |
 | Streaming support | ✅ | ✅ |
 | Tool/function calling | ✅ | ✅ |
@@ -228,7 +229,7 @@ export const llmUsageLogs = pgTable('llm_usage_logs', {
   // request metadata
   requestType: varchar('request_type', { length: 50 }), // 'completion', 'embedding', 'vision'
   latencyMs: integer('latency_ms'),
-  // fallback tracking (Phase 2+)
+  // fallback tracking
   wasFallback: boolean('was_fallback').default(false),
   primaryProvider: varchar('primary_provider', { length: 50 }),
   // timing
@@ -535,7 +536,7 @@ export const budgetAlerts = inngest.createFunction(
 
 ---
 
-## 7. Model Fallback Mapping (Phase 2+)
+## 7. Model Fallback Mapping
 
 ### 7.1 Fallback Configuration
 
@@ -568,7 +569,7 @@ const llmConfig = z.object({
 }).parse(process.env);
 ```
 
-### 7.2 Fallback Logic (Phase 2+)
+### 7.2 Fallback Logic
 
 ```typescript
 private shouldFallback(error: LLMError): boolean {
@@ -592,7 +593,7 @@ private mapModel(model: string, targetProvider: string): string {
 | `llm_tokens_total` | Counter | provider, model, domain, type | Total tokens (prompt/completion) |
 | `llm_cost_usd_total` | Counter | provider, model, domain | Total cost in USD |
 | `llm_latency_ms` | Histogram | provider, model | Request latency |
-| `llm_fallback_total` | Counter | primary, fallback | Fallback events (Phase 2+) |
+| `llm_fallback_total` | Counter | primary, fallback | Fallback events |
 
 ### 8.2 Structured Logging
 
