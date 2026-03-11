@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
@@ -12,11 +15,14 @@
   },
   "dependencies": {
     "@aptivo/types": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.27.1",
     "inngest": "^3.52.6",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@aptivo/typescript-config": "workspace:*",
+    "@inngest/test": "^0.1.9",
+    "@types/node": "^25.3.3",
     "typescript": "5.9.2",
     "vitest": "^4.0.18"
   }

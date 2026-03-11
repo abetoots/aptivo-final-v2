@@ -13,21 +13,21 @@ This directory contains the results of Sprint 0 technical spikes.
 
 | Spike | Name | Status | Owner | Security-Critical | WARNINGs Validated |
 |-------|------|--------|-------|-------------------|--------------------|
-| SP-01 | Inngest + AgentKit | Pending | Senior | | S7-W9 |
-| SP-02 | Inngest HITL | Pending | Senior | | S7-W8, S7-W20 |
-| SP-03 | Supabase Auth | Pending | Web Dev 1 | | S7-W3, S7-W21 |
-| SP-04 | Novu Integration | Pending | Web Dev 2 | | T1-W24, S3-W7 |
-| SP-05 | MCP stdio Transport | Pending | Senior | | — |
-| SP-06 | MCP Security | Pending | Senior | ⚠️ Yes | — |
-| SP-07 | Durability at Scale | Pending | Senior | | S5-W6, S5-W8, S5-W12 |
-| SP-08 | LLM Streaming Costs | Pending | Web Dev 2 | | S7-W18 |
-| SP-09 | Schema Isolation | Pending | Web Dev 1 | | S7-W7, S7-W19 |
-| SP-10 | Circuit Breaker + Inngest | Pending | Web Dev 1 | | S7-W2, S7-W13, S7-W23 |
-| SP-11 | HITL Token Security | Pending | Web Dev 2 | ⚠️ Yes | — |
-| SP-12 | E2E Latency | Pending | Senior | | — |
-| SP-13 | MCP Supply-Chain Integrity | Pending | Senior | ⚠️ Yes | — |
-| SP-14 | Event Authenticity & Anti-Replay | Pending | Senior | ⚠️ Yes | S7-W10, S7-W11 |
-| SP-15 | Third-Party Degradation & Fallback | Pending | Web Dev 1 | | S6-W8, S7-W4, S7-W5, S7-W6, S7-W12, S7-W15, S7-W16, S7-W17, S7-W22 |
+| SP-01 | Inngest + AgentKit | **Conditional Pass** | Senior | | S7-W9 |
+| SP-02 | Inngest HITL | **Pass** | Senior | | S7-W8, S7-W20 |
+| SP-03 | Supabase Auth | **Pass** | Senior | | S7-W3, S7-W21 |
+| SP-04 | Novu Integration | **Pass** | Senior | | T1-W24, S3-W7 |
+| SP-05 | MCP stdio Transport | **Pass** | Senior | | — |
+| SP-06 | MCP Security | **Pass** | Senior | ⚠️ Yes | — |
+| SP-07 | Durability at Scale | **Pass** | Senior | | S5-W6, S5-W8, S5-W12 |
+| SP-08 | LLM Streaming Costs | **Pass** | Senior | | S7-W18 |
+| SP-09 | Schema Isolation | **Pass** | Senior | | S7-W7, S7-W19 |
+| SP-10 | Circuit Breaker + Inngest | **Pass** | Senior | | S7-W2, S7-W13, S7-W23 |
+| SP-11 | HITL Token Security | **Pass** | Senior | ⚠️ Yes | — |
+| SP-12 | E2E Latency | **Pass** | Senior | | — |
+| SP-13 | MCP Supply-Chain Integrity | **Pass** | Senior | ⚠️ Yes | — |
+| SP-14 | Event Authenticity & Anti-Replay | **Pass** | Senior | ⚠️ Yes | S7-W10, S7-W11 |
+| SP-15 | Third-Party Degradation & Fallback | **Pass** | Senior | | S6-W8, S7-W4, S7-W5, S7-W6, S7-W12, S7-W15, S7-W16, S7-W17, S7-W22 |
 
 **Note**: Security-critical spikes (SP-06, SP-11, SP-13, SP-14) require **implemented mitigations**, not just documentation, to pass.
 

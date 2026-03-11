@@ -40,33 +40,33 @@ Shows which spike validates each WARNING from the WARNINGS_REGISTER.
 
 | WARNING ID | Description | Validating Spike | Spike Result | Disposition |
 |------------|-------------|------------------|--------------|-------------|
-| S5-W6 | Inngest scale limits | SP-07 | Pending | Open |
-| S5-W8 | Durability guarantees | SP-07 | Pending | Open |
-| S5-W12 | Resource consumption at scale | SP-07 | Pending | Open |
-| S6-W8 | Third-party dependency risk | SP-15 | Pending | Open |
-| S7-W2 | Circuit breaker interaction | SP-10 | Pending | Open |
-| S7-W3 | Supabase Auth capabilities | SP-03 | Pending | Open |
-| S7-W4 | Inngest degradation | SP-15 | Pending | Open |
-| S7-W5 | Supabase Auth degradation | SP-15 | Pending | Open |
-| S7-W6 | Novu degradation | SP-15 | Pending | Open |
-| S7-W7 | Schema isolation gaps | SP-09 | Pending | Open |
-| S7-W8 | HITL wait/resume latency | SP-02 | Pending | Open |
-| S7-W9 | Saga compensation path | SP-01 | Pending | Open |
-| S7-W10 | Event authenticity | SP-14 | Pending | Open |
-| S7-W11 | Anti-replay mechanism | SP-14 | Pending | Open |
-| S7-W12 | LLM provider degradation | SP-15 | Pending | Open |
-| S7-W13 | Retry storm risk | SP-10 | Pending | Open |
-| S7-W15 | Redis degradation | SP-15 | Pending | Open |
-| S7-W16 | Calendar service degradation | SP-15 | Pending | Open |
-| S7-W17 | File storage degradation | SP-15 | Pending | Open |
-| S7-W18 | LLM cost visibility | SP-08 | Pending | Open |
-| S7-W19 | Connection pool boundaries | SP-09 | Pending | Open |
-| S7-W20 | HITL concurrent decisions | SP-02 | Pending | Open |
-| S7-W21 | IdP session management | SP-03 | Pending | Open |
-| S7-W22 | Recovery time targets | SP-15 | Pending | Open |
-| S7-W23 | Silent failure modes | SP-10 | Pending | Open |
-| S3-W7 | Multi-channel latency | SP-04 | Pending | Open |
-| T1-W24 | Notification delivery reliability | SP-04 | Pending | Open |
+| S5-W6 | Inngest scale limits | SP-07 | Pass | Closed |
+| S5-W8 | Durability guarantees | SP-07 | Pass | Closed |
+| S5-W12 | Resource consumption at scale | SP-07 | Pass | Closed |
+| S6-W8 | Third-party dependency risk | SP-15 | Pass | Closed |
+| S7-W2 | Circuit breaker interaction | SP-10 | Pass | Closed |
+| S7-W3 | Supabase Auth capabilities | SP-03 | Pass | Closed |
+| S7-W4 | Inngest degradation | SP-15 | Pass | Closed |
+| S7-W5 | Supabase Auth degradation | SP-15 | Pass | Closed |
+| S7-W6 | Novu degradation | SP-15 | Pass | Closed |
+| S7-W7 | Schema isolation gaps | SP-09 | Pass | Closed |
+| S7-W8 | HITL wait/resume latency | SP-02 | Pass | Closed |
+| S7-W9 | Saga compensation path | SP-01 | Conditional Pass | Closed |
+| S7-W10 | Event authenticity | SP-14 | Pass | Closed |
+| S7-W11 | Anti-replay mechanism | SP-14 | Pass | Closed |
+| S7-W12 | LLM provider degradation | SP-15 | Pass | Closed |
+| S7-W13 | Retry storm risk | SP-10 | Pass | Closed |
+| S7-W15 | Redis degradation | SP-15 | Pass | Closed |
+| S7-W16 | Calendar service degradation | SP-15 | Pass | Closed |
+| S7-W17 | File storage degradation | SP-15 | Pass | Closed |
+| S7-W18 | LLM cost visibility | SP-08 | Pass | Closed |
+| S7-W19 | Connection pool boundaries | SP-09 | Pass | Closed |
+| S7-W20 | HITL concurrent decisions | SP-02 | Pass | Closed |
+| S7-W21 | IdP session management | SP-03 | Pass | Closed |
+| S7-W22 | Recovery time targets | SP-15 | Pass | Closed |
+| S7-W23 | Silent failure modes | SP-10 | Pass | Closed |
+| S3-W7 | Multi-channel latency | SP-04 | Pass | Closed |
+| T1-W24 | Notification delivery reliability | SP-04 | Pass | Closed |
 
 ---
 
@@ -76,20 +76,20 @@ Shows which spike validates each WARNING from the WARNINGS_REGISTER.
 
 | Spike | Pass Threshold | Status | Evidence |
 |-------|----------------|--------|----------|
-| **SP-06** MCP Security | Env sanitization, scoped tokens, allowlist implemented | Pending | — |
-| **SP-11** HITL Token Security | JTI replay blocked, hash stored, key rotation possible | Pending | — |
-| **SP-13** Supply-Chain Integrity | Version pinning + registry allowlist enforced | Pending | — |
-| **SP-14** Event Authenticity | Signed events + replay blocked + context binding | Pending | — |
+| **SP-06** MCP Security | Env sanitization, scoped tokens, allowlist implemented | **Pass** | 28 tests, 3 mitigations implemented |
+| **SP-11** HITL Token Security | JTI replay blocked, hash stored, key rotation possible | **Pass** | 21 tests, JTI replay + SHA-256 hash + dual-key rotation + aud/iss binding |
+| **SP-13** Supply-Chain Integrity | Version pinning + registry allowlist enforced | **Pass** | 30 tests, version pinning + registry allowlist + SHA-512 integrity + CycloneDX SBOM + pre-deploy gate |
+| **SP-14** Event Authenticity | Signed events + replay blocked + context binding | **Pass** | 18 tests, HMAC + nonce + context binding implemented |
 
 ### Soft Gates (Fail = Pivot, Not Stop)
 
 | Spike | Fail Action | Status |
 |-------|-------------|--------|
-| **SP-01** Inngest + AgentKit | Evaluate alternative MCP integration | Pending |
-| **SP-02** HITL Wait | Evaluate Temporal as workflow engine | Pending |
-| **SP-03** Supabase Auth | Pivot to Clerk for identity | Pending |
-| **SP-05** MCP Transport | Pivot to HTTP transport / sidecar | Pending |
-| **SP-07** Durability | Evaluate Temporal for durability | Pending |
+| **SP-01** Inngest + AgentKit | Evaluate alternative MCP integration | **Conditional Pass** |
+| **SP-02** HITL Wait | Evaluate Temporal as workflow engine | **Pass** |
+| **SP-03** Supabase Auth | Pivot to Clerk for identity | **Pass** |
+| **SP-05** MCP Transport | Pivot to HTTP transport / sidecar | **Pass** |
+| **SP-07** Durability | Evaluate Temporal for durability | **Pass** |
 
 ---
 
@@ -110,21 +110,21 @@ Maps each spike to its implementation files.
 
 | Spike | Source Files | Test Files | Result Doc |
 |-------|-------------|------------|------------|
-| SP-01 | `apps/spike-runner/src/sp-01-inngest-agentkit.ts` | `apps/spike-runner/tests/sp-01-inngest-agentkit.test.ts` | `spike-results/SP-01-result.md` |
-| SP-02 | `apps/spike-runner/src/sp-02-hitl-wait.ts` | `apps/spike-runner/tests/sp-02-hitl-wait.test.ts` | `spike-results/SP-02-result.md` |
-| SP-03 | `apps/spike-runner/src/sp-03-supabase-auth.ts` | `apps/spike-runner/tests/sp-03-supabase-auth.test.ts` | `spike-results/SP-03-result.md` |
-| SP-04 | `apps/spike-runner/src/sp-04-novu-notifications.ts` | `apps/spike-runner/tests/sp-04-novu-notifications.test.ts` | `spike-results/SP-04-result.md` |
-| SP-05 | `apps/spike-runner/src/sp-05-mcp-transport.ts` | `apps/spike-runner/tests/sp-05-mcp-transport.test.ts` | `spike-results/SP-05-result.md` |
-| SP-06 | `packages/mcp-layer/src/security/` | `packages/mcp-layer/tests/sp-06-mcp-security.test.ts` | `spike-results/SP-06-result.md` |
-| SP-07 | `apps/spike-runner/src/sp-07-durability-scale.ts` | `apps/spike-runner/tests/sp-07-durability-scale.test.ts` | `spike-results/SP-07-result.md` |
-| SP-08 | `apps/spike-runner/src/sp-08-llm-cost.ts` | `apps/spike-runner/tests/sp-08-llm-cost.test.ts` | `spike-results/SP-08-result.md` |
-| SP-09 | `apps/spike-runner/src/sp-09-schema-isolation.ts` | `apps/spike-runner/tests/sp-09-schema-isolation.test.ts` | `spike-results/SP-09-result.md` |
-| SP-10 | `packages/mcp-layer/src/resilience/` | `packages/mcp-layer/tests/sp-10-circuit-breaker.test.ts` | `spike-results/SP-10-result.md` |
-| SP-11 | `packages/hitl-gateway/src/tokens/` | `packages/hitl-gateway/tests/sp-11-token-security.test.ts` | `spike-results/SP-11-result.md` |
-| SP-12 | `tools/benchmarks/sp-12-e2e-benchmark.ts` | — | `spike-results/SP-12-result.md` |
-| SP-13 | `apps/spike-runner/src/sp-13-supply-chain.ts` | `apps/spike-runner/tests/sp-13-supply-chain.test.ts` | `spike-results/SP-13-result.md` |
-| SP-14 | `packages/hitl-gateway/src/events/` | `packages/hitl-gateway/tests/sp-14-event-authenticity.test.ts` | `spike-results/SP-14-result.md` |
-| SP-15 | `apps/spike-runner/src/sp-15-third-party-degradation.ts` | `apps/spike-runner/tests/sp-15-third-party-degradation.test.ts` | `spike-results/SP-15-result.md` |
+| SP-01 | `apps/spike-runner/src/sp-01-inngest-agentkit.ts`, `apps/spike-runner/src/inngest-client.ts`, `apps/web/src/lib/inngest.ts` | `apps/spike-runner/tests/sp-01-inngest-agentkit.test.ts` (16 tests) | `spike-results/SP-01-result.md` |
+| SP-02 | `apps/spike-runner/src/sp-02-hitl-wait.ts` (3 functions) | `apps/spike-runner/tests/sp-02-hitl-wait.test.ts` (15 tests) | `spike-results/SP-02-result.md` |
+| SP-03 | `apps/spike-runner/src/sp-03-supabase-auth.ts` | `apps/spike-runner/tests/sp-03-supabase-auth.test.ts` (32 tests) | `spike-results/SP-03-result.md` |
+| SP-04 | `apps/spike-runner/src/sp-04-novu-notifications.ts` | `apps/spike-runner/tests/sp-04-novu-notifications.test.ts` (29 tests) | `spike-results/SP-04-result.md` |
+| SP-05 | `apps/spike-runner/src/sp-05-mcp-transport.ts`, `apps/spike-runner/src/mcp-test-server.mjs` | `apps/spike-runner/tests/sp-05-mcp-transport.test.ts` (16 tests) | `spike-results/SP-05-result.md` |
+| SP-06 | `packages/mcp-layer/src/security/` (env-sanitizer, allowlist, scoped-tokens) | `packages/mcp-layer/tests/sp-06-mcp-security.test.ts` (28 tests) | `spike-results/SP-06-result.md` |
+| SP-07 | `apps/spike-runner/src/sp-07-durability-scale.ts` | `apps/spike-runner/tests/sp-07-durability-scale.test.ts` (22 tests) | `spike-results/SP-07-result.md` |
+| SP-08 | `apps/spike-runner/src/sp-08-llm-cost.ts` | `apps/spike-runner/tests/sp-08-llm-cost.test.ts` (37 tests) | `spike-results/SP-08-result.md` |
+| SP-09 | `apps/spike-runner/src/sp-09-schema-isolation.ts` | `apps/spike-runner/tests/sp-09-schema-isolation.test.ts` (36 tests) | `spike-results/SP-09-result.md` |
+| SP-10 | `packages/mcp-layer/src/resilience/circuit-breaker.ts` | `packages/mcp-layer/tests/sp-10-circuit-breaker.test.ts` (25 tests) | `spike-results/SP-10-result.md` |
+| SP-11 | `packages/hitl-gateway/src/tokens/` (jwt-manager, token-types) | `packages/hitl-gateway/tests/sp-11-token-security.test.ts` (21 tests) | `spike-results/SP-11-result.md` |
+| SP-12 | `apps/spike-runner/src/sp-12-e2e-latency.ts` | `apps/spike-runner/tests/sp-12-e2e-latency.test.ts` (16 tests) | `spike-results/SP-12-result.md` |
+| SP-13 | `packages/mcp-layer/src/security/supply-chain.ts` | `packages/mcp-layer/tests/sp-13-supply-chain.test.ts` (30 tests) | `spike-results/SP-13-result.md` |
+| SP-14 | `packages/hitl-gateway/src/events/` (event-signer, event-types) | `packages/hitl-gateway/tests/sp-14-event-authenticity.test.ts` (18 tests) | `spike-results/SP-14-result.md` |
+| SP-15 | `apps/spike-runner/src/sp-15-third-party-degradation.ts` | `apps/spike-runner/tests/sp-15-third-party-degradation.test.ts` (33 tests) | `spike-results/SP-15-result.md` |
 
 ---
 
