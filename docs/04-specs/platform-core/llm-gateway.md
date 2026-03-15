@@ -1,10 +1,10 @@
 ---
 id: TSD-LLM-GATEWAY
 title: LLM Gateway Specification
-status: Draft
-version: 1.1.0
+status: Phase 1 Complete
+version: 1.2.0
 owner: '@owner'
-last_updated: '2026-02-03'
+last_updated: '2026-03-12'
 parent: ../../03-architecture/platform-core-add.md
 domain: core
 ---
@@ -15,6 +15,7 @@ domain: core
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| v1.2.0 | 2026-03-12 | Phase 1 As-Built | Drizzle-backed stores, env-gated providers, cost dashboard, budget enforcement |
 | v1.1.0 | 2026-02-03 | Document Consolidation | Merged comprehensive schemas and provider implementations |
 | v1.0.0 | 2026-02-03 | Multi-Model Consensus | Initial creation |
 
@@ -633,7 +634,107 @@ type LLMError =
 
 ---
 
-## 10. Phase 2+ Roadmap
+## 10. Production Store Implementations (v1.2.0)
+
+> **Added v1.2.0**: Phase 1.5 replaced stub stores with Drizzle-backed implementations.
+
+### 10.1 BudgetStore (Drizzle-backed)
+
+```typescript
+interface BudgetStore {
+  getConfig(domain?: string): Promise<BudgetConfig | null>;
+  getDailySpend(domain?: string): Promise<number>;
+  getMonthlySpend(domain?: string): Promise<number>;
+}
+```
+
+**Factory**: `createDrizzleBudgetStore(db): BudgetStore`
+
+Implementation notes:
+- Queries `llm_budget_configs` table for per-domain config
+- Spend queries aggregate `SUM(cost_usd)` from `llm_usage_logs` with date truncation
+- String numeric values from Drizzle parsed to `number` via `parseFloat()`
+- Null-coalesced to `0` for missing data
+
+### 10.2 UsageLogStore (Drizzle-backed)
+
+```typescript
+interface UsageLogStore {
+  insert(entry: {
+    workflowId?: string;
+    workflowStepId?: string;
+    domain: string;
+    provider: string;
+    model: string;
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+    costUsd: number;
+    requestType?: string;
+    latencyMs?: number;
+    wasFallback?: boolean;
+    primaryProvider?: string;
+  }): Promise<void>;
+}
+```
+
+**Factory**: `createDrizzleUsageLogStore(db): UsageLogStore`
+
+### 10.3 Composition Root
+
+```typescript
+// apps/web/src/lib/services.ts
+export const getLlmGateway = lazy(() => {
+  const budgetStore = createDrizzleBudgetStore(db());
+  const usageLogStore = createDrizzleUsageLogStore(db());
+  const { providers, modelToProvider } = buildLlmProviders();
+
+  return createLlmGateway({
+    providers,
+    budgetService: new BudgetService(budgetStore),
+    usageLogger: new UsageLogger(usageLogStore),
+    modelToProvider,
+  });
+});
+```
+
+### 10.4 Env-Gated Provider Initialization
+
+Providers are registered at gateway creation time based on environment variables:
+
+| Env Var | Provider | Models Registered |
+|---------|----------|-------------------|
+| `OPENAI_API_KEY` | OpenAI | `gpt-4o`, `gpt-4o-mini`, `gpt-4-turbo`, `gpt-3.5-turbo` |
+| `ANTHROPIC_API_KEY` | Anthropic | `claude-3-opus`, `claude-3-5-sonnet`, `claude-3-5-haiku` |
+
+- SDK imports use `require()` with try/catch — if the SDK package is not installed, the provider is silently skipped with a `console.warn()`
+- No providers = gateway still functional, returns `ProviderNotFound` error on `complete()` calls
+- This enables zero-config development (no API keys needed to boot the app)
+
+### 10.5 Budget Defaults
+
+| Parameter | Value |
+|-----------|-------|
+| Daily limit | $50 |
+| Monthly limit | $1,000 |
+| Domain alert threshold | $5/day |
+| Warning threshold | 90% of limit |
+
+---
+
+## 11. Cost Dashboard Integration (v1.2.0)
+
+> **Added v1.2.0**: Sprint 7 (S7-INT-03) added admin endpoints for LLM cost visibility.
+
+Two admin API endpoints expose usage data:
+- `GET /api/admin/llm-usage` — cost breakdown by domain, provider, daily totals
+- `GET /api/admin/llm-usage/budget` — daily/monthly spend vs limits, burn rate
+
+See [Admin Operations API TSD](admin-ops-api.md) for full endpoint specifications.
+
+---
+
+## 12. Phase 2+ Roadmap
 
 - Multi-provider routing (cost vs latency optimization)
 - Automatic fallback on provider failure
@@ -642,6 +743,8 @@ type LLMError =
 - Prompt caching for repeated queries
 - Vision and multimodal support
 - Embeddings API
+- Per-user rate limits (S5-W17 deferred)
+- Prompt injection classifier (ADD §14 deferred)
 
 ---
 

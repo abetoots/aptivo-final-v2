@@ -1454,6 +1454,11 @@ This section maps all FR-CORE-* functional requirements (defined in the [Platfor
 | FR-CORE-BLOB-002 | Access control and linking | Integration | Permission inheritance from linked entity; multi-entity linking; access logging; malware scan integration (§11: ClamAV down) | ADD §9.8 |
 | FR-CORE-INT-001 | Workflow logic export | Integration | API endpoint exports workflow definitions in JSON; includes states, transitions, status; authorization required | ADD §11.1 |
 | FR-CORE-INT-002 | Extensible action points | Integration | Webhook calls to external URLs; JSON payloads with entity data; failure logged with retry; inbound webhook triggers (§11: invalid signature, duplicate delivery) | ADD §11.2 |
+| FR-CORE-ADM-001 | Platform health dashboard | Integration | Overview endpoint returns pending HITL count, active workflow count, recent audit events, SLO health status; RBAC enforced; data consistent with SLO cron metrics | ADD §15.3 |
+| FR-CORE-ADM-002 | LLM usage and budget monitoring | Integration | Cost breakdown by domain/provider/period; budget endpoint with daily/monthly limits, burn rate, alerts; range clamped [1, 365] days | ADD §15.4 |
+| FR-CORE-ADM-003 | Audit log viewer | Integration | Paginated audit logs filtered by resource/actor; limit clamped [1, 200]; RBAC enforced (§11: unauthorized access returns 403) | ADD §15.2 |
+| FR-CORE-OBS-001 | Automated SLO monitoring | Integration | SLO cron evaluates metrics on 5-min interval; structured log output per evaluation; metric queries shared with admin dashboard | ADD §16.2 |
+| FR-CORE-OBS-002 | Threshold-based alerting | Integration | Alert events fired for: workflow success < threshold, MCP success < threshold, HITL P95 > threshold, DLQ count > threshold; events include metric name, value, threshold (§12: SLO threshold boundaries) | ADD §16.3 |
 
 ### 13.2 Coverage Summary
 
@@ -1468,7 +1473,9 @@ This section maps all FR-CORE-* functional requirements (defined in the [Platfor
 | Identity & Access | FR-CORE-ID-001 to 003 | 3 |
 | File Storage | FR-CORE-BLOB-001, 002 | 2 |
 | Interoperability | FR-CORE-INT-001, 002 | 2 |
-| **Total** | | **32** |
+| Admin Dashboard | FR-CORE-ADM-001 to 003 | 3 |
+| Observability | FR-CORE-OBS-001, 002 | 2 |
+| **Total** | | **37** |
 
 ### 13.3 RTM Guidelines
 
@@ -1477,6 +1484,57 @@ This section maps all FR-CORE-* functional requirements (defined in the [Platfor
 3. **Update the RTM when requirements change** — adding, removing, or modifying an FR-CORE requirement triggers an RTM update.
 4. **Test type selection** — unit tests for pure logic, integration tests for service composition, E2E tests for user-facing workflows, acceptance tests for stakeholder-visible criteria.
 5. **TSDoc traceability** — test files should reference FR-CORE IDs in their `@requirements` TSDoc tag (see §8.2).
+
+### 13.4 Domain Requirements Traceability
+
+> **Added (Tier 3 re-evaluation RT-2/RT-3, 2026-03-13)**: Domain FRDs (FR-CRYPTO-*, FR-HR-*) lacked RTM — only Platform Core was mapped. This section extends traceability to domain-specific requirements.
+
+#### 13.4.1 Crypto Domain RTM
+
+| FR-CRYPTO ID | Requirement | Test Type(s) | Test Specification | ADD Reference |
+|------------|-------------|--------------|-------------------|---------------|
+| FR-CRYPTO-SMT-001 | Multi-chain wallet monitoring | Integration | Monitor configured wallets; detect transactions above threshold; filter noise; verify multi-chain support | Crypto ADD §3 |
+| FR-CRYPTO-SMT-002 | Noise filtering | Unit, Integration | Filter low-value transactions; configurable thresholds; false-positive rate validation | Crypto ADD §3 |
+| FR-CRYPTO-SMT-003 | Transaction analysis | Integration | Classify transaction types; link to wallet profiles; attribute to known entities | Crypto ADD §3 |
+| FR-CRYPTO-NS-001 | Narrative clustering | Integration | Cluster related tokens by narrative; detect emerging trends; temporal correlation | Crypto ADD §4 |
+| FR-CRYPTO-NS-002 | Token association | Unit, Integration | Link tokens to narratives; confidence scoring; cross-reference with security data | Crypto ADD §4 |
+| FR-CRYPTO-SEC-001 | Automated token screening | Integration | Security scan workflow: cache check → liquidity → contract scan → risk scoring; risk score 0-100; honeypot/mintable/ownership flags; 1-hour TTL cache | ADD §S7-CRY-01 |
+| FR-CRYPTO-RISK-001 | Position sizing enforcement | Unit | Calculate position size from risk parameters; enforce maximum allocation; reject oversized positions | Crypto ADD §5 |
+| FR-CRYPTO-RISK-002 | Daily loss limit (circuit breaker) | Integration | Track cumulative daily losses; halt trading when limit breached; reset at day boundary | Crypto ADD §5 |
+| FR-CRYPTO-RISK-003 | Minimum risk:reward enforcement | Unit | Reject trades below configured risk:reward ratio; validate entry/exit/stop-loss math | Crypto ADD §5 |
+| FR-CRYPTO-TRD-001 | HITL integration | Integration, E2E | Trade proposal → HITL approval request → approval/rejection → execution/cancellation; timeout handling | ADD §S6-CRY-01 |
+| FR-CRYPTO-TRD-002 | Paper trading mode | Integration | Execute full workflow without real orders; log simulated trades; track P&L; fire-and-forget notification | ADD §S6-CRY-01 |
+| FR-CRYPTO-TRD-003 | Order execution | Integration | Submit orders to exchange API; handle partial fills; retry on transient errors; audit all executions | Crypto ADD §6 |
+| FR-CRYPTO-TRD-004 | Position monitoring | Integration | Track open positions; calculate unrealized P&L; alert on stop-loss/take-profit levels | Crypto ADD §6 |
+
+#### 13.4.2 HR Domain RTM
+
+| FR-HR ID | Requirement | Test Type(s) | Test Specification | ADD Reference |
+|----------|-------------|--------------|-------------------|---------------|
+| FR-HR-CM-001 | Centralized candidate repository | Integration | CRUD operations on candidates; search/filter; data validation; uniqueness constraints | HR ADD §3 |
+| FR-HR-CM-002 | Workflow & status management | Integration | Status transitions (new → screening → interview → offer → hired); reject invalid transitions; audit trail | HR ADD §3 |
+| FR-HR-CM-003 | Interview process management | Integration, E2E | Scheduling workflow: availability → propose slots → selection → calendar event → notify; timeout handling | ADD §S7-HR-01 |
+| FR-HR-CM-004 | Contract drafting & compliance | Integration, E2E | Contract workflow: draft → compliance check → HITL approval → finalize; 48h timeout → expired status; audit trail | ADD §S7-HR-02 |
+| FR-HR-CM-005 | Data privacy & consent | Integration | Consent recording; withdrawal support; data export; anonymization on request | HR ADD §4 |
+| FR-HR-COMP-001 | DPA consent enforcement | Integration | Consent required before PII processing; consent recorded with timestamp/purpose; withdrawal halts processing; audit evidence generated | HR FRD §5.1 |
+| FR-HR-COMP-002 | DPA subject rights | Integration | Data access request → export within 30 days; erasure request → anonymization; portability in machine-readable format | HR FRD §5.2 |
+| FR-HR-COMP-003 | DOLE contract compliance | Unit, Integration | Contract templates include required DOLE fields; validation rejects non-compliant contracts; compliance check in approval workflow | HR FRD §5.3 |
+| FR-HR-COMP-004 | BIR retention support | Integration | Records retained per BIR schedule (10 years for tax docs); retention policy enforced; deletion blocked during retention period | HR FRD §5.4 |
+| FR-HR-COMP-005 | Tax data export | Integration | Export tax-relevant records in BIR-accepted format; includes required fields (TIN, compensation, withholdings); export audited | HR FRD §5.5 |
+| FR-HR-RBAC-001 | HR role definitions | Unit, Integration | Roles: HR Admin, Recruiter, Hiring Manager, Interviewer; permissions enforced per role; cross-domain isolation from crypto roles | HR ADD §5 |
+| FR-HR-RBAC-002 | Permission enforcement | Integration | Deny-by-default; role-specific access to candidates, contracts, compliance data; unauthorized access returns 403 | HR ADD §5 |
+
+### 13.5 NFR Performance Test Specifications
+
+> **Added (Tier 3 re-evaluation RT-4, 2026-03-13)**: NFR performance thresholds lacked explicit test specifications.
+
+| NFR Threshold | Source | Test Type | Test Specification |
+|---------------|--------|-----------|-------------------|
+| API P95 latency < 500ms | FRD §10.1 | Load | Sustained 50 concurrent requests for 60s; measure P95 response time; fail if > 500ms |
+| Workflow success rate > 99% | BRD §5.1 | Integration | Execute 100 workflow instances; verify ≥ 99 complete successfully; log failure reasons |
+| MCP tool success rate > 99.5% | BRD §5.1 | Integration | Execute 200 MCP tool calls against mock server; verify ≥ 199 succeed; circuit breaker tested separately |
+| HITL delivery P95 < 10s | BRD §5.1 | Integration | Create 50 HITL requests; measure P95 time from creation to notification delivery; verify < 10,000ms |
+| Audit integrity > 99.9% | BRD §5 | Integration | Generate 1000 auditable actions; verify ≥ 999 produce audit entries; DLQ captures remainder |
 
 ---
 
@@ -1489,3 +1547,4 @@ This section maps all FR-CORE-* functional requirements (defined in the [Platfor
 | v2.0.0 | 2026-01-15 | Document Review Panel | Major rewrite: aligned with Coding Guidelines v3.0.0, TSD v3.0.0; added tiered coverage, Result type testing, Zod testing, RFC 7807 testing, modern Vitest/Playwright patterns, expanded security testing |
 | v2.1.0 | 2026-03-04 | Document Review Panel | Added Section 11 (Error Path & Negative Testing) and Section 12 (Boundary Condition Testing) per validation WARNINGs S7-W1 and S7-W14 |
 | v2.2.0 | 2026-03-04 | Document Review Panel | Added Section 13 (Requirements Traceability Matrix) per Tier 3 ERROR E1; fixed stale FRD v2.0.0 refs to v1.0.0 (W4); added MFA step-up test specs (W5); added HITL P95 latency test scope (W6) |
+| v2.3.0 | 2026-03-13 | Tier 3 Re-evaluation | Added FR-CORE-ADM/OBS to §13.1; added §13.4 Domain RTMs (crypto + HR including FR-HR-COMP-*); added §13.5 NFR Performance Test Specs |

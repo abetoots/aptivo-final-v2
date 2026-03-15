@@ -484,6 +484,66 @@ The core architecture follows the **Durable Execution** pattern, ensuring that l
 - Webhook failures are logged and can be configured for retry
 - The system can receive inbound webhooks to trigger workflow events
 
+### 11.2 Admin Dashboard
+
+> **Added (Tier 3 re-evaluation HT-1, 2026-03-13)**: ADD §15 documented admin infrastructure without corresponding FRD requirements.
+
+**FR-CORE-ADM-001: Platform Health Dashboard**
+
+**Requirement**: The system shall provide an operations dashboard displaying real-time platform health metrics.
+
+**Acceptance Criteria**:
+- Dashboard shows pending HITL request count, active workflow count, recent audit events, and SLO health status
+- SLO health indicates `healthy` or `degraded` based on configured thresholds
+- Data sourced from the same metric queries used by automated SLO monitoring
+- Access restricted to users with `platform/admin.view` permission
+
+**FR-CORE-ADM-002: LLM Usage and Budget Monitoring**
+
+**Requirement**: The system shall provide cost tracking and budget monitoring for LLM usage across domains and providers.
+
+**Acceptance Criteria**:
+- Usage analytics show cost breakdown by domain, provider, and time period
+- Budget endpoint reports daily and monthly spend against configured limits
+- Burn rate projection calculated from current month spending
+- Alert threshold flags domains exceeding configured daily spend limits
+- Range-based queries support configurable time windows (1-365 days)
+
+**FR-CORE-ADM-003: Audit Log Viewer**
+
+**Requirement**: The system shall provide paginated access to audit logs with filtering capabilities.
+
+**Acceptance Criteria**:
+- Audit logs queryable by resource type and actor
+- Pagination enforced with configurable limit (max 200 per page)
+- Results ordered by timestamp (most recent first)
+- Access restricted to users with `platform/admin.view` permission
+
+### 11.3 Observability
+
+> **Added (Tier 3 re-evaluation HT-1, 2026-03-13)**: ADD §16 documented observability infrastructure without corresponding FRD requirements.
+
+**FR-CORE-OBS-001: Automated SLO Monitoring**
+
+**Requirement**: The system shall continuously evaluate service level objectives against defined thresholds.
+
+**Acceptance Criteria**:
+- SLO evaluations run on a recurring schedule (configurable interval)
+- Metrics evaluated: workflow success rate, MCP tool success rate, HITL delivery latency, audit integrity (DLQ count)
+- Each evaluation produces structured log output for external ingestion
+- Metric queries shared between SLO monitoring and admin dashboard to ensure consistency
+
+**FR-CORE-OBS-002: Threshold-Based Alerting**
+
+**Requirement**: The system shall generate alert events when SLO thresholds are breached.
+
+**Acceptance Criteria**:
+- Alert fired when workflow success rate falls below configured threshold
+- Alert fired when MCP tool success rate falls below configured threshold
+- Alert fired when HITL delivery latency exceeds configured P95 target
+- Alert fired when audit DLQ backlog exceeds configured count threshold
+- Alert events include metric name, current value, threshold, and evaluation timestamp
+
 ---
 
 ## 12. Downstream TSD Links
@@ -504,6 +564,8 @@ The following Technical Specification Documents implement the requirements defin
 | TSD-MCP-LAYER | [platform-core/mcp-layer.md](../04-specs/platform-core/mcp-layer.md) | MCP Integration Layer (Section 5) |
 | TSD-HITL-GATEWAY | [platform-core/hitl-gateway.md](../04-specs/platform-core/hitl-gateway.md) | HITL Approval Gateway (Section 4) |
 | TSD-LLM-GATEWAY | [platform-core/llm-gateway.md](../04-specs/platform-core/llm-gateway.md) | LLM Gateway (Section 6) |
+| TSD-ADMIN-OPS | [platform-core/admin-ops-api.md](../04-specs/platform-core/admin-ops-api.md) | Admin Dashboard (Section 11.2) |
+| TSD-AUDIT | [platform-core/audit.md](../04-specs/platform-core/audit.md) | Audit Service (Section 8) |
 
 ---
 

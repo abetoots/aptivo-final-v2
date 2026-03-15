@@ -782,8 +782,10 @@ Alert Received
 
 #### Phase 1: Single-Region Recovery
 
-**RTO Target:** < 4 hours (restore from backup)
+**RTO Target:** < 8 hours (manual restore from backup — realistic for 3-person team without automated failover)
 **RPO Target:** < 24 hours (daily automated backups)
+
+> **Note (2026-03-13, Tier 2 re-evaluation SA-1)**: Original RTO target of <4h was determined to be unsupportable for manual DR steps (provision infra, DB restore, DNS update, smoke test) with a 3-developer team and no automated failover. Updated to <8h. Phase 2 Epic 6 (HA Database) will enable automated failover to restore <4h target.
 
 **Recovery Steps:**
 
@@ -1308,6 +1310,52 @@ doctl apps list-deployments <app-id>
 
 Changes to infrastructure trigger PR review process before deployment.
 
+### 10.4 Component-to-IaC Ownership Matrix
+
+> **Added (Tier 3 re-evaluation IC-1/IC-4, 2026-03-13)**: Documents which production components are managed by IaC (App Spec) vs DigitalOcean console (ClickOps).
+
+| Component | IaC (`.do/app.yaml`) | Console (ClickOps) | Notes |
+|-----------|---------------------|-------------------|-------|
+| API server instance size | Yes | — | `instance_size_slug` in app spec |
+| API server instance count | Yes | — | `instance_count` + `autoscaling` in app spec |
+| PostgreSQL version | Yes (initial) | Upgrades via console | App spec sets version at creation; major upgrades require console |
+| PostgreSQL plan/size | Yes (initial) | Scaling via console | Vertical scaling requires manual approval to prevent cost overruns |
+| PostgreSQL backups | — | Automated daily (DO managed) | Retention per DO plan; no IaC control over schedule |
+| PostgreSQL maintenance windows | — | DO scheduled, operator approves | No IaC for patching schedule |
+| Redis version | Yes (initial) | Upgrades via console | Same pattern as PostgreSQL |
+| Redis plan/size | Yes (initial) | Scaling via console | Single-node; scaled vertically via console |
+| Spaces (S3) bucket | — | Console | Bucket creation and lifecycle not in app spec |
+| ClamAV container | Yes | — | Defined in app spec as worker component |
+| Environment variables (non-secret) | Yes | — | `envs` section in app spec |
+| Secrets (API keys, signing keys) | — | Console / `doctl` | Encrypted at rest by DO; 90-day rotation cadence (§9.3) |
+| DNS / routing | — | External (registrar) | Not managed by DO App Platform |
+| TLS certificates | — | DO auto-renewed | Managed automatically by App Platform |
+
+### 10.5 Drift Detection Process
+
+> **Added (Tier 3 re-evaluation IC-2, 2026-03-13)**: Documents how to detect when live infrastructure diverges from version-controlled App Spec.
+
+**Process** (run monthly or after any console-initiated change):
+
+1. **Export live spec**: `doctl apps spec get <app-id> --format yaml > /tmp/live-spec.yaml`
+2. **Compare**: `diff .do/app.yaml /tmp/live-spec.yaml`
+3. **Document drift**: Any differences indicate console changes not reflected in IaC
+4. **Remediate**: Either update `.do/app.yaml` to match live state (if change was intentional) or reapply app spec to revert drift
+
+**Phase 2 automation**: Add drift detection to CI pipeline as a scheduled GitHub Action (weekly). Alert on any delta between committed spec and live state.
+
+### 10.6 Console-Managed Component Migration Plan
+
+> **Added (Tier 3 re-evaluation IC-3, 2026-03-13)**: Documents path from ClickOps to IaC for console-managed components.
+
+| Component | Current State | Migration Path | Target Phase |
+|-----------|--------------|----------------|-------------|
+| DB plan scaling | Console approval | Terraform DO provider or `doctl` scripts in CI | Phase 2 (Epic 6) |
+| DB maintenance windows | Console approval | DO API automation when available | Phase 3+ |
+| Redis plan scaling | Console approval | Same as DB scaling | Phase 2 (Epic 6) |
+| Spaces bucket lifecycle | Console | Terraform or `doctl` for bucket creation | Phase 2 |
+| Secrets rotation | Manual `doctl`/console | Dedicated secrets manager (Vault/AWS SM) | Phase 2 (Epic 6) |
+
 ---
 
 ## **11. Roles & Responsibilities (RACI Matrix)**
@@ -1358,7 +1406,7 @@ Changes to infrastructure trigger PR review process before deployment.
 ## **13. Disaster Recovery Test Procedure**
 
 **Frequency**: Quarterly (or after major infrastructure changes)
-**Objective**: Validate RTO <4h and RPO <24h claims
+**Objective**: Validate RTO <8h and RPO <24h claims
 
 ### 13.1 Pre-Drill Checklist
 - [ ] Notify team members of scheduled drill
@@ -1388,7 +1436,7 @@ Changes to infrastructure trigger PR review process before deployment.
 - [ ] Update runbook with lessons learned
 - [ ] Schedule next drill (quarterly)
 
-**Success Criteria**: RPO < 24h AND RTO < 4h for database failure scenario.
+**Success Criteria**: RPO < 24h AND RTO < 8h for database failure scenario.
 
 ---
 

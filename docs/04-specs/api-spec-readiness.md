@@ -1,16 +1,16 @@
 ---
 id: TSD-API-SPEC-READINESS
 title: API Specification Readiness Assessment
-status: Ready
-version: 1.1.0
+status: Phase 1 Complete
+version: 1.2.0
 owner: '@owner'
-last_updated: '2026-02-05'
+last_updated: '2026-03-12'
 parent: ../03-architecture/platform-core-add.md
 ---
 
 # API Specification Readiness Assessment
 
-**Date**: February 5, 2026
+**Date**: March 12, 2026 (updated from February 5, 2026)
 **Purpose**: Determine readiness to draft formal API specifications based on BRD, FRD, and ADD
 
 ---
@@ -23,10 +23,12 @@ parent: ../03-architecture/platform-core-add.md
 
 | Spec Format | Purpose | Aptivo Coverage |
 |-------------|---------|-----------------|
-| **OpenAPI 3.1** | REST/HTTP synchronous APIs | HITL, Workflow, Audit, Files, Auth |
+| **OpenAPI 3.1** | REST/HTTP synchronous APIs | HITL, Workflow, Audit, Files, Auth, **Admin Dashboard** |
 | **AsyncAPI 3.0** | Events, webhooks, messaging | Workflow events, HITL signals, Webhooks, NATS |
 
 The platform has both synchronous REST endpoints AND asynchronous event-driven interfaces (Inngest workflows, webhooks, NATS messaging).
+
+> **v1.2.0 Update (Phase 1 Complete)**: The OpenAPI 3.1 spec (`openapi/aptivo-core-v1.yaml`) is drafted and covers all platform-core endpoints including Sprint 7 admin dashboard routes. Domain-specific API specs (crypto, HR) are Phase 2 scope. The 5 admin endpoints (`/api/admin/*`) are now specified with full request/response schemas.
 
 ---
 
@@ -261,22 +263,25 @@ interface ReadinessResponse {
 
 ## 4. Confidence Assessment (Updated)
 
-| Component | Type | Confidence | Ready? | Notes |
+| Component | Type | Confidence | Status | Notes |
 |-----------|------|------------|--------|-------|
-| HITL Gateway | REST | 100% | ✅ YES | All decisions resolved |
-| Workflow Management | REST | 100% | ✅ YES | Versioning, pagination decided |
-| Audit Service | REST | 100% | ✅ YES | Error format, pagination decided |
-| File Storage | REST | 95% | ✅ YES | All conventions decided |
-| Identity/Auth | REST | 95% | ✅ YES | Token format, roles decided |
+| HITL Gateway | REST | 100% | ✅ Specified | OpenAPI paths defined |
+| Workflow Management | REST | 100% | ✅ Specified | OpenAPI paths defined |
+| Audit Service | REST | 100% | ✅ Specified | OpenAPI paths defined |
+| File Storage | REST | 100% | ✅ Specified | OpenAPI paths defined |
+| Identity/Auth | REST | 100% | ✅ Specified | OpenAPI paths defined |
+| Admin Dashboard | REST | 100% | ✅ Specified | 5 endpoints in OpenAPI (Sprint 7) |
 | MCP Tool API | REST | N/A | ⛔ SDK-ONLY | No public REST (by design) |
 | LLM Gateway API | REST | N/A | ⛔ SDK-ONLY | No public REST (by design) |
-| Webhook Config | REST | 95% | ✅ YES | CRUD pattern decided |
-| Workflow Events | Async | 95% | ✅ YES | Schema formalization needed |
-| HITL Events | Async | 95% | ✅ YES | Schema formalization needed |
-| Audit Events | Async | 95% | ✅ YES | Schema formalization needed |
-| Webhook Events | Async | 95% | ✅ YES | Config API decided |
-| Notification Events | Async | 80% | ⚠️ PARTIAL | Novu schema integration |
-| NATS Pub/Sub | Async | 40% | ⚠️ PARTIAL | Topics to define in Phase 2 |
+| Webhook Config | REST | 100% | ✅ Specified | OpenAPI paths defined |
+| Workflow Events | Async | 95% | ⚠️ Ready | AsyncAPI spec needed in Phase 2 |
+| HITL Events | Async | 95% | ⚠️ Ready | AsyncAPI spec needed in Phase 2 |
+| Audit Events | Async | 95% | ⚠️ Ready | AsyncAPI spec needed in Phase 2 |
+| Webhook Events | Async | 95% | ⚠️ Ready | AsyncAPI spec needed in Phase 2 |
+| Notification Events | Async | 80% | ⚠️ Partial | Novu schema integration |
+| Crypto Domain APIs | REST | 80% | ⚠️ Phase 2 | FRD + TSD defined, OpenAPI pending |
+| HR Domain APIs | REST | 80% | ⚠️ Phase 2 | FRD + TSD defined, OpenAPI pending |
+| NATS Pub/Sub | Async | 40% | ⚠️ Partial | Topics to define in Phase 2 |
 
 ---
 
@@ -359,11 +364,11 @@ AsyncAPI 3.0:
 ## 8. Next Steps
 
 1. ~~**Schedule clarification session** to resolve Critical gaps~~ ✅ Done (2026-02-05)
-2. **Draft Phase 1 OpenAPI spec** for HITL, Workflow, Audit, Files, Webhooks
-3. **Draft Phase 1 AsyncAPI spec** for Workflow/HITL/Audit events
-4. **Update ADD §12.1**: Replace offset pagination example with cursor-based pattern
-5. **Review with team** before implementation
-6. **Iterate** based on domain FRD requirements (HR, Crypto)
+2. ~~**Draft Phase 1 OpenAPI spec** for HITL, Workflow, Audit, Files, Webhooks~~ ✅ Done — `openapi/aptivo-core-v1.yaml`
+3. ~~**Add admin endpoints to OpenAPI**~~ ✅ Done — 5 admin routes + schemas (v1.2.0)
+4. **Draft Phase 1 AsyncAPI spec** for Workflow/HITL/Audit events — Phase 2 scope
+5. **Add domain-specific endpoints** — Crypto + HR REST APIs in Phase 2 sprints
+6. **Review with team** before Phase 2 implementation
 
 ---
 

@@ -212,7 +212,7 @@ Every component declares its failure boundary, blast radius, propagation charact
 | **Propagation Outcome** | **Cascading** — database failure propagates synchronously to all callers. No component can operate independently of PostgreSQL in Phase 1. |
 | **Impacted Components** | All platform components (Workflow Engine, HITL Gateway, Audit Service, Identity Service, File Storage, LLM Gateway, domain applications) |
 | **Isolation Mechanisms** | **Phase 1**: Schema isolation (logical separation only); connection pooling via managed database; automated daily backups (RPO < 24h). **Phase 2+**: HA-tier managed database with standby failover; connection pool per schema/domain to prevent pool exhaustion cascade; statement timeouts per domain. |
-| **Fallback Behavior** | Phase 1: Application reconnects automatically when database recovers. Restore from backup if unrecoverable (RTO < 4h, RPO < 24h). Phase 2+: Automatic failover to standby via connection pooler (see design parameters below). |
+| **Fallback Behavior** | Phase 1: Application reconnects automatically when database recovers. Restore from backup if unrecoverable (RTO < 8h manual, RPO < 24h). Phase 2+: Automatic failover to standby via connection pooler (RTO < 4h). |
 
 > **Accepted Risk (Phase 1)**: PostgreSQL is a single point of failure. All domains share one instance. Mitigation: managed daily backups, health monitoring, and documented recovery playbook (RUNBOOK §8.5). Phase 2 upgrade path: HA-tier database with standby nodes, connection pool isolation per schema.
 
@@ -301,7 +301,7 @@ Failure isolation requires **infrastructure separation** — separate database i
 | **Propagation Outcome** | **Cascading** — regional outage takes down all services simultaneously. |
 | **Impacted Components** | All services and infrastructure |
 | **Isolation Mechanisms** | Health checks (liveness, readiness, startup probes) trigger container restarts for individual container failures; rolling deployment with rollback; auto-scaling 1–3 containers. These mitigate container-level failures but not regional outages. |
-| **Fallback Behavior** | Container failure: automatic restart via health checks. Regional outage: restore to alternate region manually (RTO < 4h per RUNBOOK §8.6). Rollback via redeployment with previous container image (Phase 1: no runtime feature flag service — see §5.5 Feature Flag State). Phase 2+: multi-region DR with DNS failover. |
+| **Fallback Behavior** | Container failure: automatic restart via health checks. Regional outage: restore to alternate region manually (RTO < 8h per RUNBOOK §8.6). Rollback via redeployment with previous container image (Phase 1: no runtime feature flag service — see §5.5 Feature Flag State). Phase 2+: multi-region DR with DNS failover (RTO < 4h). |
 
 ##### BullMQ (Job Queue) — Standard
 
@@ -1446,6 +1446,10 @@ Templates are configured in Novu dashboard, not code:
 | Push | Deferred | Phase 2 |
 | SMS | Deferred | Phase 2 |
 
+#### 6.4.1 Novu Client Wiring (Phase 1.5 Implementation)
+
+> **As-Built (P1.5-03)**: The composition root uses env-gated Novu initialization. When `NOVU_API_KEY` is set, the real `@novu/node` SDK is loaded via dynamic `require()` and wrapped in `createNovuSdkClient()`. When the SDK is unavailable or the key is missing, `createNovuStubClient()` provides a no-op fallback that returns `{ acknowledged: true }`. Both implement the `NovuSdkInstance` interface defined in `apps/web/src/lib/novu-client.ts`. The client is wrapped in `NovuNotificationAdapter` from `@aptivo/notifications` which handles template resolution, subscriber sync, and transactionId generation. Workflow ID defaults to `'generic-notification'` unless overridden via `NOVU_WORKFLOW_ID` env var.
+
 ### 6.5 Priority Routing
 
 Novu's workflow editor handles priority-based routing:
@@ -1564,7 +1568,7 @@ interface LLMUsageLog {
 
 // budget enforcement (FR-CORE-LLM-002 requires daily cap)
 const DAILY_BUDGET_USD = 50;    // configurable per domain
-const MONTHLY_BUDGET_USD = 500; // per BRD constraint
+const MONTHLY_BUDGET_USD = 1_000; // per domain (P1.5 as-built, reconciled from §7.2.2)
 
 async function checkBudget(domain: 'crypto' | 'hr'): Promise<BudgetStatus> {
   const [dailyTotal, monthlyTotal] = await Promise.all([
@@ -1642,6 +1646,10 @@ async function trackUsage(
 }
 ```
 
+#### 7.2.2 Production Store Implementation (Phase 1.5)
+
+> **As-Built (P1.5-02)**: The composition root wires real Drizzle-backed stores for budget enforcement and usage logging. `createDrizzleBudgetStore(db)` implements `BudgetStore` (getConfig, getDailySpend, getMonthlySpend) against the `llmBudgetConfigs` and `llmUsageLogs` tables — string numeric columns (PostgreSQL `numeric`) are parsed to `number` on read. `createDrizzleUsageLogStore(db)` implements `UsageLogStore.insert()` with `costUsd` stored as string-encoded decimal for precision. Both are injected into `BudgetService` and `UsageLogger` respectively within `getLlmGateway()`. Provider initialization is env-gated: OpenAI loads when `OPENAI_API_KEY` is set (models: gpt-4o, gpt-4o-mini, gpt-4-turbo, gpt-3.5-turbo), Anthropic loads when `ANTHROPIC_API_KEY` is set (models: claude-3-opus, claude-3-5-sonnet, claude-3-5-haiku). Both use dynamic `require()` with try/catch for graceful degradation when SDKs are not installed. Daily limit: $50/domain, monthly limit: $1,000/domain (configurable via `llmBudgetConfigs` table).
+
 ### 7.3 LLM Output Validation Strategy
 
 - **Threat**: LLM responses are **untrusted external input**. They may contain: injection attempts (HTML/JS for display contexts), hallucinated data that could corrupt downstream records, PII from training data leakage, or adversarial content designed to influence HITL approvers.
@@ -1659,7 +1667,7 @@ async function trackUsage(
   1. **Retry budget cap**: Maximum 2 retry attempts per LLM request (§2.3.3). Total cost exposure: 3× single request cost.
   2. **Provider fallback cost awareness**: Fallback provider may have different per-token pricing. The LLM Gateway logs cost for both primary and fallback attempts.
   3. **Inngest memoization**: At the workflow level, `step.run()` memoization prevents re-executing LLM steps on workflow replay. Only the first execution (and its retries) incur cost.
-  4. **Budget enforcement**: Daily ($50) and monthly ($500) caps (§7.2) are checked before each attempt, including retries. A retry that would exceed the budget is blocked.
+  4. **Budget enforcement**: Daily ($50) and monthly ($1,000) caps (§7.2) are checked before each attempt, including retries. A retry that would exceed the budget is blocked.
   5. **Exponential backoff on 429**: Rate limit responses (429) trigger backoff rather than immediate fallback, reducing unnecessary cost from hitting the secondary provider.
 - **Worst-case cost per request**: 3 attempts × max_tokens (4096) × highest provider rate = ~$0.50. With daily cap of $50, maximum ~100 worst-case requests per day.
 
@@ -2620,7 +2628,7 @@ When a data subject requests erasure (§9.4.2), deletions must cascade across al
 | PostgreSQL (Managed DB) | DigitalOcean | $15/mo | $0 (smallest plan) | No auto-upgrade; manual plan change required |
 | Redis (Managed) | DigitalOcean | $15/mo | $0 (smallest plan) | No auto-upgrade; eviction policy activates |
 | Object Storage (Spaces) | DigitalOcean | $5/mo | 250 GiB included | $0.02/GiB overage |
-| LLM API calls | OpenAI, Anthropic, Google | $50/day, $500/mo per domain | Varies by provider | Budget enforcement blocks requests (§7.2) |
+| LLM API calls | OpenAI, Anthropic, Google | $50/day, $1,000/mo per domain | Varies by provider | Budget enforcement blocks requests (§7.2) |
 | Notifications (Novu) | Novu Cloud | $0/mo | 10K events/mo | See §9.15 |
 | Workflow execution (Inngest) | Inngest Cloud | $0/mo | 50K steps/mo | See §9.15 |
 | Error tracking (Sentry) | Sentry | $0/mo | 5K errors/mo | Events dropped after quota |
@@ -2739,7 +2747,7 @@ services:
 
 #### 10.4.3 PostgreSQL SPOF — Error Budget Allowance
 
-> **Accepted Risk — PostgreSQL Single Point of Failure**: PostgreSQL is a single shared instance in Phase 1 (§2.3.2). This is a known SPOF that can cause total platform outage. This risk is accepted within the error budget because: (1) BRD SLO targets >99% monthly uptime (~7.3h allowed downtime/month). DigitalOcean Managed Database SLA provides 99.95% uptime, which is within budget. (2) RPO <24h is met by automated daily backups. (3) RTO <4h is documented in RUNBOOK §8.5 (database recovery). (4) Phase 2 mitigation: upgrade to HA-tier managed database ($30/mo → $60/mo) for automatic failover, reducing SPOF to a multi-region failure scenario. The error budget allows this tradeoff because Phase 1 is pre-production/early production with low user volume.
+> **Accepted Risk — PostgreSQL Single Point of Failure**: PostgreSQL is a single shared instance in Phase 1 (§2.3.2). This is a known SPOF that can cause total platform outage. This risk is accepted within the error budget because: (1) BRD SLO targets >99% monthly uptime (~7.3h allowed downtime/month). DigitalOcean Managed Database SLA provides 99.95% uptime, which is within budget. (2) RPO <24h is met by automated daily backups. (3) RTO <8h is documented in RUNBOOK §8.5 (database recovery; updated from <4h per SA-1 re-evaluation). (4) Phase 2 mitigation: upgrade to HA-tier managed database ($30/mo → $60/mo) for automatic failover, reducing SPOF to a multi-region failure scenario. The error budget allows this tradeoff because Phase 1 is pre-production/early production with low user volume.
 
 #### 10.4.4 Novu Single-Path Acceptance
 
@@ -2797,7 +2805,7 @@ services:
 | Workflow success rate | >99% monthly | `workflow_success_rate < 0.99` over 1h window | SEV-2 | RUNBOOK §8.1 |
 | HITL delivery latency | <10s P95 | `hitl_delivery_p95 > 10s` over 15min window | SEV-2 | RUNBOOK §8.2 |
 | API availability | >99.5% monthly | `api_5xx_rate > 0.5%` over 5min window | SEV-1 | RUNBOOK §8.3 |
-| MCP tool success rate | >95% per tool | `mcp_tool_error_rate > 5%` over 30min window | SEV-3 | RUNBOOK §8.4 |
+| MCP tool success rate | >99.5% (BRD: >99%) | `mcp_tool_error_rate > 0.5%` over 5min window | SEV-2 | RUNBOOK §8.4 |
 | Audit integrity | >99.9% | `audit_missing_events > 0` daily check | SEV-1 | RUNBOOK §8.7 |
 | LLM budget compliance | 100% enforcement | `llm_daily_spend > $45` (90% threshold) | SEV-3 | RUNBOOK §8.8 |
 
@@ -3547,7 +3555,7 @@ const redactPaths = [
 | **D** | Runaway MCP process | Cockatiel timeout enforcement (§5.2) | No documented memory/CPU limits |
 | **E** | MCP server accesses unauthorized resources | Scoped capabilities per registry (§5.1); HITL approval gates for critical tools | Compromised server + env secrets = full credential access |
 
-> **Accepted Residual Risk (CRITICAL — pre-production blocker)**: MCP servers spawned via `npx` inherit the full process environment including database credentials and API keys. Sprint 0 SP-06 plans environment sanitization but is not yet implemented. A compromised MCP server package could exfiltrate all platform secrets. **Must complete SP-06 env sanitization before production deployment.**
+> **Resolved (P1.5-06)**: MCP servers spawned via `npx` previously inherited the full process environment. `sanitizeEnvForMcp()` (from `@aptivo/mcp-layer`) now strips all env vars except those on the DB-backed allowlist before spawning child processes. The AgentKit transport adapter accepts an `envAllowlist` parameter populated from the MCP registry at initialization time — see composition root `getMcpWrapper()` in `apps/web/src/lib/services.ts`. Per-server allowlists are configured in the `mcpServers.allowedEnv` column.
 
 ### 14.5 LLM Gateway — Prompt Injection
 
@@ -3585,7 +3593,7 @@ LangGraph.js runs inside Inngest `step.run()` activities for AI reasoning tasks 
 **Fallback Strategy**: Provider fallback on 429/5xx errors (§7.1). Budget exceeded returns explicit `Result.err` that workflows handle gracefully.
 
 **Token/Cost Limits**:
-- Per-domain daily ($50) and monthly ($500) budget caps with enforcement (§7.2)
+- Per-domain daily ($50) and monthly ($1,000) budget caps with enforcement (§7.2)
 - Per-request: `max_tokens` parameter set per workflow step (default: 4096 output tokens)
 - Per-user rate limits: Deferred to Phase 2 (Phase 1 workflows are system-initiated, not user-triggered in real-time)
 - Provider-side rate limits: Handled via retry with exponential backoff and provider fallback
@@ -3657,19 +3665,220 @@ The Inngest SDK serves an HTTP endpoint that receives events from Inngest Cloud 
 
 | ID | Surface | Risk | Likelihood | Impact | Status | Phase |
 |----|---------|------|------------|--------|--------|-------|
-| RR-1 | MCP §14.4 | Env secret exfiltration via compromised npm MCP server | Medium | Critical | **Pre-production blocker** — SP-06 | 1 |
+| RR-1 | MCP §14.4 | Env secret exfiltration via compromised npm MCP server | Medium | Critical | **Resolved** — `sanitizeEnvForMcp()` enforced in AgentKit adapter (P1.5-06) | 1 |
 | RR-2 | LLM §14.5 | Direct prompt injection via user-supplied data | Medium | High | Mitigated — structural separation + HITL (§14.5.1); no active detection | 2 (injection classifier) |
 | RR-3 | LLM §14.5 | Indirect prompt injection via MCP-retrieved data | Low | High | Mitigated — MCP data in user role + schema validation (§14.5.1) | 2 (content filtering) |
 | RR-4 | HITL §14.2 | HS256 symmetric key compromise | Low | Critical | Accepted — encrypted storage, rotation | 2 (asymmetric) |
 | RR-5 | PII §14.3 | PII leakage in application logs | Low | Medium | Mitigated — comprehensive Pino redaction (§14.3.1); residual risk: unstructured free-text PII | 2 (regex PII scanning) |
 | RR-6 | PII §14.3 | No bulk exfiltration detection | Low | High | Accepted — audit logging covers trail | 2 (anomaly detection) |
-| RR-7 | Webhooks §14.7 | Outbound SSRF via user-supplied URL | Medium | Medium | **Pre-production blocker** — URL validation | 1 |
+| RR-7 | Webhooks §14.7 | Outbound SSRF via user-supplied URL | Medium | Medium | **Partially resolved** — `safeFetch()` created with SSRF validation (P1.5-06); wire on first outbound webhook path | 1 |
 | RR-8 | File §14.6 | Content-type spoofing | Low | Low | Accepted | 1 |
 | RR-9 | Auth §14.1 | Supabase security vulnerability | Low | Critical | Accepted — exit strategy documented (§8.1) | — |
 
+### 14.10 Implemented Security Middleware Stack
+
+> **Added (P2-DOC-05, 2026-03-12)**: Documents the runtime security enforcement stack built across Sprints 5-7 and Phase 1.5.
+
+The following middleware components are implemented in `apps/web/src/lib/security/`:
+
+| Layer | File | Function | Enforcement |
+|-------|------|----------|-------------|
+| **RBAC** | `rbac-middleware.ts` | `checkPermission(permission)` | Returns `(Request) → Response \| null`. Production: Supabase JWT → user → DB permission lookup. Dev: `x-user-role` header → DB role lookup → stub fallback. Per-request caching via `WeakMap<Request, Set<string>>`. |
+| **RBAC Resolver** | `rbac-resolver.ts` | `extractUser(request)`, `resolvePermissions(userId, db)` | JWT extraction (production) or header extraction (dev). JOINs `user_roles` + `role_permissions` WHERE `revokedAt IS NULL`. |
+| **SSRF Validator** | `ssrf-validator.ts` | `validateWebhookUrl(url)` | Blocks private IPs (10.x, 172.16-31.x, 192.168.x), localhost, link-local (169.254.x), metadata endpoints (169.254.169.254). Returns `Result<URL, SecurityError>`. |
+| **Safe Fetch** | `safe-fetch.ts` | `safeFetch(url, init?)` | Wraps `fetch()` with `validateWebhookUrl()` pre-check. Returns `Result<Response, SafeFetchError>`. Wire on first outbound webhook path (RR-7). |
+| **Body Limits** | `body-limits.ts` | `withBodyLimits(handler)` | HOF wrapper. Webhook body: 256KB. API JSON: 1MB. JSON nesting: max 10 levels. Returns `413` or `400` on violation. |
+| **Logging Sanitization** | `sanitize-logging.ts` | `sanitizeForLogging(obj)`, `hashQueryParam(param)` | Redacts PII fields (email, name, phone, address, SSN) before logging. Hashes URL query params in access logs. Used in Sentry `beforeSend` hook. |
+
+**Request flow**: RBAC middleware runs first (route-level), body limits run at middleware level (for POST/PUT routes), SSRF validation runs before outbound HTTP calls, logging sanitization runs before all log output.
+
+### 14.11 Admin Dashboard APIs
+
+> **Added (Tier 1 re-evaluation, 2026-03-13)**: Addresses G-1 — Admin Dashboard APIs lacked STRIDE threat enumeration despite being a high-privilege surface with access to audit logs, HITL state, and financial metrics.
+
+**Surface**: GET endpoints for system health, HITL requests, audit logs, LLM cost tracking (`/api/admin/*`).
+**Source**: §15.1-15.6, API Spec `/api/admin/*`, §14.10
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Spoofed admin identity via stolen JWT | Supabase JWT signature verification; `checkPermission('platform/admin.view')` on every endpoint (§14.10) | XSS leading to token exfiltration |
+| **T** | Audit log tampering via admin API | Admin endpoints are read-only (GET); audit table has `REVOKE UPDATE, DELETE` (§9.3) | Database superuser bypass |
+| **R** | Admin access without audit trail | Admin API requests logged via structured Pino logging (§14.10); Supabase auth events tracked | Log retention policy gaps |
+| **I** | Sensitive metric leakage (LLM costs, HITL details) | RBAC gates all endpoints; aggregation queries hide row-level PII; parameterized Drizzle queries (§15.6) | Authorized admin with broad visibility — no field-level redaction on cost data |
+| **I** | IDOR on audit log filters | `resource` and `actor` filters use parameterized queries; no user-supplied IDs in path | Filter values could enumerate valid resource/actor names |
+| **D** | Expensive aggregation query flooding | Pagination clamped to 200 (§15.6); range clamped to 365 days; PostgreSQL connection pool limits (§2.3.2) | No per-user rate limiting on admin endpoints — sustained queries could degrade shared pool |
+| **E** | Non-admin accessing admin endpoints | `checkPermission('platform/admin.view')` enforced on all routes; RBAC resolver JOINs `user_roles` + `role_permissions` WHERE `revokedAt IS NULL` (§14.10) | Role assignment compromise in `user_roles` table |
+
+> **Accepted Design**: All admin endpoints return global platform metrics with no domain-scoped isolation. This is intentional for a single-tenant Phase 1 deployment. Phase 2: add domain-scoped admin roles if multi-tenant deployment requires metric segregation.
+
+### 14.12 Workflow Management APIs
+
+> **Added (Tier 1 re-evaluation, 2026-03-13)**: Addresses G-2 — Workflow Management APIs lacked dedicated STRIDE threat model despite being a control surface for workflow definition CRUD and instance management.
+
+**Surface**: Workflow definition CRUD (`/api/v1/workflows`), instance listing, execution history, validation, and export.
+**Source**: §3.1-3.3, §14.8, API Spec `/api/v1/workflows*`, FRD §3
+
+| STRIDE | Threat | Mitigation | Residual Risk |
+|--------|--------|------------|---------------|
+| **S** | Unauthorized workflow creation/modification | Supabase JWT authentication; domain-scoped RBAC permissions (`{domain}/workflow.create`, `{domain}/workflow.execute`) | Stolen JWT with workflow permissions |
+| **T** | Mass assignment on workflow definition update | Zod schema validation on `WorkflowCreateRequest`/`WorkflowUpdateRequest`; only whitelisted fields accepted | Schema evolution could introduce unvalidated fields |
+| **T** | State machine tampering via malformed transitions | `POST /api/v1/workflows/validate` performs structural validation; invalid state graphs rejected before persistence | Semantic correctness of transitions not validated (business logic) |
+| **R** | Workflow modification without audit trail | All CRUD operations produce audit events (§9.2); Inngest step execution logged per event | Audit entry creation failure (mitigated by DLQ — §9.5) |
+| **I** | Workflow export leaks sensitive configuration | Export endpoint (`/api/v1/workflows/{id}/export`) returns portable JSON; sensitive runtime config (API keys, secrets) excluded from export schema | Workflow step descriptions may contain business-sensitive logic |
+| **I** | Instance history reveals execution details | Instance listing and history require authenticated access with domain permissions; history entries contain step-level detail | Authorized users see full execution trace including LLM interaction summaries |
+| **D** | Workflow creation flooding | Rate limit: 20 req/min per user on `POST /api/v1/workflows`; 100 req/min on `GET` (API Spec) | No global rate limit across users — coordinated attack possible |
+| **D** | ReDoS via workflow state definition validation | Zod validation with bounded input; no user-supplied regex in state definitions | Complex state graphs with deep nesting could increase validation CPU time |
+| **E** | Cross-domain workflow access | Domain-scoped RBAC: `crypto/workflow.execute` does not grant `hr/workflow.execute`; Drizzle queries filter by domain | RBAC misconfiguration granting cross-domain permissions |
+| **E** | Delete active workflow to disrupt operations | `DELETE /api/v1/workflows/{id}` blocked when active instances exist (API Spec) | Race condition: instance starts between check and delete |
+
+> **Implementation Note**: Workflow definitions are versioned (§3.1). Updates create new versions rather than mutating existing definitions, preserving auditability. The `DELETE` guard against active instances prevents disruption of running workflows.
+
 ---
 
-## 15. References
+## 15. Admin & Operations Dashboard Architecture
+
+> **Added (P2-DOC-03, 2026-03-12)**: Documents the admin infrastructure built in Sprint 7 (S7-INT-02, S7-INT-03). Closes WARNING S2-W12 (LLM Usage Dashboard).
+
+### 15.1 Overview
+
+The admin dashboard provides platform operators with visibility into system health, HITL request status, audit trails, and LLM cost tracking. All endpoints enforce RBAC via `checkPermission('platform/admin.view')` middleware (§14.10) and return RFC 7807 error responses on failure.
+
+**Store adapters**:
+- `createDrizzleAdminStore(db)` — aggregation queries for overview, audit logs, HITL requests
+- `createDrizzleLlmUsageStore(db)` — LLM cost breakdowns by domain, provider, and time period
+
+### 15.2 API Endpoints
+
+| Endpoint | Method | Description | Query Params |
+|----------|--------|-------------|-------------|
+| `/api/admin/overview` | GET | Platform health dashboard | — |
+| `/api/admin/audit` | GET | Paginated audit log viewer | `page`, `limit` (max 200), `resource`, `actor` |
+| `/api/admin/hitl` | GET | HITL request listing | `status`, `limit` (max 200) |
+| `/api/admin/llm-usage` | GET | LLM cost & usage analytics | `range` (e.g., `7d`, `30d`; clamped 1-365) |
+| `/api/admin/llm-usage/budget` | GET | Budget status & burn rate | — |
+
+### 15.3 Overview Endpoint
+
+Returns four key metrics in parallel:
+
+```typescript
+{
+  pendingHitlCount: number;          // hitl_requests WHERE status = 'pending'
+  activeWorkflowCount: number;       // workflows active within 5-minute window
+  recentAuditEvents: AuditLogRow[];  // latest 50 audit log entries
+  sloHealth: {
+    workflowSuccessRate: number;     // success / total (1.0 if no workflows)
+    mcpSuccessRate: number;          // success / total (1.0 if no calls)
+    hitlLatencyP95Ms: number;        // P95 approval delivery latency
+    auditDlqPending: number;         // dead letter queue backlog
+    status: 'healthy' | 'degraded';  // healthy when: workflow >= 99%, mcp >= 99.5%, dlq <= 100
+  };
+}
+```
+
+SLO health is computed from `MetricService` queries (§16) — the same data that powers the SLO cron evaluators.
+
+### 15.4 LLM Usage & Budget
+
+**Usage endpoint** (`/api/admin/llm-usage`):
+- Range-based: `?range=7d` queries last 7 days (default 30d, clamped to [1, 365])
+- Returns: `costByDomain[]`, `costByProvider[]`, `dailyTotals[]`, `totalCost`, alerts
+- Total cost computed client-side from domain breakdown sum
+
+**Budget endpoint** (`/api/admin/llm-usage/budget`):
+- Daily limit: $50 (configurable)
+- Monthly limit: $1,000 (configurable)
+- Burn rate: `monthlySpend / dayOfMonth` — projected daily average
+- Alert threshold: $5/day per domain — domains exceeding threshold returned in `alerts.domainsExceeding[]`
+
+### 15.5 RBAC Enforcement
+
+All admin endpoints use the same pattern:
+
+```typescript
+const forbidden = await checkPermission('platform/admin.view')(request);
+if (forbidden) return forbidden;
+```
+
+The `checkPermission()` factory (§14.10) returns a `(Request) => Promise<Response | null>` function. In production, it extracts the Supabase JWT, resolves user permissions from the DB, and caches them per-request via `WeakMap<Request, Set<string>>`. Returns `null` (permitted) or RFC 7807 `401`/`403` response.
+
+### 15.6 Input Validation
+
+- **Pagination**: `limit` clamped to `[1, 200]`, `page` floor at 1
+- **Range**: parsed from string (e.g., `"7d"`), clamped to `[1, 365]` days; zero or NaN defaults to 30
+- **Filters**: `resource`, `actor`, `status` are optional string filters passed directly to `WHERE` clauses via parameterized Drizzle queries (no SQL injection risk)
+
+---
+
+## 16. Observability & SLO Architecture
+
+> **Added (P2-DOC-04, 2026-03-12)**: Consolidates scattered observability references into a canonical section. Covers the MetricService, SLO cron, and alert evaluators built in Sprint 7 (S7-CF-01).
+
+### 16.1 MetricService Interface
+
+The `MetricService` provides a shared abstraction over Drizzle aggregation queries, used by both the SLO cron job and admin dashboard APIs.
+
+**Factory**: `createMetricService(deps)` in `apps/web/src/lib/observability/metric-service.ts`
+**Query adapter**: `createMetricQueries(db)` in `packages/database/src/adapters/metric-queries.ts`
+
+```typescript
+interface MetricService {
+  getWorkflowCounts(): Promise<{ total: number; success: number }>;
+  getMcpCallCounts(): Promise<{ total: number; success: number }>;
+  getHitlLatencyP95(): Promise<number>;
+  getAuditDlqPendingCount(): Promise<number>;
+  getRetentionFailureCount(): Promise<number>;
+  getNotificationDeliveryRate(): Promise<number>;
+}
+```
+
+All methods query PostgreSQL aggregation views over the respective tables (workflow_executions, mcp_tool_calls, hitl_requests, audit_write_dlq, notification_deliveries).
+
+### 16.2 SLO Cron Job
+
+**Implementation**: `apps/web/src/lib/observability/slo-cron.ts` — Inngest function running on 5-minute interval.
+
+Each evaluation cycle:
+1. Fetches current metric values from `MetricService`
+2. Evaluates each metric against its SLO threshold
+3. Fires alert events for threshold violations
+4. Logs evaluation results for Grafana ingestion
+
+### 16.3 Alert Evaluators
+
+Four threshold-based alerts defined in `apps/web/src/lib/observability/slo-alerts.ts`:
+
+| Evaluator | SLO Target | Alert Condition | Source Metric |
+|-----------|-----------|-----------------|---------------|
+| `workflowSuccessAlert` | ≥ 99% success rate | < 99% over 5-min window | `getWorkflowCounts()` |
+| `hitlDeliveryAlert` | P95 < 10s | P95 > 10,000ms | `getHitlLatencyP95()` |
+| `mcpSuccessAlert` | ≥ 99.5% success rate | < 99.5% | `getMcpCallCounts()` |
+| `auditIntegrityAlert` | DLQ count ≤ threshold | count > 100 | `getAuditDlqPendingCount()` |
+
+**Deferred**: S5-W17 burn-rate alerting — multi-window burn-rate analysis requires historical metric storage not yet implemented. See [Phase 2 Roadmap](../06-sprints/phase-2-roadmap.md) Epic 4.
+
+### 16.4 Metric-to-Dashboard Integration
+
+The admin overview endpoint (§15.3) reuses the same `MetricService` queries as the SLO cron, ensuring dashboard and alerting agree on metric values. The `sloHealth.status` field is derived from the same thresholds used by the alert evaluators.
+
+```
+MetricQueries (Drizzle) ──→ MetricService
+                              ├──→ SLO Cron (Inngest, 5-min)
+                              │     └──→ Alert Evaluators → alert events
+                              └──→ Admin Overview API
+                                    └──→ sloHealth response
+```
+
+### 16.5 Observability Cross-References
+
+- **Structured logging**: Pino with PII redaction — see Coding Guidelines §3.2 and `docs/05-guidelines/05d-Observability.md`
+- **Distributed tracing**: W3C traceparent propagation — see `apps/web/src/lib/tracing/context-propagation.ts`
+- **Error tracking**: Sentry integration with `sanitizeForLogging()` before `captureException()`
+- **SLO-Alert mapping table**: ADD §10.4.8
+
+---
+
+## 17. References
 
 | Document | Purpose |
 |----------|---------|

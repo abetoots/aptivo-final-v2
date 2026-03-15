@@ -467,7 +467,73 @@ settings:
 
 ---
 
-## 8. API Endpoints
+## 8. Implemented Workflow State Transitions (v1.0.0 As-Built)
+
+> **Added v1.0.0 as-built**: State transition tables for workflows implemented in Sprints 6-7.
+> See also: [HR Domain ADD](../../03-architecture/hr-domain-add.md) §4
+
+### 8.1 Candidate Application Flow (S6-HR-01)
+
+**Trigger**: `hr/application.received`
+**Orchestration**: Inngest (6 steps, 0 retries)
+
+| State | On Event/Condition | Next State | Notes |
+|-------|-------------------|------------|-------|
+| `application.received` | trigger received | `parse-resume` | entry point |
+| `parse-resume` | LLM extraction complete | `check-duplicate` | gpt-4o, extracts name/email/phone/skills |
+| `check-duplicate` | existing candidate found | `create-candidate` | reuses existing candidateId |
+| `check-duplicate` | new candidate | `create-candidate` | creates new candidate record |
+| `create-candidate` | candidate + application created | `consent-check` | application stage: `received` |
+| `consent-check` | — | `notify-recruiter` | fire-and-forget, `hr-consent-request` template |
+| `notify-recruiter` | — | `audit-trail` | fire-and-forget, `hr-new-application` template |
+| `audit-trail` | — | **CREATED** | terminal, `hr.application.received` audit event |
+
+### 8.2 Interview Scheduling (S7-HR-01)
+
+**Trigger**: `hr/interview.scheduling.requested`
+**Orchestration**: Inngest (7 steps, 1 retry)
+
+| State | On Event/Condition | Next State | Notes |
+|-------|-------------------|------------|-------|
+| `scheduling.requested` | trigger received | `check-availability` | entry point |
+| `check-availability` | slots found | `propose-slots` | MCP: google-calendar, 7-day lookahead |
+| `check-availability` | no slots available | **MANUAL_INTERVENTION** | terminal — human must resolve |
+| `propose-slots` | notification sent | `wait-for-selection` | top 3 slots via `hr-interview-slots` |
+| `wait-for-selection` | slot selected (validated) | `create-calendar-event` | validates slot in proposed set (P1.5-07) |
+| `wait-for-selection` | timeout (48h) | **CANCELED** | terminal |
+| `create-calendar-event` | MCP event created | `update-interview-status` | google-calendar.createEvent |
+| `update-interview-status` | status → confirmed | `notify-parties` | |
+| `notify-parties` | notifications sent | `audit-trail` | candidate + interviewer, `hr-interview-confirmed` |
+| `audit-trail` | — | **CONFIRMED** | terminal, `hr.interview.scheduled` audit event |
+
+**Slot Validation**: After `waitForEvent`, the selected slot is validated against the originally proposed set to prevent slot injection attacks.
+
+**Duration by Type**: technical=60min, behavioral=45min, culture-fit=45min
+
+### 8.3 Contract Approval (S7-HR-02)
+
+**Trigger**: `hr/contract.approval.requested`
+**Orchestration**: Inngest (7 steps, 0 retries)
+
+| State | On Event/Condition | Next State | Notes |
+|-------|-------------------|------------|-------|
+| `approval.requested` | trigger received | `draft-contract` | entry point |
+| `draft-contract` | LLM draft complete | `compliance-check` | gpt-4o, creates contract (status: `draft`) |
+| `compliance-check` | compliance flags computed | `hitl-approval` | gpt-4o, updates status to `pending_review` |
+| `hitl-approval` | request created | `wait-for-decision` | 72h timeout |
+| `wait-for-decision` | approved | `finalize-contract` | |
+| `wait-for-decision` | rejected | `finalize-contract` | status → `rejected` |
+| `wait-for-decision` | timeout (72h) | **EXPIRED** | terminal — status → `expired` |
+| `finalize-contract` | approved → status: `signed` | `audit-trail` | notification: `hr-contract-approved` |
+| `finalize-contract` | rejected → status: `rejected` | `audit-trail` | notification: `hr-contract-rejected` |
+| `audit-trail` | — | `emit-contract-approved` | `hr.contract.finalized` audit event |
+| `emit-contract-approved` | — | **SIGNED** or **REJECTED** | terminal, emits `hr/contract.approved` if signed |
+
+**Contract Status Lifecycle**: `drafting` → `pending_review` → `signed` | `rejected` | `expired`
+
+---
+
+## 9. API Endpoints
 
 ### 8.1 Workflow Definitions
 
@@ -536,7 +602,7 @@ Cancel running execution.
 
 ---
 
-## 9. Event Catalog
+## 10. Event Catalog
 
 | Event | When | Payload |
 |-------|------|---------|
@@ -549,7 +615,7 @@ Cancel running execution.
 
 ---
 
-## 10. Non-Functional Requirements
+## 11. Non-Functional Requirements
 
 ### 10.1 Performance
 

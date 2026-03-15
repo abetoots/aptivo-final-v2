@@ -66,6 +66,8 @@ tags:
     description: Authentication and user management
   - name: Domains
     description: Domain role management
+  - name: Admin
+    description: Admin dashboard and operations monitoring (requires platform/admin.view)
 
 # ==============================================================================
 # PATHS
@@ -973,9 +975,9 @@ paths:
         required: true
         description: >
           Inbound webhook payload from external system.
-          Request body must not exceed 1 MiB (1,048,576 bytes).
+          Request body must not exceed 256 KiB (262,144 bytes) per ADD §14.10 webhook-specific limit.
           Requests exceeding this limit are rejected with 413 Payload Too Large.
-        x-body-size-limit: 1048576
+        x-body-size-limit: 262144
         content:
           application/json:
             schema:
@@ -1325,6 +1327,151 @@ paths:
         '404':
           $ref: '#/components/responses/NotFound'
 
+  # ============================================================================
+  # ADMIN DASHBOARD (Sprint 7 — S7-INT-02, S7-INT-03)
+  # ============================================================================
+  /api/admin/overview:
+    get:
+      tags: [Admin]
+      summary: Dashboard overview snapshot
+      description: |
+        Returns platform health snapshot including pending HITL count, active workflows,
+        recent audit events, and SLO health status.
+      operationId: getAdminOverview
+      responses:
+        '200':
+          description: Dashboard overview
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminOverviewResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/audit:
+    get:
+      tags: [Admin]
+      summary: Paginated audit log browser
+      description: Browse audit logs with optional resource type and actor type filters.
+      operationId: getAdminAuditLogs
+      parameters:
+        - name: page
+          in: query
+          description: Page number (minimum 1)
+          schema:
+            type: integer
+            default: 1
+            minimum: 1
+        - name: limit
+          in: query
+          description: Results per page (clamped to 1-200)
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+        - name: resource
+          in: query
+          description: Filter by resource type
+          schema:
+            type: string
+        - name: actor
+          in: query
+          description: Filter by actor type
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Paginated audit logs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminAuditListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/hitl:
+    get:
+      tags: [Admin]
+      summary: HITL request listing
+      description: List HITL requests with optional status filter.
+      operationId: getAdminHitlRequests
+      parameters:
+        - name: status
+          in: query
+          description: Filter by HITL request status
+          schema:
+            type: string
+            enum: [pending, approved, rejected, expired, canceled]
+        - name: limit
+          in: query
+          description: Maximum results (clamped to 1-200)
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 200
+      responses:
+        '200':
+          description: HITL request list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminHitlListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/llm-usage:
+    get:
+      tags: [Admin]
+      summary: LLM cost analytics
+      description: |
+        Cost breakdown by domain, provider, and daily totals. Range parameter controls
+        the time window (default 30 days, clamped to 1-365).
+      operationId: getAdminLlmUsage
+      parameters:
+        - name: range
+          in: query
+          description: Time range as days string (e.g. "30d", "7d"). Clamped to 1-365.
+          schema:
+            type: string
+            default: '30d'
+      responses:
+        '200':
+          description: LLM usage analytics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminLlmUsageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/admin/llm-usage/budget:
+    get:
+      tags: [Admin]
+      summary: LLM budget status
+      description: Daily and monthly spend vs limits, burn rate projection, and domain alerts.
+      operationId: getAdminLlmBudget
+      responses:
+        '200':
+          description: Budget status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AdminBudgetResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
 # ==============================================================================
 # COMPONENTS
 # ==============================================================================
@@ -1530,6 +1677,203 @@ components:
   # SCHEMAS
   # ============================================================================
   schemas:
+    # --------------------------------------------------------------------------
+    # ADMIN DASHBOARD
+    # --------------------------------------------------------------------------
+    AdminOverviewResponse:
+      type: object
+      properties:
+        pendingHitlCount:
+          type: integer
+        activeWorkflowCount:
+          type: integer
+        recentAuditEvents:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAuditLogEntry'
+        sloHealth:
+          type: object
+          properties:
+            workflowSuccessRate:
+              type: number
+            mcpSuccessRate:
+              type: number
+            hitlLatencyP95Ms:
+              type: number
+            auditDlqPending:
+              type: integer
+            status:
+              type: string
+              enum: [healthy, degraded]
+      required: [pendingHitlCount, activeWorkflowCount, recentAuditEvents, sloHealth]
+
+    AdminAuditLogEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        action:
+          type: string
+        resourceType:
+          type: string
+        resourceId:
+          type: string
+          nullable: true
+        domain:
+          type: string
+          nullable: true
+        actorType:
+          type: string
+        userId:
+          type: string
+          nullable: true
+        timestamp:
+          type: string
+          format: date-time
+        metadata:
+          type: object
+          nullable: true
+
+    AdminAuditListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminAuditLogEntry'
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+      required: [data, total, page, limit]
+
+    AdminHitlEntry:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        workflowId:
+          type: string
+        domain:
+          type: string
+        actionType:
+          type: string
+        summary:
+          type: string
+        status:
+          type: string
+        approverId:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        resolvedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    AdminHitlListResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/AdminHitlEntry'
+        count:
+          type: integer
+      required: [data, count]
+
+    AdminLlmUsageResponse:
+      type: object
+      properties:
+        range:
+          type: string
+        totalCost:
+          type: string
+        costByDomain:
+          type: array
+          items:
+            type: object
+            properties:
+              domain:
+                type: string
+              totalCost:
+                type: string
+              requestCount:
+                type: integer
+        costByProvider:
+          type: array
+          items:
+            type: object
+            properties:
+              provider:
+                type: string
+              model:
+                type: string
+              totalCost:
+                type: string
+              requestCount:
+                type: integer
+        dailyTotals:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+              totalCost:
+                type: string
+              requestCount:
+                type: integer
+        alerts:
+          $ref: '#/components/schemas/AdminAlertInfo'
+      required: [range, totalCost, costByDomain, costByProvider, dailyTotals, alerts]
+
+    AdminBudgetResponse:
+      type: object
+      properties:
+        daily:
+          type: object
+          properties:
+            spend:
+              type: string
+            limit:
+              type: number
+            pctUsed:
+              type: string
+        monthly:
+          type: object
+          properties:
+            spend:
+              type: string
+            limit:
+              type: number
+            pctUsed:
+              type: string
+        burnRate:
+          type: string
+        alerts:
+          $ref: '#/components/schemas/AdminAlertInfo'
+      required: [daily, monthly, burnRate, alerts]
+
+    AdminAlertInfo:
+      type: object
+      properties:
+        threshold:
+          type: number
+          description: Dollar threshold per domain per day
+        domainsExceeding:
+          type: array
+          items:
+            type: string
+        hasAlerts:
+          type: boolean
+      required: [threshold, domainsExceeding, hasAlerts]
+
     # --------------------------------------------------------------------------
     # COMMON
     # --------------------------------------------------------------------------

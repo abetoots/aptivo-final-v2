@@ -500,7 +500,55 @@ syncing_positions → pricing → calculating_metrics → checking_alerts →
 
 ---
 
-## 4. Error Handling
+## 4. Implemented Workflow State Transitions (v1.1.0 As-Built)
+
+> **Added v1.1.0**: State transition tables for workflows implemented in Sprints 6-7.
+> See also: [Crypto Domain ADD](../../03-architecture/crypto-domain-add.md) §4
+
+### 4.1 Paper Trading Workflow (S6-CRY-01)
+
+**Trigger**: `crypto/signal.created`
+**Orchestration**: Inngest (7 steps, 0 retries)
+
+| State | On Event/Condition | Next State | Notes |
+|-------|-------------------|------------|-------|
+| `signal.created` | trigger received | `llm-analyze` | entry point |
+| `llm-analyze` | LLM analysis complete | `risk-check` | gpt-4o, generates reasoning |
+| `risk-check` | pass (R:R >= 2, positions < 5) | `hitl-request` | |
+| `risk-check` | fail | **RISK_REJECTED** | terminal — signal status updated |
+| `hitl-request` | request created | `wait-for-decision` | 15min timeout |
+| `notify-approver` | — | — | fire-and-forget, non-blocking |
+| `wait-for-decision` | approved | `execute-paper` | |
+| `wait-for-decision` | rejected | **REJECTED** | terminal |
+| `wait-for-decision` | timeout (15min) | **EXPIRED** | terminal |
+| `execute-paper` | success | `audit-trail` | slippage 0.5%, fees 0.1% |
+| `execute-paper` | error | **ERROR** | terminal |
+| `audit-trail` | — | **EXECUTED** | fire-and-forget, terminal |
+
+**Risk Limits**: maxPositionPct=3%, maxConcurrentPositions=5, minRewardRiskRatio=2
+
+### 4.2 Security Scan Workflow (S7-CRY-01)
+
+**Trigger**: `crypto/security.scan.requested`
+**Orchestration**: Inngest (4 steps, 1 retry)
+
+| State | On Event/Condition | Next State | Notes |
+|-------|-------------------|------------|-------|
+| `scan.requested` | trigger received | `check-cache` | entry point |
+| `check-cache` | cache hit (< 1hr) | **CACHED** | terminal — returns existing report |
+| `check-cache` | cache miss | `liquidity-check` | |
+| `liquidity-check` | MCP success | `contract-scan` | returns liquidityUsd |
+| `liquidity-check` | MCP failure | `contract-scan` | defaults to liquidityUsd=0 |
+| `contract-scan` | MCP success | `risk-scoring` | returns honeypot/mintable/ownership |
+| `contract-scan` | MCP failure | `risk-scoring` | defaults to worst-case flags |
+| `risk-scoring` | score computed | **SCANNED** | terminal — stores report + emits audit |
+
+**Risk Score**: honeypot(+40) + mintable(+25) + !ownership(+15) + lowLiquidity(+20)
+**Status**: dangerous(>=60), warning(30-59), safe(<30)
+
+---
+
+## 5. Error Handling
 
 ### 4.1 Error Categories
 
@@ -548,7 +596,7 @@ await workflow.invoke(state, { configurable: { thread_id: threadId } });
 
 ---
 
-## 5. Observability
+## 6. Observability
 
 ### 5.1 Workflow Logging
 
@@ -593,7 +641,7 @@ async function analyzeTransaction(state: SmartMoneyState): Promise<SmartMoneySta
 
 ---
 
-## 6. Integration with Platform Core
+## 7. Integration with Platform Core
 
 ### 6.1 HITL Gateway Integration
 

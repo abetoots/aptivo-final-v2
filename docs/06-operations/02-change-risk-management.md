@@ -58,7 +58,7 @@ It also covers the identification and management of all technical, operational, 
 
 ### 1.4 Related Documents
 
-- **ADD v2.0.0** - Architecture, RTO < 4h / RPO < 1h targets
+- **ADD v2.0.0** - Architecture, RTO < 8h (Phase 1 manual) / RPO < 24h targets
 - **TSD v3.0.0** - Technical specifications, Result types, RFC 7807 errors
 - **Coding Guidelines v3.0.0** - Functional patterns, OpenTelemetry, Zero Trust
 - **Testing Strategies v2.0.0** - Tiered coverage, CI/CD security scans

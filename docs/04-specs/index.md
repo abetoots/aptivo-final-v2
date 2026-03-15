@@ -1,10 +1,10 @@
 ---
 id: TSD-PLATFORM-CORE
 title: Technical Specifications Document (TSD)
-status: Draft
-version: 4.1.0
+status: Phase 1 Complete
+version: 5.0.0
 owner: '@owner'
-last_updated: '2026-02-02'
+last_updated: '2026-03-12'
 parent: ../03-architecture/platform-core-add.md
 ---
 # Technical Specifications Document (TSD)
@@ -13,6 +13,7 @@ parent: ../03-architecture/platform-core-add.md
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| v5.0.0 | 2026-03-12 | Phase 2 Doc Design | Added Audit TSD, Admin Ops API TSD, domain ADDs, workflow state tables, LLM Gateway v1.2.0 |
 | v4.1.0 | 2026-02-02 | Document Review | Added Crypto Domain specs: database, api, mcp-servers, workflow-engine |
 | v4.0.0 | 2026-02-02 | Multi-Model Review | Platform Core ADD alignment: added HITL Gateway, LLM Gateway, Notification Bus specs |
 | v3.0.0 | 2025-01-15 | Document Review Panel | Major restructure: modular split, Phase 1 alignment, migration queue incorporation |
@@ -75,7 +76,9 @@ docs/04-specs/
 │   ├── index.md                       ← Platform core services index
 │   ├── mcp-layer.md                   ← MCP tool consumption, AgentKit, resilience
 │   ├── hitl-gateway.md                ← HITL approval tokens, Inngest integration
-│   └── llm-gateway.md                 ← Provider abstraction, cost tracking, budgets
+│   ├── llm-gateway.md                 ← Provider abstraction, cost tracking, budgets (v1.2.0)
+│   ├── audit.md                       ← Hash-chained audit, DLQ, PII masking (NEW v1.0.0)
+│   └── admin-ops-api.md              ← 5 admin dashboard endpoints (NEW v1.0.0)
 │
 ├── # Notification Service (Buy - Novu SaaS)
 ├── notification-bus.md                ← Novu integration spec
@@ -85,24 +88,29 @@ docs/04-specs/
 ├── common-patterns.md                 ← Error types, event bus, caching
 ├── database.md                        ← Schema conventions, entity definitions (updated)
 ├── api.md                             ← REST standards, OpenAPI, error responses
+├── api-spec-readiness.md              ← API readiness assessment (v1.2.0)
 ├── authentication.md                  ← IdP integration, JWT, RBAC, Zero Trust
 ├── file-storage.md                    ← S3-compatible storage, retention, malware scanning
 ├── configuration.md                   ← Environment, secrets, health checks
 ├── observability.md                   ← Logging, metrics, tracing
 │
+├── # OpenAPI Specifications
+├── openapi/
+│   └── aptivo-core-v1.yaml           ← OpenAPI 3.1 — platform core + admin endpoints
+│
 ├── # HR Domain Modules
 ├── hr/
 │   ├── index.md                       ← HR domain index
 │   ├── candidate-management.md        ← CM module specifications
-│   └── workflow-automation.md         ← WA module specifications (HR-specific)
+│   └── workflow-automation.md         ← WA module + state transition tables (updated)
 │
 ├── # Crypto Domain Modules
 ├── crypto/
 │   ├── index.md                       ← Crypto domain index
-│   ├── database.md                    ← 8 trading tables, DuckDB analytics (Phase 2+)
+│   ├── database.md                    ← 5 trading tables, DuckDB analytics (Phase 2+)
 │   ├── api.md                         ← 21 REST endpoints, WebSocket events
 │   ├── mcp-servers.md                 ← 13 MCP integrations (blockchain, market data)
-│   └── workflow-engine.md             ← 6 LangGraph.js trading workflows
+│   └── workflow-engine.md             ← Trading workflows + state transition tables (updated)
 │
 └── # Future Domains
     └── deferred-contracts.md          ← Interface contracts for Phase 1+ modules
@@ -260,7 +268,9 @@ Per ADD v2.0.0 Section 6:
 | [platform-core/index.md](platform-core/index.md) | Platform core services overview |
 | [platform-core/mcp-layer.md](platform-core/mcp-layer.md) | MCP tool consumption via AgentKit |
 | [platform-core/hitl-gateway.md](platform-core/hitl-gateway.md) | HITL approval tokens, Inngest integration, policy engine |
-| [platform-core/llm-gateway.md](platform-core/llm-gateway.md) | Provider abstraction, cost tracking, budgets, observability |
+| [platform-core/llm-gateway.md](platform-core/llm-gateway.md) | Provider abstraction, cost tracking, budgets (v1.2.0) |
+| [platform-core/audit.md](platform-core/audit.md) | Hash-chained audit, DLQ, PII masking (v1.0.0) |
+| [platform-core/admin-ops-api.md](platform-core/admin-ops-api.md) | 5 admin dashboard endpoints (v1.0.0) |
 | **Notification Service (Buy)** | |
 | [notification-bus.md](notification-bus.md) | Novu SaaS integration |
 | **Foundational Infrastructure** | |
@@ -268,20 +278,26 @@ Per ADD v2.0.0 Section 6:
 | [common-patterns.md](common-patterns.md) | Error types, Result wrapper, event bus patterns |
 | [database.md](database.md) | Schema conventions, entity definitions, indexes |
 | [api.md](api.md) | REST standards, OpenAPI generation, rate limiting |
+| [api-spec-readiness.md](api-spec-readiness.md) | API readiness assessment (v1.2.0) |
 | [authentication.md](authentication.md) | IdP integration, JWT structure, RBAC mapping |
 | [file-storage.md](file-storage.md) | S3 integration, upload flows, retention |
 | [configuration.md](configuration.md) | Environment variables, secrets, health checks |
 | [observability.md](observability.md) | Logging standards, metrics, tracing |
+| **OpenAPI Specifications** | |
+| [openapi/aptivo-core-v1.yaml](openapi/aptivo-core-v1.yaml) | OpenAPI 3.1 — platform core + admin endpoints |
 | **HR Domain Modules** | |
 | [hr/index.md](hr/index.md) | HR domain index and overview |
 | [hr/candidate-management.md](hr/candidate-management.md) | CM module: entities, APIs, workflows |
-| [hr/workflow-automation.md](hr/workflow-automation.md) | WA module: triggers, actions, saga patterns |
+| [hr/workflow-automation.md](hr/workflow-automation.md) | WA module: triggers, actions, saga patterns, **state tables** |
 | **Crypto Domain Modules** | |
 | [crypto/index.md](crypto/index.md) | Crypto domain index and overview |
-| [crypto/database.md](crypto/database.md) | 8 trading tables, DuckDB analytics (Phase 2+) |
+| [crypto/database.md](crypto/database.md) | 5 trading tables, DuckDB analytics (Phase 2+) |
 | [crypto/api.md](crypto/api.md) | 21 REST endpoints, WebSocket events |
 | [crypto/mcp-servers.md](crypto/mcp-servers.md) | 13 MCP integrations (blockchain, market data) |
-| [crypto/workflow-engine.md](crypto/workflow-engine.md) | 6 LangGraph.js trading workflows |
+| [crypto/workflow-engine.md](crypto/workflow-engine.md) | Trading workflows, **state transition tables** |
+| **Architecture Design Documents** | |
+| [../03-architecture/crypto-domain-add.md](../03-architecture/crypto-domain-add.md) | Crypto domain architecture (v1.0.0) |
+| [../03-architecture/hr-domain-add.md](../03-architecture/hr-domain-add.md) | HR domain architecture (v1.0.0) |
 | **Future Domains** | |
 | [deferred-contracts.md](deferred-contracts.md) | Interface contracts for Financial, Ticketing, PM, CRM |
 
