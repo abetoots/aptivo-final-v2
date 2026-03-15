@@ -71,6 +71,20 @@ export type {
   HitlRequestEntry,
 } from './admin-store.js';
 
+// hitl persistence (P1.5-01)
+export {
+  createDrizzleHitlRequestStore,
+  createDrizzleHitlDecisionStore,
+} from './hitl-store-drizzle.js';
+export type {
+  HitlRequestStore,
+  HitlDecisionStore,
+  HitlRequestRecord as DrizzleHitlRequestRecord,
+  HitlDecisionRecord as DrizzleHitlDecisionRecord,
+  RequestSnapshot,
+  ExistingDecision,
+} from './hitl-store-drizzle.js';
+
 // llm usage aggregation (S7-INT-03)
 export { createDrizzleLlmUsageStore } from './llm-usage-store.js';
 export type {
@@ -80,3 +94,15 @@ export type {
   DailyTotal,
   BudgetStatus,
 } from './llm-usage-store.js';
+
+// llm budget + usage log stores (P1.5-02)
+export { createDrizzleBudgetStore } from './llm-budget-store-drizzle.js';
+export { createDrizzleUsageLogStore } from './llm-usage-log-store-drizzle.js';
+
+// mcp registry adapter (P1.5-04)
+export { createDrizzleMcpRegistryAdapter } from './mcp-registry-drizzle.js';
+export type {
+  McpRegistryAdapter,
+  McpServerRecord as DrizzleMcpServerRecord,
+  McpToolRecord as DrizzleMcpToolRecord,
+} from './mcp-registry-drizzle.js';

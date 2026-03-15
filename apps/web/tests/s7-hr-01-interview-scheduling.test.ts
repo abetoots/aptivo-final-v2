@@ -340,6 +340,95 @@ describe('S7-HR-01: Interview Scheduling Workflow', () => {
   });
 
   // -------------------------------------------------------------------------
+  // 3b. slot validation — P1.5-07
+  // -------------------------------------------------------------------------
+  describe('slot validation (P1.5-07)', () => {
+    it('rejects a slot not in the proposed set', async () => {
+      const engine = engineFor(interviewSchedulingFn, {
+        events: triggerEvent(),
+        steps: [
+          {
+            id: 'wait-for-slot-selection',
+            handler: () => ({
+              name: 'hr/interview.slot.selected',
+              data: {
+                interviewId: 'app-1',
+                selectedSlot: '2099-01-01T00:00:00Z', // arbitrary slot not in proposed set
+              },
+            }),
+          },
+        ],
+      });
+
+      const { result } = await engine.execute();
+
+      expect(result).toMatchObject({
+        status: 'error',
+        step: 'slot-validation',
+        error: 'Invalid slot selection',
+      });
+
+      // calendar event should NOT be created
+      const createCalls = vi.mocked(mockMcpWrapper.executeTool).mock.calls.filter(
+        ([, toolName]) => toolName === 'createEvent',
+      );
+      expect(createCalls).toHaveLength(0);
+    });
+
+    it('rejects an empty slot selection', async () => {
+      const engine = engineFor(interviewSchedulingFn, {
+        events: triggerEvent(),
+        steps: [
+          {
+            id: 'wait-for-slot-selection',
+            handler: () => ({
+              name: 'hr/interview.slot.selected',
+              data: {
+                interviewId: 'app-1',
+                selectedSlot: '',
+              },
+            }),
+          },
+        ],
+      });
+
+      const { result } = await engine.execute();
+
+      expect(result).toMatchObject({
+        status: 'error',
+        step: 'slot-validation',
+        error: 'Invalid slot selection',
+      });
+    });
+
+    it('accepts a valid slot from the proposed set', async () => {
+      const engine = engineFor(interviewSchedulingFn, {
+        events: triggerEvent(),
+        steps: [
+          {
+            id: 'wait-for-slot-selection',
+            handler: () => ({
+              name: 'hr/interview.slot.selected',
+              data: {
+                interviewId: 'app-1',
+                selectedSlot: '2026-03-15T14:00:00Z', // second slot from defaultSlots
+              },
+            }),
+          },
+        ],
+      });
+
+      const { result } = await engine.execute();
+
+      expect(result).toMatchObject({
+        status: 'confirmed',
+        interviewId: 'app-1',
+        dateTime: '2026-03-15T14:00:00Z',
+      });
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // 4. MCP failure on availability check → error at check-availability
   // -------------------------------------------------------------------------
   describe('MCP availability failure', () => {

@@ -7,9 +7,14 @@
  * Wraps @inngest/agent-kit MCPClient as an McpTransportAdapter.
  * Uses dynamic import so the adapter gracefully fails if
  * @inngest/agent-kit is not installed at runtime.
+ *
+ * RR-1 (P1.5-06): sanitizeEnvForMcp() called at construction time so that
+ * sensitive env vars (DATABASE_*, SECRET, etc.) are never leaked to MCP
+ * child processes or downstream consumers.
  */
 
 import { Result } from '@aptivo/types';
+import { sanitizeEnvForMcp } from '../security/env-sanitizer.js';
 import type {
   McpTransportAdapter,
   McpTransportError,
@@ -24,6 +29,7 @@ import type {
 export interface AgentKitAdapterConfig {
   serverUrl: string;
   timeout?: number; // ms, default 30_000
+  envAllowlist?: string[]; // extra env vars to pass through to MCP servers
 }
 
 // ---------------------------------------------------------------------------
@@ -32,20 +38,29 @@ export interface AgentKitAdapterConfig {
 
 export function createAgentKitTransportAdapter(
   config: AgentKitAdapterConfig,
-): McpTransportAdapter {
+): McpTransportAdapter & { readonly sanitizedEnv: Record<string, string> } {
   const { serverUrl, timeout = 30_000 } = config;
+
+  // rr-1: sanitize env upfront — blocks DATABASE_*, SECRET, PASSWORD, etc.
+  const sanitizedEnv = sanitizeEnvForMcp(
+    process.env as Record<string, string | undefined>,
+    config.envAllowlist ?? [],
+  );
 
   // mutable client state
   let client: any = null;
   let connected = false;
 
   return {
+    // rr-1: expose sanitized env for downstream consumers (e.g. stdio spawn)
+    sanitizedEnv,
+
     async connect(): Promise<Result<void, McpTransportError>> {
       try {
         // dynamic import to allow graceful failure if not installed
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const { MCPClient } = await import('@inngest/agent-kit') as any;
-        client = new MCPClient({ url: serverUrl, timeout });
+        client = new MCPClient({ url: serverUrl, timeout, env: sanitizedEnv });
         await client.connect();
         connected = true;
         return Result.ok(undefined);

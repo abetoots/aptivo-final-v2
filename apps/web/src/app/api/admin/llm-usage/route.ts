@@ -18,8 +18,8 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const range = url.searchParams.get('range') ?? '30d';
 
-  // parse range to ms
-  const days = parseInt(range, 10) || 30;
+  // parse range to ms — clamp to [1, 365] to prevent negative or unbounded queries
+  const days = Math.min(365, Math.max(1, parseInt(range, 10) || 30));
   const windowMs = days * 24 * 60 * 60 * 1000;
 
   const store = getLlmUsageStore();

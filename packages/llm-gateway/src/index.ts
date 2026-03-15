@@ -26,6 +26,8 @@ export type {
   Domain,
 } from './providers/index.js';
 export { isRetryableError, OpenAIProvider, AnthropicProvider } from './providers/index.js';
+export type { OpenAIClient } from './providers/index.js';
+export type { AnthropicClient } from './providers/index.js';
 
 // cost
 export { calculateCost, calculateTotalCost, getModelPricing, MODEL_PRICING, PRICING_VERSION } from './cost/index.js';

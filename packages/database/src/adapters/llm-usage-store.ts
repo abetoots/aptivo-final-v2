@@ -4,7 +4,7 @@
  * @warning S2-W12
  */
 
-import { sql, and, gt, eq } from 'drizzle-orm';
+import { sql, and, gte, eq } from 'drizzle-orm';
 import type { DrizzleClient } from './types.js';
 import { llmUsageLogs } from '../schema/llm-usage.js';
 
@@ -58,9 +58,9 @@ export function createDrizzleLlmUsageStore(db: DrizzleClient): LlmUsageStore {
           requestCount: sql<number>`count(*)::int`,
         })
         .from(llmUsageLogs)
-        .where(gt(llmUsageLogs.timestamp, cutoff))
+        .where(gte(llmUsageLogs.timestamp, cutoff))
         .groupBy(llmUsageLogs.domain);
-      return rows.map(r => ({
+      return rows.map((r: { domain: string; totalCost: string | null; requestCount: number | null }) => ({
         domain: r.domain,
         totalCost: r.totalCost ?? '0',
         requestCount: r.requestCount ?? 0,
@@ -77,9 +77,9 @@ export function createDrizzleLlmUsageStore(db: DrizzleClient): LlmUsageStore {
           requestCount: sql<number>`count(*)::int`,
         })
         .from(llmUsageLogs)
-        .where(gt(llmUsageLogs.timestamp, cutoff))
+        .where(gte(llmUsageLogs.timestamp, cutoff))
         .groupBy(llmUsageLogs.provider, llmUsageLogs.model);
-      return rows.map(r => ({
+      return rows.map((r: { provider: string; model: string; totalCost: string | null; requestCount: number | null }) => ({
         provider: r.provider,
         model: r.model,
         totalCost: r.totalCost ?? '0',
@@ -96,10 +96,10 @@ export function createDrizzleLlmUsageStore(db: DrizzleClient): LlmUsageStore {
           requestCount: sql<number>`count(*)::int`,
         })
         .from(llmUsageLogs)
-        .where(gt(llmUsageLogs.timestamp, cutoff))
+        .where(gte(llmUsageLogs.timestamp, cutoff))
         .groupBy(sql`date(${llmUsageLogs.timestamp})`)
         .orderBy(sql`date(${llmUsageLogs.timestamp})`);
-      return rows.map(r => ({
+      return rows.map((r: { date: string | null; totalCost: string | null; requestCount: number | null }) => ({
         date: r.date ?? '',
         totalCost: r.totalCost ?? '0',
         requestCount: r.requestCount ?? 0,
@@ -114,7 +114,7 @@ export function createDrizzleLlmUsageStore(db: DrizzleClient): LlmUsageStore {
           total: sql<string>`coalesce(sum(${llmUsageLogs.costUsd}), 0)::text`,
         })
         .from(llmUsageLogs)
-        .where(gt(llmUsageLogs.timestamp, startOfDay));
+        .where(gte(llmUsageLogs.timestamp, startOfDay));
       return rows[0]?.total ?? '0';
     },
 
@@ -127,7 +127,7 @@ export function createDrizzleLlmUsageStore(db: DrizzleClient): LlmUsageStore {
           total: sql<string>`coalesce(sum(${llmUsageLogs.costUsd}), 0)::text`,
         })
         .from(llmUsageLogs)
-        .where(gt(llmUsageLogs.timestamp, startOfMonth));
+        .where(gte(llmUsageLogs.timestamp, startOfMonth));
       return rows[0]?.total ?? '0';
     },
 
@@ -141,7 +141,7 @@ export function createDrizzleLlmUsageStore(db: DrizzleClient): LlmUsageStore {
         .from(llmUsageLogs)
         .where(and(
           eq(llmUsageLogs.domain, domain),
-          gt(llmUsageLogs.timestamp, startOfDay),
+          gte(llmUsageLogs.timestamp, startOfDay),
         ));
       return rows[0]?.total ?? '0';
     },
@@ -155,10 +155,10 @@ export function createDrizzleLlmUsageStore(db: DrizzleClient): LlmUsageStore {
           total: sql<string>`sum(${llmUsageLogs.costUsd})::text`,
         })
         .from(llmUsageLogs)
-        .where(gt(llmUsageLogs.timestamp, startOfDay))
+        .where(gte(llmUsageLogs.timestamp, startOfDay))
         .groupBy(llmUsageLogs.domain)
         .having(sql`sum(${llmUsageLogs.costUsd}) > ${thresholdUsd}`);
-      return rows.map(r => r.domain);
+      return rows.map((r: { domain: string; total: string | null }) => r.domain);
     },
   };
 }

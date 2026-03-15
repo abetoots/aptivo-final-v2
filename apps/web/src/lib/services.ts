@@ -27,6 +27,11 @@ import {
   createMetricQueries,
   createDrizzleAdminStore,
   createDrizzleLlmUsageStore,
+  createDrizzleHitlRequestStore,
+  createDrizzleHitlDecisionStore,
+  createDrizzleBudgetStore,
+  createDrizzleUsageLogStore,
+  createDrizzleMcpRegistryAdapter,
 } from '@aptivo/database/adapters';
 
 // observability
@@ -48,6 +53,8 @@ import {
   NovuNotificationAdapter,
   createTemplateRegistry,
 } from '@aptivo/notifications';
+import { createNovuSdkClient, createNovuStubClient } from './novu-client.js';
+import type { NovuSdkInstance } from './novu-client.js';
 
 // file-storage
 import { InMemoryStorageAdapter, createS3StorageAdapter } from '@aptivo/file-storage';
@@ -65,15 +72,18 @@ import {
 import { createDataDeletionHandler } from '@aptivo/mcp-layer/workflows';
 
 // hitl-gateway
-import type { RequestServiceDeps } from '@aptivo/hitl-gateway';
-import { createRequest } from '@aptivo/hitl-gateway';
+import type { RequestServiceDeps, DecisionServiceDeps } from '@aptivo/hitl-gateway';
+import { createRequest, recordDecision } from '@aptivo/hitl-gateway';
 
 // llm-gateway
 import {
   createLlmGateway,
   BudgetService,
   UsageLogger,
+  OpenAIProvider,
+  AnthropicProvider,
 } from '@aptivo/llm-gateway';
+import type { LLMProvider } from '@aptivo/llm-gateway';
 
 // ---------------------------------------------------------------------------
 // lazy initialization helper
@@ -84,6 +94,15 @@ function lazy<T>(factory: () => T): () => T {
   return () => {
     if (!instance) instance = factory();
     return instance;
+  };
+}
+
+// async variant — caches the resolved promise so the factory runs only once
+function lazyAsync<T>(factory: () => Promise<T>): () => Promise<T> {
+  let promise: Promise<T> | undefined;
+  return () => {
+    if (!promise) promise = factory();
+    return promise;
   };
 }
 
@@ -134,12 +153,25 @@ export const getTemplateRegistry = lazy(() =>
   createTemplateRegistry(getTemplateStore()),
 );
 
-// novu adapter — uses injectable NovuClient; stub until novu sdk is wired
+// novu client — env-gated: real SDK when NOVU_API_KEY is set, stub fallback
+const getNovuClient = lazy(() => {
+  const apiKey = process.env.NOVU_API_KEY;
+  if (apiKey) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { Novu } = require('@novu/node') as { Novu: new (opts: { secretKey: string }) => NovuSdkInstance };
+      return createNovuSdkClient(new Novu({ secretKey: apiKey }));
+    } catch {
+      // @novu/node not installed — fall through to stub
+      console.warn('@novu/node sdk not installed, using stub novu client');
+    }
+  }
+  return createNovuStubClient();
+});
+
 const getNovuAdapter = lazy(() =>
   new NovuNotificationAdapter(
-    {
-      trigger: async (_workflowId, _payload) => ({ acknowledged: true }),
-    },
+    getNovuClient(),
     { workflowId: process.env.NOVU_WORKFLOW_ID ?? 'generic-notification' },
   ),
 );
@@ -158,10 +190,7 @@ export const getNotificationService = lazy(() =>
 // ---------------------------------------------------------------------------
 
 export const getHitlRequestDeps = lazy((): RequestServiceDeps => ({
-  store: {
-    // stub store — persists nothing until hitl db adapter is wired
-    insert: async (record) => ({ id: record.id }),
-  },
+  store: createDrizzleHitlRequestStore(db() as unknown as Parameters<typeof createDrizzleHitlRequestStore>[0]),
   config: {
     baseUrl: process.env.HITL_BASE_URL ?? 'http://localhost:3000',
     signingSecret: process.env.HITL_SIGNING_SECRET ?? 'dev-hitl-secret-key-minimum-32-chars!!',
@@ -170,6 +199,10 @@ export const getHitlRequestDeps = lazy((): RequestServiceDeps => ({
   },
 }));
 
+export const getHitlDecisionStore = lazy(() =>
+  createDrizzleHitlDecisionStore(db() as unknown as Parameters<typeof createDrizzleHitlDecisionStore>[0]),
+);
+
 // encapsulated hitl service — hides deps from workflow consumers (CF-3)
 export const getHitlService = lazy(() => ({
   createRequest: (input: Parameters<typeof createRequest>[0]) =>
@@ -177,39 +210,52 @@ export const getHitlService = lazy(() => ({
 }));
 
 // ---------------------------------------------------------------------------
-// mcp wrapper
+// mcp wrapper (P1.5-04: real db-backed registry + allowlist)
 // ---------------------------------------------------------------------------
 
 // env-gated transport: agentkit when MCP_SERVER_URL is set, in-memory fallback
-const getMcpTransport = lazy(() => {
+// accepts optional envAllowlist for RR-1 sanitization (P1.5-06)
+function buildMcpTransport(envAllowlist?: string[]) {
   const serverUrl = process.env.MCP_SERVER_URL;
   if (serverUrl) {
     return createAgentKitTransportAdapter({
       serverUrl,
       timeout: Number(process.env.MCP_TIMEOUT_MS) || 30_000,
+      envAllowlist,
     });
   }
   return new InMemoryTransportAdapter('default');
-});
+}
 
-export const getMcpWrapper = lazy(() =>
-  createMcpWrapper({
-    registry: {
-      // placeholder in-memory registry; replaced by db adapter when ready
-      getServer: async () => null,
-      getTool: async () => null,
-    },
-    transport: getMcpTransport(),
+// drizzle-backed mcp registry — provides ToolRegistry + getAllowlist
+export const getMcpRegistry = lazy(() =>
+  createDrizzleMcpRegistryAdapter(
+    db() as unknown as Parameters<typeof createDrizzleMcpRegistryAdapter>[0],
+  ),
+);
+
+// async because the allowlist must be loaded from the db on first access
+export const getMcpWrapper = lazyAsync(async () => {
+  const registry = getMcpRegistry();
+  const allowlist = await registry.getAllowlist();
+
+  // collect unique envAllowlist entries from all registered servers
+  const allEnvVars = allowlist.flatMap((s) => s.allowedEnv ?? []);
+  const uniqueEnvAllowlist = [...new Set(allEnvVars)];
+
+  return createMcpWrapper({
+    registry,
+    transport: buildMcpTransport(uniqueEnvAllowlist),
     rateLimiter: new McpRateLimiter(new InMemoryRateLimitStore(), {
       maxTokens: 100,
       refillRate: 10,
     }),
     circuitBreakers: new CircuitBreakerRegistry(),
     cache: new InMemoryCacheStore(),
-    allowlist: [],
+    allowlist,
     signingKey: process.env.MCP_SIGNING_KEY ?? 'dev-signing-key',
-  }),
-);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // file storage adapter
@@ -245,23 +291,76 @@ export const getDataDeletionHandler = lazy(() =>
 );
 
 // ---------------------------------------------------------------------------
-// llm gateway
+// llm gateway (P1.5-02: real budget/usage stores + env-gated providers)
 // ---------------------------------------------------------------------------
 
-export const getLlmGateway = lazy(() =>
-  createLlmGateway({
-    providers: new Map(),
-    budgetService: new BudgetService({
-      getConfig: async () => null,
-      getDailySpend: async () => 0,
-      getMonthlySpend: async () => 0,
-    }),
-    usageLogger: new UsageLogger({
-      insert: async () => {},
-    }),
-    modelToProvider: {},
-  }),
-);
+/** builds the provider map based on available api keys */
+function buildLlmProviders(): {
+  providers: Map<string, LLMProvider>;
+  modelToProvider: Record<string, string>;
+} {
+  const providers = new Map<string, LLMProvider>();
+  const modelToProvider: Record<string, string> = {};
+
+  // openai — env-gated: only added when OPENAI_API_KEY is present
+  // wrapped in try/catch for graceful degradation when sdk is not installed
+  const openaiKey = process.env.OPENAI_API_KEY;
+  if (openaiKey) {
+    try {
+      // the real openai sdk already matches the OpenAIClient interface shape
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { default: OpenAI } = require('openai') as { default: new (opts: { apiKey: string }) => import('@aptivo/llm-gateway').OpenAIClient };
+      const client = new OpenAI({ apiKey: openaiKey });
+      providers.set('openai', new OpenAIProvider(client));
+      modelToProvider['gpt-4o'] = 'openai';
+      modelToProvider['gpt-4o-mini'] = 'openai';
+      modelToProvider['gpt-4-turbo'] = 'openai';
+      modelToProvider['gpt-3.5-turbo'] = 'openai';
+    } catch {
+      // openai sdk not installed — skip provider
+      console.warn('openai sdk not installed, skipping openai provider');
+    }
+  }
+
+  // anthropic — env-gated: only added when ANTHROPIC_API_KEY is present
+  // wrapped in try/catch for graceful degradation when sdk is not installed
+  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  if (anthropicKey) {
+    try {
+      // the real anthropic sdk already matches the AnthropicClient interface shape
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { default: Anthropic } = require('@anthropic-ai/sdk') as { default: new (opts: { apiKey: string }) => import('@aptivo/llm-gateway').AnthropicClient };
+      const client = new Anthropic({ apiKey: anthropicKey });
+      providers.set('anthropic', new AnthropicProvider(client));
+      modelToProvider['claude-3-opus'] = 'anthropic';
+      modelToProvider['claude-3-5-sonnet'] = 'anthropic';
+      modelToProvider['claude-3-5-haiku'] = 'anthropic';
+    } catch {
+      // anthropic sdk not installed — skip provider
+      console.warn('anthropic sdk not installed, skipping anthropic provider');
+    }
+  }
+
+  return { providers, modelToProvider };
+}
+
+export const getLlmGateway = lazy(() => {
+  const budgetStore = createDrizzleBudgetStore(
+    db() as unknown as Parameters<typeof createDrizzleBudgetStore>[0],
+  );
+  const usageLogStore = createDrizzleUsageLogStore(
+    db() as unknown as Parameters<typeof createDrizzleUsageLogStore>[0],
+  );
+
+  const { providers, modelToProvider } = buildLlmProviders();
+
+  return createLlmGateway({
+    providers,
+    budgetService: new BudgetService(budgetStore),
+    usageLogger: new UsageLogger(usageLogStore),
+    modelToProvider,
+  });
+});
 
 // ---------------------------------------------------------------------------
 // crypto domain stores (S6-INF-CRY)

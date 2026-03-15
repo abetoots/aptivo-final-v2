@@ -6,7 +6,7 @@
  * all queries use time-range filters indexed on timestamp columns.
  */
 
-import { sql, eq, and, gt, like } from 'drizzle-orm';
+import { sql, eq, and, gte, like } from 'drizzle-orm';
 import type { DrizzleClient } from './types.js';
 import { auditWriteDlq } from '../schema/audit-logs.js';
 import { auditLogs } from '../schema/audit-logs.js';
@@ -44,7 +44,7 @@ export function createMetricQueries(db: DrizzleClient): MetricQueryDeps {
         .where(
           and(
             like(auditLogs.action, pattern),
-            gt(auditLogs.timestamp, cutoff),
+            gte(auditLogs.timestamp, cutoff),
           ),
         );
       return rows[0]?.count ?? 0;
@@ -58,7 +58,7 @@ export function createMetricQueries(db: DrizzleClient): MetricQueryDeps {
         .where(
           and(
             eq(hitlRequests.status, status as 'pending' | 'approved' | 'rejected' | 'expired' | 'canceled'),
-            gt(hitlRequests.createdAt, cutoff),
+            gte(hitlRequests.createdAt, cutoff),
           ),
         );
       return rows[0]?.count ?? 0;
@@ -82,7 +82,7 @@ export function createMetricQueries(db: DrizzleClient): MetricQueryDeps {
         .where(
           and(
             sql`${hitlRequests.resolvedAt} is not null`,
-            gt(hitlRequests.createdAt, cutoff),
+            gte(hitlRequests.createdAt, cutoff),
           ),
         );
       return rows[0]?.p95 ?? 0;
@@ -96,7 +96,7 @@ export function createMetricQueries(db: DrizzleClient): MetricQueryDeps {
         .where(
           and(
             eq(notificationDeliveries.status, status as 'pending' | 'delivered' | 'failed' | 'retrying' | 'opted_out'),
-            gt(notificationDeliveries.createdAt, cutoff),
+            gte(notificationDeliveries.createdAt, cutoff),
           ),
         );
       return rows[0]?.count ?? 0;
@@ -107,7 +107,7 @@ export function createMetricQueries(db: DrizzleClient): MetricQueryDeps {
       const rows = await db
         .select({ count: sql<number>`count(*)::int` })
         .from(notificationDeliveries)
-        .where(gt(notificationDeliveries.createdAt, cutoff));
+        .where(gte(notificationDeliveries.createdAt, cutoff));
       return rows[0]?.count ?? 0;
     },
   };

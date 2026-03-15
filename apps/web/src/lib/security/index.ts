@@ -6,6 +6,9 @@
 export { validateWebhookUrl, isPrivateIp } from './ssrf-validator.js';
 export type { SsrfError } from './ssrf-validator.js';
 
+export { safeFetch } from './safe-fetch.js';
+export type { SafeFetchError } from './safe-fetch.js';
+
 export {
   WEBHOOK_MAX_BODY_BYTES,
   API_MAX_BODY_BYTES,

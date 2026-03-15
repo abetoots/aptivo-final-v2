@@ -136,6 +136,11 @@ export const interviewSchedulingFn = inngest.createFunction(
 
     const selectedSlot = (selection.data as { selectedSlot: string }).selectedSlot;
 
+    // validate selected slot is in the proposed set — prevents arbitrary datetime injection
+    if (!selectedSlot || !proposedSlots.includes(selectedSlot)) {
+      return { status: 'error', step: 'slot-validation', error: 'Invalid slot selection' };
+    }
+
     // step 4: create-event — create calendar event via MCP
     const calendarResult = await step.run('create-calendar-event', async () => {
       try {

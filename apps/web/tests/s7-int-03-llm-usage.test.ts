@@ -118,6 +118,31 @@ describe('S7-INT-03: GET /api/admin/llm-usage', () => {
     expect(body.range).toBe('30d');
   });
 
+  // P1.5-08: range clamping edge cases
+  it('clamps negative range to 1 day', async () => {
+    await getUsage(makeRequest('/api/admin/llm-usage?range=-5d'));
+
+    const expectedMs = 1 * 24 * 60 * 60 * 1000;
+    expect(mockLlmUsageStore.getCostByDomain).toHaveBeenCalledWith(expectedMs);
+    expect(mockLlmUsageStore.getDailyTotals).toHaveBeenCalledWith(1);
+  });
+
+  it('clamps zero range to default 30 days', async () => {
+    await getUsage(makeRequest('/api/admin/llm-usage?range=0d'));
+
+    const expectedMs = 30 * 24 * 60 * 60 * 1000;
+    expect(mockLlmUsageStore.getCostByDomain).toHaveBeenCalledWith(expectedMs);
+    expect(mockLlmUsageStore.getDailyTotals).toHaveBeenCalledWith(30);
+  });
+
+  it('clamps range exceeding 365 to 365 days', async () => {
+    await getUsage(makeRequest('/api/admin/llm-usage?range=999d'));
+
+    const expectedMs = 365 * 24 * 60 * 60 * 1000;
+    expect(mockLlmUsageStore.getCostByDomain).toHaveBeenCalledWith(expectedMs);
+    expect(mockLlmUsageStore.getDailyTotals).toHaveBeenCalledWith(365);
+  });
+
   it('passes custom range to store methods', async () => {
     const res = await getUsage(makeRequest('/api/admin/llm-usage?range=7d'));
     expect(res.status).toBe(200);

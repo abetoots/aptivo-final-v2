@@ -1,45 +1,133 @@
 /**
- * S7-INT-02: RBAC permission check middleware for admin routes
- * @task S7-INT-02
+ * P1.5-05: DB-backed RBAC permission check middleware
+ * @task P1.5-05
  *
  * returns a middleware function that checks if the request has the required
- * permission. returns 403 ProblemDetails response on failure, null on success.
+ * permission. returns 401/403 ProblemDetails response on failure, null on success.
  *
- * in production: extract user from session cookie → look up role permissions
- * in dev mode: check x-user-role header (placeholder)
+ * in production: extract user from supabase JWT -> look up role permissions from DB
+ * in dev mode: check x-user-role header -> look up role permissions from DB,
+ *   falling back to stub behavior (accept any non-empty/non-anonymous role)
+ *   when the DB is unavailable.
  */
+
+import { extractUser, resolvePermissions, resolvePermissionsForRole } from './rbac-resolver.js';
 
 // -- types --
 
 export interface RbacCheckResult {
-  /** null = permitted, Response = forbidden */
+  /** null = permitted, Response = forbidden/unauthorized */
   (request: Request): Promise<Response | null>;
+}
+
+// -- per-request permission cache --
+// weakmap keyed on Request ensures cache is GC'd when request is done
+const permissionCache = new WeakMap<Request, Set<string>>();
+
+// -- helpers --
+
+function unauthorizedResponse(permission: string): Response {
+  return new Response(
+    JSON.stringify({
+      type: 'https://aptivo.dev/errors/unauthorized',
+      title: 'Unauthorized',
+      status: 401,
+      detail: `Authentication required for permission: ${permission}`,
+    }),
+    {
+      status: 401,
+      headers: { 'content-type': 'application/json' },
+    },
+  );
+}
+
+function forbiddenResponse(permission: string): Response {
+  return new Response(
+    JSON.stringify({
+      type: 'https://aptivo.dev/errors/forbidden',
+      title: 'Forbidden',
+      status: 403,
+      detail: `Missing permission: ${permission}`,
+    }),
+    {
+      status: 403,
+      headers: { 'content-type': 'application/json' },
+    },
+  );
+}
+
+// -- lazy db import --
+
+async function tryGetDb() {
+  try {
+    const { getDb } = await import('../db.js');
+    return getDb();
+  } catch {
+    return null;
+  }
 }
 
 // -- factory --
 
 export function checkPermission(permission: string): RbacCheckResult {
   return async (request: Request): Promise<Response | null> => {
-    // placeholder: in production, extract user from session and check
-    // role permissions against the database. for now, use x-user-role header.
+    const isProduction = process.env.NODE_ENV === 'production';
+
+    if (isProduction) {
+      // production: extract user from supabase JWT
+      const user = await extractUser(request);
+      if (!user) return unauthorizedResponse(permission);
+
+      // check cache first
+      let perms = permissionCache.get(request);
+      if (!perms) {
+        const db = await tryGetDb();
+        if (!db) return forbiddenResponse(permission);
+        perms = await resolvePermissions(user.userId, db);
+        permissionCache.set(request, perms);
+      }
+
+      return perms.has(permission) ? null : forbiddenResponse(permission);
+    }
+
+    // dev/test mode: use x-user-role header for backward compatibility
     const role = request.headers.get('x-user-role');
 
     if (!role || role === 'anonymous') {
-      return new Response(
-        JSON.stringify({
-          type: 'https://aptivo.dev/errors/forbidden',
-          title: 'Forbidden',
-          status: 403,
-          detail: `Missing permission: ${permission}`,
-        }),
-        {
-          status: 403,
-          headers: { 'content-type': 'application/json' },
-        },
-      );
+      return forbiddenResponse(permission);
     }
 
-    // permission granted
+    // check cache first
+    let perms = permissionCache.get(request);
+    if (perms) {
+      return perms.has(permission) ? null : forbiddenResponse(permission);
+    }
+
+    // try DB-backed role->permission lookup
+    const db = await tryGetDb();
+    if (db) {
+      try {
+        // check if we have a user id for user-based lookup
+        const userId = request.headers.get('x-user-id');
+        if (userId) {
+          perms = await resolvePermissions(userId, db);
+        } else {
+          // fallback: resolve permissions by role name
+          perms = await resolvePermissionsForRole(role, db);
+        }
+        permissionCache.set(request, perms);
+
+        // if the role has any permissions in the DB, enforce them
+        if (perms.size > 0) {
+          return perms.has(permission) ? null : forbiddenResponse(permission);
+        }
+      } catch {
+        // db query failed — fall through to stub behavior
+      }
+    }
+
+    // stub fallback: accept any non-empty, non-anonymous role
+    // preserves backward compatibility with existing tests
     return null;
   };
 }
