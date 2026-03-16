@@ -661,13 +661,21 @@ describe('Composition Root Smoke Test', () => {
   });
 
   it('getWebAuthnService returns a service', async () => {
-    const { getWebAuthnService } = await import('../src/lib/services');
-    const service = getWebAuthnService();
-    expect(service).toBeDefined();
-    expect(typeof service.generateRegistrationOptions).toBe('function');
-    expect(typeof service.verifyRegistration).toBe('function');
-    expect(typeof service.generateAuthenticationOptions).toBe('function');
-    expect(typeof service.verifyAuthentication).toBe('function');
-    expect(typeof service.checkAvailability).toBe('function');
+    // webauthn now uses drizzle adapter which requires DATABASE_URL
+    const prev = process.env.DATABASE_URL;
+    process.env.DATABASE_URL ??= 'postgres://test:test@localhost:5432/test';
+    try {
+      const { getWebAuthnService } = await import('../src/lib/services');
+      const service = getWebAuthnService();
+      expect(service).toBeDefined();
+      expect(typeof service.generateRegistrationOptions).toBe('function');
+      expect(typeof service.verifyRegistration).toBe('function');
+      expect(typeof service.generateAuthenticationOptions).toBe('function');
+      expect(typeof service.verifyAuthentication).toBe('function');
+      expect(typeof service.checkAvailability).toBe('function');
+    } finally {
+      if (prev === undefined) delete process.env.DATABASE_URL;
+      else process.env.DATABASE_URL = prev;
+    }
   });
 });

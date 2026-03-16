@@ -1,13 +1,29 @@
 /**
- * ID2-03: MFA enrollment route
+ * ID2-03 / INF-04: MFA enrollment route
  * @task ID2-03
+ * @task INF-04
  *
  * initiates totp enrollment for the current user.
- * in production, would use supabase mfa api.
+ * uses composition root mfa client with fallback for test mode.
  */
 
-import { createMfaStubClient } from '@/lib/auth/mfa-enforcement.js';
 import { extractUser } from '@/lib/security/rbac-resolver.js';
+import type { SupabaseMfaClient } from '@/lib/auth/mfa-enforcement.js';
+
+// resolve mfa client from composition root, fallback for test mode
+async function getMfaClientFromRoot(): Promise<SupabaseMfaClient> {
+  try {
+    const { getMfaClient } = await import('@/lib/services.js');
+    return getMfaClient();
+  } catch (err) {
+    // fallback if composition root not available (test mode)
+    if (process.env.NODE_ENV === 'production') {
+      console.error('mfa: composition root import failed, falling back to stub — this should not happen in production', err);
+    }
+    const { createMfaStubClient } = await import('@/lib/auth/mfa-enforcement.js');
+    return createMfaStubClient();
+  }
+}
 
 export async function GET(request: Request) {
   // verify the user is authenticated before allowing mfa enrollment
@@ -24,8 +40,8 @@ export async function GET(request: Request) {
     );
   }
 
-  // in production, would use supabase mfa api
-  const client = createMfaStubClient();
+  // resolve mfa client from composition root
+  const client = await getMfaClientFromRoot();
   const result = await client.enroll({ factorType: 'totp', friendlyName: 'Authenticator App' });
 
   if (!result.ok) {

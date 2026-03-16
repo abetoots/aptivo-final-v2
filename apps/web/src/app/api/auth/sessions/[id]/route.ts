@@ -1,18 +1,19 @@
 /**
- * ID2-05: session termination endpoint
- * @task ID2-05
+ * INF-07: session termination endpoint (wired to real service)
+ * @task INF-07
  *
  * DELETE /api/auth/sessions/:id — terminate a specific session.
- * in dev mode, the user id is extracted from x-user-id header.
+ * uses extractUser for authentication and getSessionLimitService for termination.
  */
+
+import { extractUser } from '@/lib/security/rbac-resolver.js';
 
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  // dev mode: use x-user-id header
-  const userId = request.headers.get('x-user-id');
-  if (!userId) {
+  const user = await extractUser(request);
+  if (!user) {
     return new Response(
       JSON.stringify({
         type: 'https://aptivo.dev/errors/unauthorized',
@@ -26,9 +27,49 @@ export async function DELETE(
 
   const { id: sessionId } = await params;
 
-  // would use getSessionLimitService().removeSession() in production
+  // try to terminate via session service
+  try {
+    const { getSessionLimitService } = await import('@/lib/services.js');
+    const service = getSessionLimitService();
+    if (service) {
+      const result = await service.removeSession(user.userId, sessionId);
+      if (!result.ok) {
+        return new Response(
+          JSON.stringify({
+            type: 'https://aptivo.dev/errors/session-removal-failed',
+            title: 'Session Removal Failed',
+            status: 500,
+            detail: result.error.cause,
+          }),
+          { status: 500, headers: { 'content-type': 'application/json' } },
+        );
+      }
+    } else {
+      // no session service available
+      return new Response(
+        JSON.stringify({
+          type: 'https://aptivo.dev/errors/service-unavailable',
+          title: 'Service Unavailable',
+          status: 503,
+          detail: 'Session management service not configured',
+        }),
+        { status: 503, headers: { 'content-type': 'application/json' } },
+      );
+    }
+  } catch {
+    return new Response(
+      JSON.stringify({
+        type: 'https://aptivo.dev/errors/service-unavailable',
+        title: 'Service Unavailable',
+        status: 503,
+        detail: 'Session management service not available',
+      }),
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    );
+  }
+
   return new Response(
-    JSON.stringify({ terminated: sessionId, userId }),
+    JSON.stringify({ terminated: sessionId, userId: user.userId }),
     { status: 200, headers: { 'content-type': 'application/json' } },
   );
 }

@@ -5,14 +5,14 @@
  */
 
 import { NextResponse } from 'next/server';
-import { checkPermission } from '../../../../lib/security/rbac-middleware';
+import { checkPermissionWithBlacklist } from '../../../../lib/security/rbac-middleware';
 import { getLlmUsageStore } from '../../../../lib/services';
 
 const ALERT_THRESHOLD_USD = 5; // per-domain daily threshold (S2-W12)
 
 export async function GET(request: Request) {
   // rbac check
-  const forbidden = await checkPermission('platform/admin.view')(request);
+  const forbidden = await checkPermissionWithBlacklist('platform/admin.view')(request);
   if (forbidden) return forbidden;
 
   const url = new URL(request.url);

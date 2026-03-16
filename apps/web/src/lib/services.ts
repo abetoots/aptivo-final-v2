@@ -7,7 +7,7 @@
  * on first call.
  */
 
-import { getDb } from './db.js';
+import { getDb, getDbForDomain } from './db.js';
 
 // drizzle adapters
 import {
@@ -32,6 +32,7 @@ import {
   createDrizzleBudgetStore,
   createDrizzleUsageLogStore,
   createDrizzleMcpRegistryAdapter,
+  createDrizzleWebAuthnStore,
 } from '@aptivo/database/adapters';
 
 // token blacklist
@@ -42,7 +43,13 @@ import type { RedisClient } from './auth/token-blacklist.js';
 import { createSessionLimitService } from './auth/session-limit-service.js';
 
 // webauthn (ID2-04)
-import { createWebAuthnService, createInMemoryWebAuthnStore } from './auth/webauthn-service.js';
+import { createWebAuthnService } from './auth/webauthn-service.js';
+
+// secrets provider (INF-04)
+import { createEnvSecretsProvider } from './auth/secrets-provider.js';
+
+// mfa client (INF-04)
+import { createMfaStubClient } from './auth/mfa-enforcement.js';
 
 // observability
 import { createMetricService } from './observability/metric-service.js';
@@ -124,6 +131,13 @@ function lazyAsync<T>(factory: () => Promise<T>): () => Promise<T> {
 // ---------------------------------------------------------------------------
 
 const db = lazy(() => getDb());
+
+// ---------------------------------------------------------------------------
+// domain-scoped database pools (INF-02)
+// ---------------------------------------------------------------------------
+
+export const getCryptoDb = lazy(() => getDbForDomain('crypto'));
+export const getHrDb = lazy(() => getDbForDomain('hr'));
 
 // ---------------------------------------------------------------------------
 // audit service + stores
@@ -450,46 +464,46 @@ export const getLlmUsageStore = lazy(() =>
 );
 
 // ---------------------------------------------------------------------------
-// token blacklist (ID2-06)
+// redis clients (INF-03: split session redis from shared redis)
+// ---------------------------------------------------------------------------
+
+// prefer session-specific redis, fall back to shared
+function buildSessionRedis(): RedisClient | null {
+  const url = process.env.UPSTASH_REDIS_SESSION_URL ?? process.env.UPSTASH_REDIS_URL;
+  const token = process.env.UPSTASH_REDIS_SESSION_TOKEN ?? process.env.UPSTASH_REDIS_TOKEN;
+  if (!url) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Redis } = require('@upstash/redis') as { Redis: new (opts: { url: string; token: string }) => RedisClient };
+    return new Redis({ url, token: token ?? '' });
+  } catch {
+    console.warn('@upstash/redis not installed');
+    return null;
+  }
+}
+
+const getSessionRedis = lazy(() => buildSessionRedis());
+
+// ---------------------------------------------------------------------------
+// token blacklist (ID2-06) — uses session redis (INF-03)
 // ---------------------------------------------------------------------------
 
 export const getTokenBlacklist = lazy(() => {
-  // env-gated: real redis when UPSTASH_REDIS_URL is set, null fallback
-  const redisUrl = process.env.UPSTASH_REDIS_URL;
-  if (redisUrl) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { Redis } = require('@upstash/redis') as { Redis: new (opts: { url: string; token: string }) => RedisClient };
-      const redis = new Redis({
-        url: redisUrl,
-        token: process.env.UPSTASH_REDIS_TOKEN ?? '',
-      });
-      return createTokenBlacklistService({ redis });
-    } catch {
-      console.warn('@upstash/redis not installed, token blacklist disabled');
-    }
+  const redis = getSessionRedis();
+  if (redis) {
+    return createTokenBlacklistService({ redis });
   }
   return null;
 });
 
 // ---------------------------------------------------------------------------
-// session limit service (ID2-05)
+// session limit service (ID2-05) — uses session redis (INF-03)
 // ---------------------------------------------------------------------------
 
 export const getSessionLimitService = lazy(() => {
-  const redisUrl = process.env.UPSTASH_REDIS_URL;
-  if (redisUrl) {
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { Redis } = require('@upstash/redis') as { Redis: new (opts: { url: string; token: string }) => RedisClient };
-      const redis = new Redis({
-        url: redisUrl,
-        token: process.env.UPSTASH_REDIS_TOKEN ?? '',
-      });
-      return createSessionLimitService({ redis });
-    } catch {
-      console.warn('@upstash/redis not installed, session limits disabled');
-    }
+  const redis = getSessionRedis();
+  if (redis) {
+    return createSessionLimitService({ redis });
   }
   return null;
 });
@@ -500,12 +514,32 @@ export const getSessionLimitService = lazy(() => {
 
 export const getWebAuthnService = lazy(() =>
   createWebAuthnService({
-    credentialStore: createInMemoryWebAuthnStore(),
+    credentialStore: createDrizzleWebAuthnStore(db() as unknown as Parameters<typeof createDrizzleWebAuthnStore>[0]),
     rpId: process.env.WEBAUTHN_RP_ID ?? 'localhost',
     rpName: process.env.WEBAUTHN_RP_NAME ?? 'Aptivo',
     origin: process.env.WEBAUTHN_ORIGIN ?? 'http://localhost:3000',
   }),
 );
+
+// ---------------------------------------------------------------------------
+// secrets provider (INF-04)
+// ---------------------------------------------------------------------------
+
+export const getSecretsProvider = lazy(() => createEnvSecretsProvider());
+
+// ---------------------------------------------------------------------------
+// mfa client (INF-04)
+// ---------------------------------------------------------------------------
+
+export const getMfaClient = lazy(() => {
+  // env-gated: real supabase mfa when configured, stub fallback
+  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+    // in production, would wire real supabase mfa client here
+    // for now, return stub (supabase mfa sdk integration is a deployment step)
+    console.warn('supabase mfa: using stub client (wire real sdk in deployment)');
+  }
+  return createMfaStubClient();
+});
 
 // ---------------------------------------------------------------------------
 // oidc provider (ID2-01)

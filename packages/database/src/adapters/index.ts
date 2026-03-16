@@ -106,3 +106,10 @@ export type {
   McpServerRecord as DrizzleMcpServerRecord,
   McpToolRecord as DrizzleMcpToolRecord,
 } from './mcp-registry-drizzle.js';
+
+// webauthn credential store (INF-01)
+export { createDrizzleWebAuthnStore } from './webauthn-store.js';
+export type {
+  WebAuthnCredentialStore as DrizzleWebAuthnCredentialStore,
+  WebAuthnCredential as DrizzleWebAuthnCredential,
+} from './webauthn-store.js';

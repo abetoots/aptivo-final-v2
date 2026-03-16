@@ -4,14 +4,14 @@
  */
 
 import { NextResponse } from 'next/server';
-import { checkPermission } from '../../../../lib/security/rbac-middleware';
+import { checkPermissionWithBlacklist } from '../../../../lib/security/rbac-middleware';
 import { getAdminStore, getMetricService } from '../../../../lib/services';
 
 const ACTIVE_WORKFLOW_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 
 export async function GET(request: Request) {
   // rbac check
-  const forbidden = await checkPermission('platform/admin.view')(request);
+  const forbidden = await checkPermissionWithBlacklist('platform/admin.view')(request);
   if (forbidden) return forbidden;
 
   const adminStore = getAdminStore();

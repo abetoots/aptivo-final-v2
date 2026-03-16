@@ -42,6 +42,21 @@ vi.mock('../src/lib/security/rbac-middleware', () => ({
     }
     return null;
   },
+  checkPermissionWithBlacklist: (permission: string) => async (req: Request) => {
+    const role = req.headers.get('x-user-role');
+    if (!role || role === 'anonymous') {
+      return new Response(
+        JSON.stringify({
+          type: 'https://aptivo.dev/errors/forbidden',
+          title: 'Forbidden',
+          status: 403,
+          detail: `Missing permission: ${permission}`,
+        }),
+        { status: 403, headers: { 'content-type': 'application/json' } },
+      );
+    }
+    return null;
+  },
 }));
 
 import { GET as getUsage } from '../src/app/api/admin/llm-usage/route';

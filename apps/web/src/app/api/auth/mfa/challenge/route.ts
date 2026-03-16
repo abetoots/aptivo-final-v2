@@ -1,13 +1,28 @@
 /**
- * ID2-03: MFA challenge route
+ * ID2-03 / INF-04: MFA challenge route
  * @task ID2-03
+ * @task INF-04
  *
  * initiates a totp challenge for a given factor.
  * the returned challenge id is used with the verify endpoint.
  */
 
-import { createMfaStubClient } from '@/lib/auth/mfa-enforcement.js';
 import { extractUser } from '@/lib/security/rbac-resolver.js';
+import type { SupabaseMfaClient } from '@/lib/auth/mfa-enforcement.js';
+
+// resolve mfa client from composition root, fallback for test mode
+async function getMfaClientFromRoot(): Promise<SupabaseMfaClient> {
+  try {
+    const { getMfaClient } = await import('@/lib/services.js');
+    return getMfaClient();
+  } catch (err) {
+    if (process.env.NODE_ENV === 'production') {
+      console.error('mfa: composition root import failed, falling back to stub — this should not happen in production', err);
+    }
+    const { createMfaStubClient } = await import('@/lib/auth/mfa-enforcement.js');
+    return createMfaStubClient();
+  }
+}
 
 export async function POST(request: Request) {
   // verify the user is authenticated before allowing mfa challenge
@@ -51,7 +66,8 @@ export async function POST(request: Request) {
     );
   }
 
-  const client = createMfaStubClient();
+  // resolve mfa client from composition root
+  const client = await getMfaClientFromRoot();
   const result = await client.challenge({ factorId: body.factorId });
 
   if (!result.ok) {

@@ -17,6 +17,15 @@ export interface RedisClient {
   exists(...keys: string[]): Promise<number>;
   del(...keys: string[]): Promise<number>;
   dbsize(): Promise<number>;
+  // atomic transaction support (optional for backward compat)
+  watch?(key: string): Promise<void>;
+  multi?(): RedisMulti;
+}
+
+export interface RedisMulti {
+  set(key: string, value: string, options?: { ex?: number }): RedisMulti;
+  del(...keys: string[]): RedisMulti;
+  exec(): Promise<Array<unknown> | null>; // null = WATCH conflict (retry)
 }
 
 export interface TokenBlacklistDeps {

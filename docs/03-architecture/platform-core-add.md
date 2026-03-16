@@ -1839,9 +1839,11 @@ Full WebAuthn support deferred to Phase 2. Supabase Auth roadmap includes passke
 | Refresh token reuse interval | 10s | Grace period for concurrent requests using same refresh token |
 | Refresh token lifetime | 7 days (604,800s) | Balance between UX (stay logged in) and security |
 | Session idle timeout | None (Supabase default) | Idle timeout managed by refresh token expiry |
-| Max sessions per user | Unlimited (Supabase default) | Phase 1: no limit. Phase 2: consider limiting to 5 concurrent sessions |
+| Max sessions per user | Admin: 1, User: 3 (configurable) | Per-role concurrent session limits enforced server-side |
 
 > **Configuration Location**: These values are configured in Supabase Dashboard → Authentication → Settings → Session. They are NOT managed in application code. Changes require Supabase dashboard access (admin only).
+
+> **Phase 2**: Session limits enforced by `SessionLimitService` (Redis-backed). See `apps/web/src/lib/auth/session-limit-service.ts`.
 
 > **JWT Lifetime Summary**: Access tokens expire after 15 minutes. Refresh tokens expire after 7 days with one-time-use rotation. HITL approval tokens have per-policy TTLs (24h–7d, see §4.1). JWKS public keys are cached for 1 hour with 24h stale-if-error (see §2.3.2 Identity Service).
 

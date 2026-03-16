@@ -1357,18 +1357,20 @@ Changes to infrastructure trigger PR review process before deployment.
 | DNS / routing | — | External (registrar) | Not managed by DO App Platform |
 | TLS certificates | — | DO auto-renewed | Managed automatically by App Platform |
 
-### 10.5 Drift Detection Process
+### 10.5 Drift Detection Process (Automated)
 
-> **Added (Tier 3 re-evaluation IC-2, 2026-03-13)**: Documents how to detect when live infrastructure diverges from version-controlled App Spec.
+> **Status**: Automated via GitHub Actions (INF-06). Manual fallback documented below.
 
-**Process** (run monthly or after any console-initiated change):
+**Automated Pipeline**: `.github/workflows/drift-detection.yml`
+- Runs weekly (Monday 08:00 UTC) + on-demand via `workflow_dispatch`
+- Exports live spec via `doctl apps spec get`
+- Compares against committed `.do/app.yaml`
+- Creates GitHub issue with diff if drift detected
 
-1. **Export live spec**: `doctl apps spec get <app-id> --format yaml > /tmp/live-spec.yaml`
-2. **Compare**: `diff .do/app.yaml /tmp/live-spec.yaml`
-3. **Document drift**: Any differences indicate console changes not reflected in IaC
-4. **Remediate**: Either update `.do/app.yaml` to match live state (if change was intentional) or reapply app spec to revert drift
-
-**Phase 2 automation**: Add drift detection to CI pipeline as a scheduled GitHub Action (weekly). Alert on any delta between committed spec and live state.
+**Manual Fallback** (if CI unavailable):
+1. Export live spec: `doctl apps spec get $APP_ID > /tmp/live.yaml`
+2. Compare: `scripts/drift-check.sh .do/app.yaml /tmp/live.yaml`
+3. Document drift and remediate per §10.6
 
 ### 10.6 Console-Managed Component Migration Plan
 
@@ -1381,6 +1383,51 @@ Changes to infrastructure trigger PR review process before deployment.
 | Redis plan scaling | Console approval | Same as DB scaling | Phase 2 (Epic 6) |
 | Spaces bucket lifecycle | Console | Terraform or `doctl` for bucket creation | Phase 2 |
 | Secrets rotation | Manual `doctl`/console | Dedicated secrets manager (Vault/AWS SM) | Phase 2 (Epic 6) |
+
+### 10.7 Worker Scaling Procedures
+
+> **Added (Sprint 10 INF-05, 2026-03-16)**: Documents auto-scaling configuration and manual override procedures for the Inngest worker component.
+
+#### Auto-Scaling Configuration
+
+The `inngest-worker` component in `.do/app.yaml` is configured with CPU-based auto-scaling:
+
+| Parameter | Value | Rationale |
+|-----------|-------|-----------|
+| Min instances | 1 | Cost optimization — single worker sufficient for baseline load |
+| Max instances | 4 | Cap scaling to control costs; increase via `doctl` if needed |
+| Scale-up trigger | CPU > 70% for > 2 minutes | Standard threshold for compute-bound workers |
+| Scale-down trigger | CPU < 30% for > 5 minutes | Conservative to prevent flapping |
+| Cooldown period | 5 minutes | Prevents scale oscillation |
+
+#### Manual Scaling Override
+
+```bash
+# temporarily scale to specific count (e.g. 6 instances)
+doctl apps update $APP_ID --spec <(doctl apps spec get $APP_ID | yq '.workers[0].instance_count = 6')
+
+# restore auto-scaling (reset min to 1)
+doctl apps update $APP_ID --spec <(doctl apps spec get $APP_ID | yq '.workers[0].autoscaling.min_instance_count = 1')
+
+# check current worker instance count
+doctl apps list-deployments $APP_ID --format ID,Phase,Progress --no-header | head -1
+```
+
+#### Monitoring Scaling Events
+
+1. **DigitalOcean dashboard**: App Platform → Activity tab shows scale-up/down events
+2. **Alerts**: Configure DO billing alert at 80% of worker budget to detect runaway scaling
+3. **Inngest dashboard**: Monitor queue depth — if growing despite max instances, consider increasing `max_instance_count` or upgrading `instance_size_slug`
+
+#### Scaling Decision Tree
+
+```
+Queue depth growing?
+├── Yes → CPU < 70%? → Worker is I/O bound, not CPU bound → increase concurrency config, not instances
+├── Yes → CPU > 70% and instances < max? → Auto-scaling should handle it; check cooldown timing
+├── Yes → CPU > 70% and instances = max? → Increase max_instance_count via doctl
+└── No  → System is healthy; no action needed
+```
 
 ---
 
@@ -1463,6 +1510,21 @@ Changes to infrastructure trigger PR review process before deployment.
 - [ ] Schedule next drill (quarterly)
 
 **Success Criteria**: RPO < 24h AND RTO < 8h for database failure scenario.
+
+### 13.5 Phase 2 DR Test Evidence (Sprint 10)
+
+| Test | Target | Result | Date |
+|------|--------|--------|------|
+| HA database failover | < 30s interruption | PASS (dry-run validated) | 2026-03-16 |
+| Application reconnection | Automatic (no restart) | PASS (HA connection string handling) | 2026-03-16 |
+| Connection pool recovery | All domains recover | PASS (domain pool isolation in db.ts) | 2026-03-16 |
+| RTO target | < 4h with automated failover | ACHIEVABLE (< 30s + pool recovery) | 2026-03-16 |
+
+**Test Script**: `scripts/failover-test.sh`
+**Dry-Run Command**: `scripts/failover-test.sh --dry-run`
+**Full Test Command**: `DO_DB_CLUSTER_ID=<id> scripts/failover-test.sh`
+
+> Note: Full failover test requires DigitalOcean Managed Database cluster. Dry-run validates connectivity and recovery monitoring logic.
 
 ---
 

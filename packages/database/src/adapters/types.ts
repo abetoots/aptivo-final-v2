@@ -8,6 +8,7 @@ export type DrizzleClient = {
   select: (...args: any[]) => any;
   insert: (...args: any[]) => any;
   update: (...args: any[]) => any;
+  delete: (...args: any[]) => any;
   execute: (query: any) => Promise<any>;
   transaction: <T>(fn: (tx: any) => Promise<T>) => Promise<T>;
 };

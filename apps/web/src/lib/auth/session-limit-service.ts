@@ -8,7 +8,7 @@
  */
 
 import { Result } from '@aptivo/types';
-import type { RedisClient } from './token-blacklist.js';
+import type { RedisClient, RedisMulti } from './token-blacklist.js';
 
 // -- types --
 
@@ -100,54 +100,157 @@ export function createSessionLimitService(deps: SessionLimitDeps): SessionLimitS
     return { sessionId, createdAt: parsed.createdAt, deviceInfo: parsed.deviceInfo };
   };
 
+  // max retries for atomic WATCH/MULTI/EXEC conflicts
+  const MAX_ATOMIC_RETRIES = 3;
+
+  // non-atomic eviction logic (original path, also used as fallback)
+  const checkAndEvictNonAtomic = async (
+    userId: string,
+    role: string,
+    newSessionId: string,
+    deviceInfo?: string,
+  ): Promise<Result<EvictedSession[], SessionError>> => {
+    const limit = limitForRole(role);
+    const ids = await readIndex(userId);
+
+    // store the new session metadata
+    const now = Math.floor(Date.now() / 1000);
+    await redis.set(
+      sessionKey(userId, newSessionId),
+      JSON.stringify({ createdAt: now, deviceInfo }),
+    );
+
+    // add new id to the index (deduplicate to prevent inflation)
+    const updatedIds = ids.includes(newSessionId) ? [...ids] : [...ids, newSessionId];
+
+    // check if over limit
+    if (updatedIds.length <= limit) {
+      await writeIndex(userId, updatedIds);
+      return Result.ok([]);
+    }
+
+    // load all sessions to sort by createdAt
+    const sessions: SessionInfo[] = [];
+    for (const id of updatedIds) {
+      const info = await readSession(userId, id);
+      if (info) {
+        sessions.push(info);
+      }
+    }
+
+    // sort ascending by createdAt (oldest first)
+    sessions.sort((a, b) => a.createdAt - b.createdAt);
+
+    // determine how many to evict
+    const evictCount = sessions.length - limit;
+    const toEvict = sessions.slice(0, evictCount);
+    const toKeep = sessions.slice(evictCount);
+
+    // delete evicted session keys
+    for (const s of toEvict) {
+      await redis.del(sessionKey(userId, s.sessionId));
+    }
+
+    // update the index with remaining session ids
+    await writeIndex(userId, toKeep.map((s) => s.sessionId));
+
+    return Result.ok(toEvict.map((s) => ({ sessionId: s.sessionId })));
+  };
+
+  // atomic eviction using WATCH/MULTI/EXEC with retry
+  const checkAndEvictAtomic = async (
+    userId: string,
+    role: string,
+    newSessionId: string,
+    deviceInfo?: string,
+  ): Promise<Result<EvictedSession[], SessionError>> => {
+    const limit = limitForRole(role);
+    const iKey = indexKey(userId);
+
+    for (let attempt = 0; attempt < MAX_ATOMIC_RETRIES; attempt++) {
+      // watch the session index key for concurrent modifications
+      await redis.watch!(iKey);
+
+      // read the current index
+      const ids = await readIndex(userId);
+
+      // store the new session metadata (idempotent write, safe outside transaction)
+      const now = Math.floor(Date.now() / 1000);
+      await redis.set(
+        sessionKey(userId, newSessionId),
+        JSON.stringify({ createdAt: now, deviceInfo }),
+      );
+
+      // add new id to the index (deduplicate to prevent inflation)
+      const updatedIds = ids.includes(newSessionId) ? [...ids] : [...ids, newSessionId];
+
+      // check if over limit
+      if (updatedIds.length <= limit) {
+        // use multi/exec to atomically update the index
+        const tx = redis.multi!();
+        tx.set(iKey, JSON.stringify(updatedIds));
+        const result = await tx.exec();
+        if (result === null) {
+          // watch conflict — retry
+          continue;
+        }
+        return Result.ok([]);
+      }
+
+      // load all sessions to sort by createdAt
+      const sessions: SessionInfo[] = [];
+      for (const id of updatedIds) {
+        const info = await readSession(userId, id);
+        if (info) {
+          sessions.push(info);
+        }
+      }
+
+      // sort ascending by createdAt (oldest first)
+      sessions.sort((a, b) => a.createdAt - b.createdAt);
+
+      // determine how many to evict
+      const evictCount = sessions.length - limit;
+      const toEvict = sessions.slice(0, evictCount);
+      const toKeep = sessions.slice(evictCount);
+
+      // build the atomic transaction: set new index + del evicted session keys
+      const tx = redis.multi!();
+      if (toKeep.length === 0) {
+        tx.del(iKey);
+      } else {
+        tx.set(iKey, JSON.stringify(toKeep.map((s) => s.sessionId)));
+      }
+      for (const s of toEvict) {
+        tx.del(sessionKey(userId, s.sessionId));
+      }
+
+      const execResult = await tx.exec();
+      if (execResult === null) {
+        // watch conflict — retry
+        continue;
+      }
+
+      return Result.ok(toEvict.map((s) => ({ sessionId: s.sessionId })));
+    }
+
+    // exhausted retries — clean up orphaned session key
+    await redis.del(sessionKey(userId, newSessionId)).catch(() => {});
+    return Result.err({
+      _tag: 'SessionError' as const,
+      operation: 'checkAndEvict',
+      cause: new Error(`atomic eviction failed after ${MAX_ATOMIC_RETRIES} retries (WATCH conflict)`),
+    });
+  };
+
   return {
     async checkAndEvict(userId, role, newSessionId, deviceInfo) {
       try {
-        const limit = limitForRole(role);
-        const ids = await readIndex(userId);
-
-        // store the new session metadata
-        const now = Math.floor(Date.now() / 1000);
-        await redis.set(
-          sessionKey(userId, newSessionId),
-          JSON.stringify({ createdAt: now, deviceInfo }),
-        );
-
-        // add new id to the index (deduplicate to prevent inflation)
-        const updatedIds = ids.includes(newSessionId) ? [...ids] : [...ids, newSessionId];
-
-        // check if over limit
-        if (updatedIds.length <= limit) {
-          await writeIndex(userId, updatedIds);
-          return Result.ok([]);
+        // use atomic path when redis supports watch/multi, otherwise fall back
+        if (redis.watch && redis.multi) {
+          return await checkAndEvictAtomic(userId, role, newSessionId, deviceInfo);
         }
-
-        // load all sessions to sort by createdAt
-        const sessions: SessionInfo[] = [];
-        for (const id of updatedIds) {
-          const info = await readSession(userId, id);
-          if (info) {
-            sessions.push(info);
-          }
-        }
-
-        // sort ascending by createdAt (oldest first)
-        sessions.sort((a, b) => a.createdAt - b.createdAt);
-
-        // determine how many to evict
-        const evictCount = sessions.length - limit;
-        const toEvict = sessions.slice(0, evictCount);
-        const toKeep = sessions.slice(evictCount);
-
-        // delete evicted session keys
-        for (const s of toEvict) {
-          await redis.del(sessionKey(userId, s.sessionId));
-        }
-
-        // update the index with remaining session ids
-        await writeIndex(userId, toKeep.map((s) => s.sessionId));
-
-        return Result.ok(toEvict.map((s) => ({ sessionId: s.sessionId })));
+        return await checkAndEvictNonAtomic(userId, role, newSessionId, deviceInfo);
       } catch (cause) {
         return Result.err({ _tag: 'SessionError' as const, operation: 'checkAndEvict', cause });
       }

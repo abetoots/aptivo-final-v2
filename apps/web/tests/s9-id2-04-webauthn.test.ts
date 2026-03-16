@@ -6,13 +6,26 @@
  * and api route handlers.
  */
 
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   createWebAuthnService,
   createInMemoryWebAuthnStore,
   type WebAuthnCredentialStore,
   type WebAuthnCredential,
 } from '../src/lib/auth/webauthn-service.js';
+
+// mock services module so route handlers use in-memory store (no db required)
+const mockWebAuthnService = createWebAuthnService({
+  credentialStore: createInMemoryWebAuthnStore(),
+  rpId: 'localhost',
+  rpName: 'Aptivo',
+  origin: 'http://localhost:3000',
+});
+
+vi.mock('../src/lib/services', () => ({
+  getWebAuthnService: () => mockWebAuthnService,
+}));
+
 import { GET as statusHandler } from '../src/app/api/auth/webauthn/status/route.js';
 
 // ---------------------------------------------------------------------------

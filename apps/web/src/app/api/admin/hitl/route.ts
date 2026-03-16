@@ -4,12 +4,12 @@
  */
 
 import { NextResponse } from 'next/server';
-import { checkPermission } from '../../../../lib/security/rbac-middleware';
+import { checkPermissionWithBlacklist } from '../../../../lib/security/rbac-middleware';
 import { getAdminStore } from '../../../../lib/services';
 
 export async function GET(request: Request) {
   // rbac check
-  const forbidden = await checkPermission('platform/admin.view')(request);
+  const forbidden = await checkPermissionWithBlacklist('platform/admin.view')(request);
   if (forbidden) return forbidden;
 
   const url = new URL(request.url);
