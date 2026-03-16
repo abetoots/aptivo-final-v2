@@ -176,7 +176,7 @@ All 25 findings empirically validated during spike week. 469 tests across 15 spi
 | T1-W22 | PostgreSQL shared DB SPOF | accepted — Phase 1 risk (ADD §2.3.2) |
 | S3-W9 | MCP Redis recovery edge case | accepted — human review required |
 | S2-W5 | PII read audit trail | deferred — Phase 2+ |
-| S3-W10 | Event schema rollout order | deferred — Phase 2+ |
+| S3-W10 | Event schema rollout order | **resolved** (documentation) — Event Schema Rollout Policy in ADD §12.5 |
 | S5-W17 | Burn-rate alerting | deferred — Phase 2+ |
 
 ---
@@ -316,7 +316,7 @@ All 25 findings empirically validated during spike week. 469 tests across 15 spi
 | S3-W7 | idempotency | Novu transactionId dedup window undocumented | Validate via integration testing | Codex, Claude | **resolved** (empirically validated — SP-04) *(= T1-W24)* |
 | S3-W8 | idempotency | Role assignment implicitly idempotent — not explicit | Explicitly document role assignment idempotency | Codex | **resolved** (documentation) |
 | S3-W9 | idempotency | MCP Redis recovery edge case — financial operation duplicate risk | Requires human review for risk acceptance | Claude | accepted |
-| S3-W10 | event-schema | No rollout order for event schema changes | Document consumers-first rollout policy | Gemini, Claude | deferred |
+| S3-W10 | event-schema | No rollout order for event schema changes | Document consumers-first rollout policy | Gemini, Claude | **resolved** (documentation) — Event Schema Rollout Policy in ADD §12.5 |
 | S3-W11 | event-schema | No schema registry/validation for Inngest events | Add enforced schema validation at publish time | Codex, Claude | **resolved** (implemented) — `createValidatedSender()` with Zod `safeParse` gate in `@aptivo/mcp-layer/events` (MCP-09) |
 | S3-W12 | event-schema | No dead-letter strategy for event schema failures | Document DLQ strategy for failed deserialization | Claude | **resolved** (documentation) |
 | S3-W13 | api-versioning | API deprecation policy lacks v1-specific timeline | Add v1 support window commitment | All 3 | **resolved** (documentation) |

@@ -12,7 +12,7 @@ export { hitlDecisionEnum, hitlDecisions } from './hitl-decisions.js';
 export { llmUsageLogs } from './llm-usage.js';
 export { llmBudgetConfigs } from './llm-budget-configs.js';
 export { auditLogs, auditChainHeads, dlqStatusEnum, auditWriteDlq } from './audit-logs.js';
-export { userRoles, rolePermissions } from './user-roles.js';
+export { userRoles, rolePermissions, webauthnCredentials } from './user-roles.js';
 export { mcpServers, mcpTools } from './mcp-registry.js';
 export { files, fileEntityLinks } from './file-storage.js';
 export {

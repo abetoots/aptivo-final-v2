@@ -409,6 +409,52 @@ const requireStrongAuth = (claims: AccessTokenClaims) => {
 };
 ```
 
+### 6.4 SAML 2.0 Integration (Phase 2 Contract)
+
+> **Status**: Contract-only in Phase 2. Implementation when enterprise customer requires SAML.
+
+#### 6.4.1 Supabase SAML Capability Assessment
+
+| Capability | Status | Notes |
+|-----------|--------|-------|
+| SAML 2.0 SP-initiated login | Available | Supabase Pro plan required ($25/mo per project) |
+| Supported IdPs | Okta, Azure AD, Google Workspace, OneLogin, Auth0 | Via Supabase Dashboard → Authentication → SSO |
+| IdP-initiated login | Not supported | SP-initiated only |
+| ACS URL | Auto-generated | Managed by Supabase |
+| Assertion signing | Required | IdP must sign assertions |
+| Encrypted assertions | Optional | Recommended for compliance |
+
+#### 6.4.2 SAML Adapter Interface
+
+The `SamlAdapter` interface (defined in `@aptivo/types`) provides a consistent contract for SAML integration:
+
+```typescript
+interface SamlAdapter {
+  initiateLogin(domain: string): Promise<Result<{ redirectUrl: string }, SamlError>>;
+  handleCallback(samlResponse: string): Promise<Result<SamlLoginResult, SamlError>>;
+  getMetadata(): Result<SamlMetadata, SamlError>;
+}
+```
+
+Phase 2 ships a stub adapter (`createSamlStubAdapter()`) that returns `SamlNotConfigured` for all operations.
+
+#### 6.4.3 SAML-to-OIDC Claim Mapping Parity
+
+SAML assertions map to the same `MappedIdentity` shape as OIDC claims, enabling uniform downstream handling:
+
+| SAML Attribute | OIDC Claim | MappedIdentity Field |
+|----------------|------------|---------------------|
+| `NameID` | `sub` | `externalId` |
+| `NameID` (email format) | `email` | `email` |
+| `displayName` / `cn` | `name` | `name` |
+| Configurable group attribute | `groups` | `roles` (via mapping) |
+
+#### 6.4.4 Migration Path
+
+1. **Phase 2**: Stub adapter; OIDC covers enterprise SSO needs
+2. **Phase 3** (if required): Enable Supabase Pro SAML, implement `SamlAdapter` against Supabase SSO API
+3. **Future**: Direct SAML library (`saml2-js`) if Supabase limitations block requirements
+
 ---
 
 ## 7. Session Management

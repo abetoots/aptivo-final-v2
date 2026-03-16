@@ -355,7 +355,7 @@ All secrets managed via DigitalOcean App Platform encrypted environment variable
 | API keys (S3, LLM providers) | DO App Platform (encrypted)  | 90 days               |
 | Novu API Key         | DO App Platform (encrypted)        | 180 days              |
 | Webhook HMAC secrets | PostgreSQL (encrypted column)      | 180 days              |
-| HITL_SECRET          | DO App Platform (encrypted)        | 180 days              |
+| HITL_SIGNING_SECRET          | DO App Platform (encrypted)        | 180 days              |
 | INNGEST_SIGNING_KEY  | DO App Platform (encrypted)        | 180 days              |
 | INNGEST_EVENT_KEY    | DO App Platform (encrypted)        | 180 days              |
 | JWT signing keys     | Supabase-managed                   | 90 days               |
@@ -1195,7 +1195,7 @@ During multi-component incidents, recover in this order:
    | DO Spaces Key | DO Control Panel → regenerate or use backup key |
    | Novu API Key | Novu Dashboard → regenerate previous key |
    | Inngest Signing Key | Inngest Dashboard → revert signing key |
-   | HITL_SECRET | Set env var to old value, redeploy. Old HITL tokens become valid again. |
+   | HITL_SIGNING_SECRET | Set env var to old value, redeploy. Old HITL tokens become valid again. |
    | Webhook HMAC | Set env var to old value, redeploy. Notify webhook providers. |
    | LLM API Keys | Provider dashboard → use backup key |
 
@@ -1204,6 +1204,32 @@ During multi-component incidents, recover in this order:
 **Notes**:
 - Always maintain the old secret value for at least 24 hours after rotation (dual-key window)
 - Document the old secret value securely before rotation (password manager, not plaintext)
+
+#### 9.3.1 Step-by-Step Secret Rotation
+
+**Prerequisites**: Access to environment variable management (DigitalOcean App Platform or `.env`).
+
+**Procedure** (example: `HITL_SIGNING_SECRET`):
+
+1. Generate new secret:
+   ```bash
+   openssl rand -base64 32
+   ```
+2. Set previous secret:
+   ```bash
+   doctl apps update $APP_ID --spec <(yq '.envs += [{"key": "HITL_SIGNING_SECRET_PREVIOUS", "value": "'$CURRENT_SECRET'"}]' .do/app.yaml)
+   ```
+3. Update current secret to new value
+4. Deploy and verify no 5xx errors in logs
+5. Monitor for 24 hours — `previous secret` log warnings are expected
+6. After 24h with no warnings: remove `HITL_SIGNING_SECRET_PREVIOUS`
+7. Final deploy and verify
+
+**Rollback**: If validation failures spike, restore the old secret as `HITL_SIGNING_SECRET` and remove `_PREVIOUS`.
+
+**Secrets requiring this procedure**: HITL_SIGNING_SECRET, MCP_SIGNING_KEY, webhook HMAC keys.
+
+**Secrets NOT requiring dual-key rotation** (managed by Supabase): SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY — rotate via Supabase Dashboard → Settings → API Keys.
 
 ### 9.4 Infrastructure Rollback
 

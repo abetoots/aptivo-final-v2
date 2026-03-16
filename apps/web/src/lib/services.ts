@@ -34,6 +34,16 @@ import {
   createDrizzleMcpRegistryAdapter,
 } from '@aptivo/database/adapters';
 
+// token blacklist
+import { createTokenBlacklistService } from './auth/token-blacklist.js';
+import type { RedisClient } from './auth/token-blacklist.js';
+
+// session limits (ID2-05)
+import { createSessionLimitService } from './auth/session-limit-service.js';
+
+// webauthn (ID2-04)
+import { createWebAuthnService, createInMemoryWebAuthnStore } from './auth/webauthn-service.js';
+
 // observability
 import { createMetricService } from './observability/metric-service.js';
 
@@ -74,6 +84,9 @@ import { createDataDeletionHandler } from '@aptivo/mcp-layer/workflows';
 // hitl-gateway
 import type { RequestServiceDeps, DecisionServiceDeps } from '@aptivo/hitl-gateway';
 import { createRequest, recordDecision } from '@aptivo/hitl-gateway';
+
+// oidc provider (ID2-01)
+import { createClaimMapper, loadProvidersFromEnv } from './auth/oidc-provider.js';
 
 // llm-gateway
 import {
@@ -435,6 +448,77 @@ export const getAdminStore = lazy(() =>
 export const getLlmUsageStore = lazy(() =>
   createDrizzleLlmUsageStore(db() as unknown as Parameters<typeof createDrizzleLlmUsageStore>[0]),
 );
+
+// ---------------------------------------------------------------------------
+// token blacklist (ID2-06)
+// ---------------------------------------------------------------------------
+
+export const getTokenBlacklist = lazy(() => {
+  // env-gated: real redis when UPSTASH_REDIS_URL is set, null fallback
+  const redisUrl = process.env.UPSTASH_REDIS_URL;
+  if (redisUrl) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { Redis } = require('@upstash/redis') as { Redis: new (opts: { url: string; token: string }) => RedisClient };
+      const redis = new Redis({
+        url: redisUrl,
+        token: process.env.UPSTASH_REDIS_TOKEN ?? '',
+      });
+      return createTokenBlacklistService({ redis });
+    } catch {
+      console.warn('@upstash/redis not installed, token blacklist disabled');
+    }
+  }
+  return null;
+});
+
+// ---------------------------------------------------------------------------
+// session limit service (ID2-05)
+// ---------------------------------------------------------------------------
+
+export const getSessionLimitService = lazy(() => {
+  const redisUrl = process.env.UPSTASH_REDIS_URL;
+  if (redisUrl) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { Redis } = require('@upstash/redis') as { Redis: new (opts: { url: string; token: string }) => RedisClient };
+      const redis = new Redis({
+        url: redisUrl,
+        token: process.env.UPSTASH_REDIS_TOKEN ?? '',
+      });
+      return createSessionLimitService({ redis });
+    } catch {
+      console.warn('@upstash/redis not installed, session limits disabled');
+    }
+  }
+  return null;
+});
+
+// ---------------------------------------------------------------------------
+// webauthn service (ID2-04)
+// ---------------------------------------------------------------------------
+
+export const getWebAuthnService = lazy(() =>
+  createWebAuthnService({
+    credentialStore: createInMemoryWebAuthnStore(),
+    rpId: process.env.WEBAUTHN_RP_ID ?? 'localhost',
+    rpName: process.env.WEBAUTHN_RP_NAME ?? 'Aptivo',
+    origin: process.env.WEBAUTHN_ORIGIN ?? 'http://localhost:3000',
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// oidc provider (ID2-01)
+// ---------------------------------------------------------------------------
+
+export const getOidcClaimMapper = lazy(() => {
+  const providersResult = loadProvidersFromEnv();
+  if (!providersResult.ok) {
+    console.warn('oidc provider config error:', providersResult.error.message);
+    return createClaimMapper({ providers: [] });
+  }
+  return createClaimMapper({ providers: providersResult.value });
+});
 
 // ---------------------------------------------------------------------------
 // inngest function handler factories

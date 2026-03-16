@@ -11,6 +11,7 @@
 
 import {
   index,
+  integer,
   pgTable,
   timestamp,
   uniqueIndex,
@@ -68,4 +69,29 @@ export const rolePermissions = pgTable(
       table.permission
     ),
   ]
+);
+
+// webauthn/passkey credentials (ID2-04)
+export const webauthnCredentials = pgTable(
+  'webauthn_credentials',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    credentialId: varchar('credential_id', { length: 512 }).notNull(),
+    publicKey: varchar('public_key', { length: 2048 }).notNull(),
+    counter: integer('counter').notNull().default(0),
+    transports: varchar('transports', { length: 255 }), // comma-separated
+    friendlyName: varchar('friendly_name', { length: 100 }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    index('webauthn_user_id_idx').on(table.userId),
+    uniqueIndex('webauthn_credential_id_idx').on(table.credentialId),
+  ],
 );

@@ -16,6 +16,8 @@ import type { DrizzleClient } from '@aptivo/database/adapters';
 export interface ExtractedUser {
   userId: string;
   email: string;
+  federatedRoles?: string[]; // roles from idp claim mapping
+  aal?: string; // authenticator assurance level (aal1, aal2)
 }
 
 // -- user extraction --
@@ -53,7 +55,15 @@ export async function extractUser(request: Request): Promise<ExtractedUser | nul
       const { data: { user }, error } = await supabase.auth.getUser();
       if (error || !user) return null;
 
-      return { userId: user.id, email: user.email ?? '' };
+      // extract aal from supabase session factors
+      const { data: { session } } = await supabase.auth.getSession();
+      const aal = session?.aal ?? 'aal1';
+
+      // extract federated roles from idp claims stored in app_metadata
+      const appMeta = user.app_metadata ?? {};
+      const federatedRoles = Array.isArray(appMeta.roles) ? appMeta.roles as string[] : undefined;
+
+      return { userId: user.id, email: user.email ?? '', aal, federatedRoles };
     } catch {
       // @supabase/ssr not installed or other error — fall through to dev mode
       return null;
@@ -100,4 +110,30 @@ export async function resolvePermissionsForRole(
     .where(eq(rolePermissions.role, role));
 
   return new Set(rows.map((r: { permission: string }) => r.permission));
+}
+
+// -- federated permission resolution (ID2-01) --
+
+/**
+ * resolves permissions by merging locally-assigned roles (from DB)
+ * with idp-mapped roles (from oidc claim mapping).
+ * used when a federated user has both db-assigned and idp-mapped roles.
+ */
+export async function resolvePermissionsWithFederation(
+  userId: string,
+  federatedRoles: string[],
+  db: DrizzleClient,
+): Promise<Set<string>> {
+  // get locally-assigned permissions
+  const localPerms = await resolvePermissions(userId, db);
+
+  // get permissions for each federated role
+  for (const role of federatedRoles) {
+    const rolePerms = await resolvePermissionsForRole(role, db);
+    for (const p of rolePerms) {
+      localPerms.add(p);
+    }
+  }
+
+  return localPerms;
 }

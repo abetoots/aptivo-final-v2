@@ -1883,6 +1883,161 @@ Full WebAuthn support deferred to Phase 2. Supabase Auth roadmap includes passke
 
 > **Phase 1 Limitation**: All env vars are accessible to all processes on the same container. No per-component secret scoping exists. Phase 2: Consider DO App Platform component-level env var scoping or a secrets manager with per-service access policies.
 
+### 8.10 Auth Context in Durable Execution (AB-1)
+
+> **Closes**: Tier 2 finding AB-1 — async auth propagation through Inngest
+
+Workflow steps executed via Inngest `step.run()` do **not** have access to the original HTTP request context. Auth identity must be explicitly serialized into the event payload and deserialized in each step.
+
+#### 8.10.1 Pattern: Serialize Auth Context into Event Payload
+
+```typescript
+// at workflow trigger time — serialize auth context
+const authContext = {
+  userId: extractedUser.userId,
+  email: extractedUser.email,
+  roles: extractedUser.federatedRoles ?? [],
+  permissions: [...resolvedPermissions],
+  capturedAt: Date.now(), // for freshness validation
+};
+
+await inngest.send({
+  name: 'workflow/started',
+  data: { ...workflowInput, authContext },
+});
+```
+
+#### 8.10.2 Pattern: Deserialize and Validate in Step Functions
+
+```typescript
+const workflow = inngest.createFunction(
+  { id: 'example-workflow' },
+  { event: 'workflow/started' },
+  async ({ event, step }) => {
+    const { authContext } = event.data;
+
+    await step.run('authorized-operation', async () => {
+      // validate auth context freshness (reject if >1h stale)
+      const ageMs = Date.now() - authContext.capturedAt;
+      if (ageMs > 3_600_000) {
+        return Result.err({ _tag: 'AuthorizationError', reason: 'stale auth context' });
+      }
+
+      // use serialized identity for authorization checks
+      const hasPermission = authContext.permissions.includes('required/permission');
+      if (!hasPermission) {
+        return Result.err({ _tag: 'AuthorizationError', reason: 'insufficient permission' });
+      }
+
+      // proceed with authorized operation
+      return performAction(authContext.userId);
+    });
+  },
+);
+```
+
+#### 8.10.3 Anti-Pattern: Request-Scoped Auth in Background Steps
+
+```typescript
+// ❌ WRONG — request is not available in Inngest step context
+await step.run('bad-pattern', async () => {
+  const user = await extractUser(request); // request is undefined here
+});
+
+// ✅ CORRECT — use serialized auth from event payload
+await step.run('good-pattern', async () => {
+  const { authContext } = event.data;
+  // use authContext.userId, authContext.roles
+});
+```
+
+#### 8.10.4 Edge Case: Role Change Between Steps
+
+If a user's roles change between workflow start and a later step execution:
+
+1. **Default behavior**: The step uses the roles captured at workflow start (eventual consistency)
+2. **Strict mode** (for sensitive operations): Re-resolve permissions from DB within the step:
+
+```typescript
+await step.run('sensitive-operation', async () => {
+  const freshPerms = await resolvePermissions(event.data.authContext.userId, db);
+  // use freshPerms instead of cached authContext.permissions
+});
+```
+
+The `capturedAt` timestamp enables consumers to decide whether to use cached or fresh permissions based on their sensitivity requirements.
+
+### 8.11 Secret Rotation Procedure (SM-1)
+
+> **Closes**: Tier 2 finding SM-1 — dual-secret rotation mechanism
+
+Secret rotation must be zero-downtime. The application validates both old and new secrets during a configurable rotation window (default: 24h), ensuring no requests fail during the transition.
+
+#### 8.11.1 Secrets Requiring Rotation
+
+| Secret | Purpose | Rotation Frequency | Impact of Leak |
+|--------|---------|-------------------|----------------|
+| `HITL_SIGNING_SECRET` | JWT signing for HITL approval tokens | 90 days | Unauthorized approvals |
+| `MCP_SIGNING_KEY` | HMAC signing for MCP tool calls | 90 days | Tool call forgery |
+| Webhook HMAC keys | Verify inbound webhook authenticity | On compromise | Webhook injection |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Client-side Supabase access | On compromise | Unauthorized API access |
+| `SUPABASE_SERVICE_ROLE_KEY` | Server-side Supabase admin access | On compromise | Full data access |
+
+#### 8.11.2 Dual-Key Validation Pattern
+
+During a rotation window, the application accepts both the old and new secret:
+
+```typescript
+// dual-key validation for zero-downtime rotation
+function verifyWithRotation(
+  payload: string,
+  signature: string,
+  secrets: { current: string; previous?: string },
+): boolean {
+  // try current secret first
+  if (verifyHmac(payload, signature, secrets.current)) return true;
+
+  // fall back to previous secret during rotation window
+  if (secrets.previous && verifyHmac(payload, signature, secrets.previous)) {
+    console.warn('request validated with previous secret — rotation in progress');
+    return true;
+  }
+
+  return false;
+}
+```
+
+#### 8.11.3 Rotation Procedure
+
+1. **Generate new secret**: Create cryptographically random replacement
+2. **Set `_PREVIOUS` env var**: Copy current secret to `{SECRET_NAME}_PREVIOUS`
+3. **Update current secret**: Set `{SECRET_NAME}` to the new value
+4. **Deploy**: Application now validates both keys
+5. **Monitor**: Watch for `previous secret` log warnings — indicates old tokens still in circulation
+6. **Remove previous**: After rotation window (24h default), remove `{SECRET_NAME}_PREVIOUS`
+7. **Verify**: Confirm no `previous secret` warnings in logs
+
+#### 8.11.4 Environment Variable Convention
+
+```bash
+# normal operation (single key)
+HITL_SIGNING_SECRET=current-secret-value
+
+# during rotation (dual-key window)
+HITL_SIGNING_SECRET=new-secret-value
+HITL_SIGNING_SECRET_PREVIOUS=old-secret-value
+```
+
+The `_PREVIOUS` suffix is the convention for all rotatable secrets. Application code checks for `{name}_PREVIOUS` and, if present, enables dual-key validation.
+
+#### 8.11.5 Monitoring During Rotation
+
+| Log Pattern | Meaning | Action |
+|-------------|---------|--------|
+| `previous secret` warning | Old secret still in use | Normal during rotation window |
+| No warnings after 24h | All clients using new secret | Safe to remove `_PREVIOUS` |
+| Validation failures spike | Rotation misconfigured | Rollback: restore old secret as current |
+
 ---
 
 ## 9. Data Architecture
@@ -3275,6 +3430,95 @@ router.post('/api/v1/webhooks/inbound/:sourceId', async (req, res) => {
 - **DLQ inspection**: Phase 1: Admin API endpoint to list and inspect DLQ entries. Phase 2: Grafana dashboard for DLQ monitoring.
 - **Manual replay**: Admin can replay a DLQ event via API endpoint. Replay uses the original event ID for idempotency — already-processed events are safely deduplicated.
 - **Alerting**: Alert when DLQ depth exceeds 10 events in 1 hour (indicates systematic failure).
+
+### 12.5 Event Schema Rollout Policy (S3-W10)
+
+> **Closes**: WARNING S3-W10 — event schema rollout policy
+
+Inngest event schemas are defined using Zod v3 and registered at startup. Breaking schema changes require a phased rollout to prevent consumer failures.
+
+#### 12.5.1 Change Classification
+
+| Change Type | Breaking? | Procedure |
+|-------------|-----------|-----------|
+| Add optional field | No | Deploy directly; Zod `.optional()` is backward-compatible |
+| Add required field | **Yes** | Phased rollout (see below) |
+| Remove field | **Yes** | Phased rollout |
+| Rename field | **Yes** | Treat as add-new + remove-old |
+| Change field type | **Yes** | Phased rollout |
+
+#### 12.5.2 Phased Rollout Procedure
+
+For breaking changes, follow this 4-step deployment sequence:
+
+**Step 1 — Add new field as optional** (backward-compatible):
+```typescript
+// v1: existing schema
+const EventV1 = z.object({
+  userId: z.string(),
+  action: z.string(),
+});
+
+// v1.1: add new field as optional
+const EventV1_1 = z.object({
+  userId: z.string(),
+  action: z.string(),
+  actionType: z.string().optional(), // new field, optional for now
+});
+```
+
+**Step 2 — Deploy producers**: Update event emitters to include the new field. Old consumers still work (field is optional).
+
+**Step 3 — Deploy consumers**: Update event handlers to use the new field. Validate both old and new shapes:
+```typescript
+async ({ event }) => {
+  // handle both shapes during rollout
+  const actionType = event.data.actionType ?? event.data.action;
+  // ...
+}
+```
+
+**Step 4 — Make required and remove old**: Once all producers and consumers are updated:
+```typescript
+const EventV2 = z.object({
+  userId: z.string(),
+  actionType: z.string(), // now required
+  // action field removed
+});
+```
+
+#### 12.5.3 Versioning Convention
+
+- **Additive changes**: No version suffix needed (backward-compatible)
+- **Breaking changes**: Use `event/v2` naming convention:
+  ```typescript
+  // original
+  { name: 'workflow/started', ... }
+  // breaking change version
+  { name: 'workflow/started.v2', ... }
+  ```
+- Both versions coexist during rollout; old version deprecated after migration
+
+#### 12.5.4 Zod Coercion Strategy
+
+When migrating optional → required, use `.default()` during the transition period:
+
+```typescript
+// transitional schema: accepts old events without the field
+const TransitionalSchema = z.object({
+  userId: z.string(),
+  actionType: z.string().default('unknown'), // coerce missing to default
+});
+```
+
+After all producers emit the field, remove `.default()` to make it strictly required.
+
+#### 12.5.5 Testing Schema Changes
+
+Before deploying schema changes:
+1. Run existing tests against the new schema (must pass — backward compatibility)
+2. Add tests for the new field/shape
+3. Verify Inngest Dev Server accepts both old and new event shapes
 
 ---
 

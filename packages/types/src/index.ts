@@ -37,3 +37,15 @@ export { ERROR_TYPES, toProblemDetails } from './problem-details.js';
 // Event envelope schema
 export { EventEnvelopeSchema } from './schemas/event-envelope.js';
 export type { EventEnvelope } from './schemas/event-envelope.js';
+
+// Auth types (ID2-02: shared across OIDC + SAML adapters)
+export { ClaimMappingSchema, SamlAssertionSchema } from './auth.js';
+export type {
+  ClaimMapping,
+  ClaimMappingConfig,
+  SamlAssertion,
+  SamlError,
+  SamlLoginResult,
+  SamlMetadata,
+  SamlAdapter,
+} from './auth.js';
