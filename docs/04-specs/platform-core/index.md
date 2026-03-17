@@ -81,3 +81,16 @@ These platform-core services use specifications defined at the TSD root level:
 - Content filtering pipeline (pre-request + post-response, 3 domain tiers) — Sprint 12
 - Per-user durable rate limits (Redis-backed token bucket) — Sprint 12
 - Multi-provider routing (lowest_cost / latency_optimized / failover_only) — Sprint 12
+
+### 4.4 Notification Bus
+- Novu primary + SMTP fallback with configurable failover policy — Sprint 13
+- Silent-drop monitoring with delivery health alerts — Sprint 13
+- 4-tier priority routing (critical/high/normal/low) with quiet hours — Sprint 13
+- Per-approver webhook notifications for multi-approver HITL — Sprint 13
+
+### 4.5 Platform Features
+- Workflow definition CRUD API with versioning (draft/active/archived) — Sprint 13
+- Extensible webhook action points (HMAC-signed dispatch) — Sprint 13
+- Runtime feature flag service (local JSON provider, LaunchDarkly-ready) — Sprint 13
+- Consent withdrawal API (DPA Art 7) with audit trail — Sprint 13
+- Anomaly detection for bulk PII access (z-score baseline) — Sprint 13

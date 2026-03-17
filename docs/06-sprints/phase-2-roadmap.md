@@ -59,15 +59,16 @@ Source: [sprint-12-plan.md](./sprint-12-plan.md), [llm-gateway.md](../04-specs/p
 
 Source: [sprint-12-plan.md](./sprint-12-plan.md), [WARNINGS_REGISTER.md](../WARNINGS_REGISTER.md)
 
-### Epic 5: Notification Expansion
+### Epic 5: Notification Expansion — DELIVERED (Sprint 13)
 
-- Direct SMTP fallback for HITL notifications ([ADD](../03-architecture/platform-core-add.md) §6.4)
-- Novu delivery rate monitoring — detect silent notification drops (C-3: Crypto BRD requires real-time alerting; Novu free-tier silently drops notifications beyond quota)
-- Push notifications / FCM ([ADD](../03-architecture/platform-core-add.md) §6)
-- SMS channel ([ADD](../03-architecture/platform-core-add.md) §6)
-- Self-hosted Novu option (cost optimization trigger)
+- ✅ SMTP fallback for HITL notifications (NOTIF2-01) — Novu primary → SMTP secondary failover
+- ✅ Novu delivery rate monitoring (NOTIF2-02) — silent-drop detection with health alerts
+- ✅ Priority routing + quiet hours (NOTIF2-03) — 4-tier priority, FR-CORE-NOTIF-003
+- ✅ Per-approver webhook notifications (NOTIF2-04) — HMAC-signed per-approver dispatch
+- Push notifications / FCM — Phase 3+
+- SMS channel — Phase 3+
 
-Source: [platform-core-add.md](../03-architecture/platform-core-add.md) §6, Tier 1 re-evaluation C-3
+Source: [sprint-13-plan.md](./sprint-13-plan.md)
 
 ### Epic 6: Infrastructure Hardening — DELIVERED (Sprint 10)
 
@@ -82,15 +83,17 @@ Source: [platform-core-add.md](../03-architecture/platform-core-add.md) §6, Tie
 
 Source: [sprint-10-plan.md](./sprint-10-plan.md), [platform-core-add.md](../03-architecture/platform-core-add.md) §2.3.2, §8.8
 
-### Epic 7: Platform Features
+### Epic 7: Platform Features — PARTIALLY DELIVERED (Sprint 13)
 
-- Visual workflow rule builder (FR-CORE-WFE-001)
-- Dynamic MCP server discovery API (FR-CORE-MCP-001, [ADD](../03-architecture/platform-core-add.md) §5.2)
-- Per-tool MCP circuit breaker override ([ADD](../03-architecture/platform-core-add.md) §5.2)
-- Runtime feature flag service — LaunchDarkly/Unleash ([configuration.md](../04-specs/configuration.md) §5.3)
-- Self-service consent withdrawal UI ([ADD](../03-architecture/platform-core-add.md) §9.4.2, DPA Art 7)
+- ✅ Workflow definition CRUD API (FEAT-01, Sprint 13) — versioned, FR-CORE-INT-001
+- ✅ Extensible webhook action points (FEAT-02, Sprint 13) — HMAC-signed, FR-CORE-INT-002
+- ✅ Runtime feature flag service (FEAT-03, Sprint 13) — local JSON provider, LaunchDarkly-ready interface
+- ✅ Self-service consent withdrawal API (FEAT-04, Sprint 13) — DPA Art 7, audit trail
+- Visual workflow rule builder (FR-CORE-WFE-001) — Sprint 14
+- Dynamic MCP server discovery API — Sprint 14
+- Per-tool MCP circuit breaker override — Sprint 14
 
-Source: [platform-core-frd.md](../02-requirements/platform-core-frd.md), [platform-core-add.md](../03-architecture/platform-core-add.md) §5, [configuration.md](../04-specs/configuration.md)
+Source: [sprint-13-plan.md](./sprint-13-plan.md), [platform-core-frd.md](../02-requirements/platform-core-frd.md)
 
 ### Epic 8: Deferred Modules (Buy vs Build)
 
