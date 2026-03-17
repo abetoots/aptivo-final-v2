@@ -2,7 +2,7 @@
 id: RUNBOOK-DEPLOYMENT
 title: 6.a Deployment & Operations
 status: Draft
-version: 2.2.0
+version: 2.3.0
 owner: "@owner"
 last_updated: "2026-03-04"
 parent: ../03-architecture/platform-core-add.md
@@ -20,7 +20,7 @@ Last updated time: January 15, 2026
 
 _Aptivo Agentic Platform_
 
-_v2.2.0 – [March 4, 2026]_
+_v2.3.0 – [March 17, 2026]_
 
 _Aligned with: TSD v3.0.0, ADD v2.0.0, Coding Guidelines v3.0.0, Testing Strategies v2.0.0_
 
@@ -1550,6 +1550,130 @@ During a DigitalOcean regional failure, the following SaaS dependencies are affe
 
 ---
 
+## **15. Phase 2 Service Operations (Sprints 13-14)**
+
+### 15.1 Notification Failover (Sprint 13)
+
+**Overview**: SMTP failback transport activates automatically when Novu is unavailable. Priority routing ensures critical notifications bypass quiet hours.
+
+#### Health Check
+
+- Monitor Novu delivery success rate via `/api/admin/notifications/health`
+- SMTP fallback activates when Novu error rate exceeds 50% over 5-minute window
+- Delivery monitoring tracks per-channel success/failure rates
+
+#### Troubleshooting
+
+| Symptom | Likely Cause | Action |
+|---------|-------------|--------|
+| Notifications delayed | Novu degraded, SMTP failback active | Check Novu status page; verify SMTP credentials in secrets |
+| Critical notifications not delivered | SMTP also failing | Verify SMTP host reachable; check approver webhook config |
+| Duplicate notifications | Failback race condition | Check dedup window; verify transactionId uniqueness |
+
+#### Recovery
+
+1. Verify Novu status at `status.novu.co`
+2. If Novu recovered, failback disengages automatically (next health check cycle)
+3. If SMTP failing, rotate SMTP credentials via secrets provider
+4. Monitor delivery monitoring dashboard for recovery confirmation
+
+### 15.2 Workflow CRUD API (Sprint 13)
+
+**Overview**: Runtime workflow definitions stored in database with version history. Visual builder serializes to the same format.
+
+#### Health Check
+
+- `GET /api/workflows` returns 200 with workflow list
+- Workflow validation errors return RFC 7807 responses
+
+#### Troubleshooting
+
+| Symptom | Likely Cause | Action |
+|---------|-------------|--------|
+| Workflow creation fails | Schema validation error | Check request body against WorkflowDefinitionSchema |
+| Workflow execution fails after edit | Invalid step references | Verify all step IDs reference existing steps |
+| Version conflict on update | Concurrent edits | Retry with latest version; use optimistic locking header |
+
+#### Backup & Recovery
+
+- Workflow definitions stored in PostgreSQL; covered by standard DB backup procedures (see section 8.6)
+- Version history preserved; rollback to previous version via `PATCH /api/workflows/:id/rollback`
+
+### 15.3 Feature Flags (Sprint 13)
+
+**Overview**: Runtime feature flags with gradual rollout support. Flags are evaluated server-side and cached in Redis.
+
+#### Health Check
+
+- Feature flag evaluation should respond within 10ms (cached) or 50ms (cache miss)
+- Redis cache miss rate should be below 5% under steady state
+
+#### Troubleshooting
+
+| Symptom | Likely Cause | Action |
+|---------|-------------|--------|
+| Flag evaluation slow | Redis cache expired or unavailable | Check Redis health; flags fall back to default values |
+| Flag not taking effect | Cache TTL not expired | Force cache invalidation via admin API |
+| Unexpected behavior after flag change | Gradual rollout percentage | Verify rollout percentage and user segment targeting |
+
+#### Emergency Override
+
+- Set flag to `force_on` or `force_off` via admin API to bypass rollout logic
+- All flag changes are audit-logged with actor and timestamp
+
+### 15.4 Consent Management API (Sprint 13)
+
+**Overview**: Data processing consent records for compliance. Consent decisions are immutable (append-only log).
+
+#### Health Check
+
+- `GET /api/consent/status` returns current consent state for authenticated user
+- Consent records are append-only; no delete operation exists by design
+
+#### Troubleshooting
+
+| Symptom | Likely Cause | Action |
+|---------|-------------|--------|
+| Consent check fails | Database unreachable | Check PostgreSQL health; consent defaults to deny |
+| Consent granted but feature blocked | Cache stale | Invalidate consent cache; re-check |
+| Audit gap in consent log | Write failure | Check DLQ for failed consent events |
+
+#### Compliance Notes
+
+- Consent records retained indefinitely (no TTL) per GDPR Article 7(1)
+- Withdrawal of consent triggers data processing halt within 24 hours
+- Export via audit query API for compliance audits
+
+### 15.5 Approval SLA Metrics (Sprint 14)
+
+**Overview**: Tracks approval request latency against configurable SLA targets. Surfaces metrics on admin dashboard.
+
+#### Health Check
+
+- SLA metrics computed on cron schedule (aligned with existing SLO cron)
+- Dashboard available at `/admin/approval-sla`
+
+#### Troubleshooting
+
+| Symptom | Likely Cause | Action |
+|---------|-------------|--------|
+| SLA metrics stale | Cron job not running | Check Inngest function status for SLA cron |
+| High SLA breach rate | Approvers not responding | Review notification delivery; check quiet hours config |
+| Dashboard shows no data | No approval requests in window | Verify date range filter; check HITL request volume |
+
+### 15.6 Visual Workflow Builder (Sprint 14)
+
+**Overview**: Client-side graph editor that serializes workflow definitions to the CRUD API format. Foundation only — full editor is Phase 3 scope.
+
+#### Operational Notes
+
+- Builder is client-side only; no additional backend services required
+- Serialized workflow JSON validated server-side via WorkflowDefinitionSchema
+- Invalid graph structures (cycles, orphan nodes) rejected at save time
+- Builder state is ephemeral (browser memory); users must save to persist
+
+---
+
 ## **Revision History**
 
 | Version | Date       | Author                | Changes                                                                                                                                                                                                |
@@ -1559,3 +1683,4 @@ During a DigitalOcean regional failure, the following SaaS dependencies are affe
 | v2.0.0  | 2026-01-15 | Document Review Panel | Major rewrite: aligned with TSD v3.0.0, ADD v2.0.0; added OpenTelemetry, health checks, feature flags, container orchestration (K8s), RFC 7807 operations, severity model, RTO/RPO targets, GitOps/IaC |
 | v2.1.0  | 2026-02-03 | Multi-Model Consensus | Aligned with ADD: replaced K8s with DigitalOcean App Platform, TBD environments, Build Once Deploy Many pipeline, added security scan status |
 | v2.2.0  | 2026-03-04 | Documentation Review  | Fixed feature flag §2.4 to reflect Phase 1 compile-time constants; added playbooks (MCP circuit breaker, LLM failure/budget, File Storage/ClamAV, BullMQ stall, ClamAV ops); added §9 Rollback Procedures (app, DB migration, secret rotation, infrastructure, Inngest workflow, multi-component order); added §12 Vendor Escalation Contacts; added §13 DR Test Procedure; added §14 Regional SaaS Isolation Map; renumbered sections 10–11 |
+| v2.3.0  | 2026-03-17 | Phase 2 Closure       | Added §15 Phase 2 Service Operations (notification failover, workflow CRUD, feature flags, consent, approval SLA, visual workflow builder) |

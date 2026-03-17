@@ -65,12 +65,12 @@
 | Resolved (doc done, impl pending) | 0 | All implementation follow-ups completed across Sprints 1–7 |
 | Resolved → Sprint 0 | 25 | Bucket B — empirically validated ✓ |
 | Resolved → Sprints 1–7 | 32 | Bucket C — all implemented ✓ |
-| Bucket D | 5 | 2 accepted + 3 deferred (Phase 2+) |
-| **Total outstanding (needing action)** | **0** | All 37 Sprint-mapped items resolved in Phase 1 |
+| Bucket D | 5 | 2 accepted + 3 resolved in Phase 2 (S2-W5 Sprint 12, S3-W10 Sprint 9, S5-W17 Sprint 12) |
+| **Total outstanding (needing action)** | **0** | All 37 Sprint-mapped items resolved; all 3 deferred items resolved in Phase 2 |
 
 *All 32 Sprint 1–7 items fully implemented and verified.*
 *All 9 Tier 3 findings (3 ERRORs + 6 WARNINGs) were resolved via documentation fixes.*
-*Bucket D items (2 accepted, 3 deferred) are Phase 2+ scope — not blocking.*
+*Bucket D: 2 accepted risks remain (T1-W22 PostgreSQL SPOF, S3-W9 MCP Redis edge case). All 3 previously-deferred items resolved in Phase 2 (Sprints 9-12).*
 
 ---
 
@@ -506,7 +506,7 @@ Recurring patterns across multiple concerns and sessions:
 | Duplicates / overlaps | 0 | 5 | 0 | 6 (incl. T1-W24 = S3-W7) |
 | Resolved (implemented or doc-only) | 28 | 99 | 9 | 136 |
 | Accepted (acknowledged, not blocking) | 1 | 21 | 0 | 22 |
-| Deferred (Phase 2+) | 0 | 3 | 0 | 3 |
+| Deferred (Phase 2+) → resolved | 0 | 3 | 0 | 3 (all resolved in Phase 2) |
 | N/A | 0 | 1 | 0 | 1 (S7-W25 BullMQ) |
 | **Open WARNINGs** | **0** | **0** | **0** | **0** |
 | Human review flagged | 0 | 2 | 0 | 2 (S3-W9, S6-W14) |
@@ -523,7 +523,7 @@ Recurring patterns across multiple concerns and sessions:
 | **Sprint 3 (MCP Layer + File Storage)** | 4 | MCP-09, MCP-10, MCP-06 scope, FS-03 (was MCP-11) |
 | **Sprint 4 (Audit + Notification)** | 1 | AUD-04 (was T1-W21) ✓ |
 | **Sprint 5 (Integration & Hardening)** | 23 | 22 resolved ✓, 1 N/A (BullMQ) |
-| **Bucket D (no sprint)** | 5 | 2 accepted + 3 deferred (Phase 2+) |
+| **Bucket D (no sprint)** | 5 | 2 accepted + 3 resolved in Phase 2 |
 | **Total mapped** | **37** | **All resolved** ✓ |
 
-*Sprint 0–7 total (32 mapped): All resolved. S4-W10 + T1-W23 resolved in Sprint 6 (SLO cron evaluators). S2-W12 resolved in Sprint 7 (LLM Usage Dashboard). 1 N/A (S7-W25, BullMQ not adopted). Bucket D: 2 accepted risks + 3 deferred to Phase 2+.*
+*Sprint 0–7 total (32 mapped): All resolved. S4-W10 + T1-W23 resolved in Sprint 6 (SLO cron evaluators). S2-W12 resolved in Sprint 7 (LLM Usage Dashboard). 1 N/A (S7-W25, BullMQ not adopted). Bucket D: 2 accepted risks + 3 deferred items now resolved in Phase 2 (S2-W5 OBS-04, S3-W10 ADD §12.5, S5-W17 OBS-01).*
