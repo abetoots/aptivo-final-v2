@@ -183,47 +183,52 @@ export const paperTradeFn = inngest.createFunction(
         const multiService = getHitlMultiApproverService();
 
         // attempt multi-approver quorum policy (HITL2-07)
+        // wrapped in try/catch so policy creation throws fall back to single-approver
         if (multiService) {
-          // create quorum policy: 2-of-3 risk reviewers
-          const policy = await multiService.policyStore.create({
-            name: `crypto-trade-${signalId}`,
-            type: 'quorum',
-            threshold: 2,
-            approverRoles: ['risk_analyst', 'risk_analyst', 'risk_manager'],
-            maxRetries: 3,
-            timeoutSeconds: 900,
-            escalationPolicy: null,
-          });
+          try {
+            // create quorum policy: 2-of-3 risk reviewers
+            const policy = await multiService.policyStore.create({
+              name: `crypto-trade-${signalId}`,
+              type: 'quorum',
+              threshold: 2,
+              approverRoles: ['risk_analyst', 'risk_analyst', 'risk_manager'],
+              maxRetries: 3,
+              timeoutSeconds: 900,
+              escalationPolicy: null,
+            });
 
-          const approverIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+            const approverIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
 
-          const result = await multiService.createMultiApproverRequest({
-            workflowId: crypto.randomUUID(),
-            domain: 'crypto',
-            actionType: 'trade-approval',
-            summary: `Paper trade: ${token} ${direction} (confidence: ${confidenceScore}%)`,
-            details: {
-              signalId,
-              token,
-              direction,
-              confidenceScore,
-              analysis: llmResult.analysis,
-            },
-            approverIds,
-            policyId: policy.id,
-            ttlSeconds: 900,
-          });
-
-          if (result.ok) {
-            return {
-              success: true as const,
-              requestId: result.value.requestId,
-              isMultiApprover: true as const,
-              policyId: policy.id,
+            const result = await multiService.createMultiApproverRequest({
+              workflowId: crypto.randomUUID(),
+              domain: 'crypto',
+              actionType: 'trade-approval',
+              summary: `Paper trade: ${token} ${direction} (confidence: ${confidenceScore}%)`,
+              details: {
+                signalId,
+                token,
+                direction,
+                confidenceScore,
+                analysis: llmResult.analysis,
+              },
               approverIds,
-            };
+              policyId: policy.id,
+              ttlSeconds: 900,
+            });
+
+            if (result.ok) {
+              return {
+                success: true as const,
+                requestId: result.value.requestId,
+                isMultiApprover: true as const,
+                policyId: policy.id,
+                approverIds,
+              };
+            }
+            // multi-approver failed — fall through to single-approver
+          } catch {
+            // policy creation or multi-request threw — fall back to single-approver
           }
-          // multi-approver failed — fall through to single-approver
         }
 
         // fallback: single-approver hitl

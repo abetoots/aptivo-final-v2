@@ -19,3 +19,27 @@ export type {
   InsertAuditLog,
 } from './types.js';
 export { DEFAULT_MASKING_CONFIG } from './types.js';
+
+// OBS-02: audit query & export
+export { createAuditQueryService } from './query/index.js';
+export type {
+  AuditQueryServiceDeps,
+  AuditQueryFilters,
+  AuditQueryPagination,
+  AuditLogRecord,
+  AuditQueryResult,
+  AuditExportResult,
+  AuditQueryStore,
+} from './query/index.js';
+
+// OBS-03: retention policies
+export { createRetentionService } from './retention/index.js';
+export {
+  DEFAULT_RETENTION_POLICIES,
+} from './retention/index.js';
+export type {
+  RetentionServiceDeps,
+  RetentionPolicy,
+  RetentionPurgeResult,
+  RetentionStore,
+} from './retention/index.js';

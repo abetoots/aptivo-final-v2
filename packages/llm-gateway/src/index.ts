@@ -47,3 +47,50 @@ export { validateOutput, validateTextOutput } from './validation/index.js';
 // rate limiting
 export { TokenBucket, InMemoryRateLimitStore } from './rate-limit/index.js';
 export type { TokenBucketConfig, RateLimitStore } from './rate-limit/index.js';
+
+// durable rate limiting (LLM2-03)
+export { createRedisRateLimitStore, createDurableRateLimiter, DEFAULT_USER_RATE_LIMITS } from './rate-limit/index.js';
+export type {
+  RedisRateLimitClient,
+  RedisRateLimitStoreConfig,
+  DurableTokenBucketConfig,
+  PerUserRateLimitConfig,
+  RateLimitResult,
+  DurableRateLimiter,
+} from './rate-limit/index.js';
+
+// safety — prompt injection detection (LLM2-01)
+export { createInjectionClassifier, DEFAULT_INJECTION_PATTERNS, DEFAULT_DOMAIN_THRESHOLDS } from './safety/index.js';
+export type {
+  InjectionClassifier,
+  InjectionVerdict,
+  DomainThresholds,
+  PatternCategory,
+  InjectionClassifierConfig,
+} from './safety/index.js';
+
+// safety — content filtering pipeline (LLM2-02)
+export { createContentFilter, DEFAULT_CONTENT_PATTERNS, DEFAULT_DOMAIN_TIERS, DEFAULT_TIER_CATEGORIES } from './safety/index.js';
+export type {
+  ContentFilter,
+  ContentFilterError,
+  ContentPattern,
+  ContentFilterStage,
+  ContentFilterVerdict,
+  DomainPolicyTier,
+  ContentFilterConfig,
+} from './safety/index.js';
+
+// routing — multi-provider routing (LLM2-04)
+export { createProviderRouter, createHealthTracker } from './routing/index.js';
+export type {
+  ProviderRouter,
+  NoProviderAvailableError,
+  HealthTracker,
+  HealthTrackerDeps,
+  RoutingStrategy,
+  ProviderSelection,
+  ProviderHealth,
+  ProviderCost,
+  ProviderRouterDeps,
+} from './routing/index.js';

@@ -10,7 +10,9 @@
     "./budget": "./src/budget/index.ts",
     "./usage": "./src/usage/index.ts",
     "./validation": "./src/validation/index.ts",
-    "./rate-limit": "./src/rate-limit/index.ts"
+    "./rate-limit": "./src/rate-limit/index.ts",
+    "./safety": "./src/safety/index.ts",
+    "./routing": "./src/routing/index.ts"
   },
   "scripts": {
     "build": "tsc",

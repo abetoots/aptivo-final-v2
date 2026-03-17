@@ -64,6 +64,9 @@ import {
   createReplayDlqEvents,
 } from '@aptivo/audit/async';
 
+// pii read audit (OBS-04)
+import { createPiiReadAuditMiddleware } from '@aptivo/audit/middleware';
+
 // notifications
 import {
   createNotificationService,
@@ -104,6 +107,11 @@ import {
   UsageLogger,
   OpenAIProvider,
   AnthropicProvider,
+  TokenBucket,
+  InMemoryRateLimitStore as LlmInMemoryRateLimitStore,
+  createRedisRateLimitStore,
+  createDurableRateLimiter,
+  createProviderRouter,
 } from '@aptivo/llm-gateway';
 import type { LLMProvider } from '@aptivo/llm-gateway';
 
@@ -466,6 +474,21 @@ function buildLlmProviders(): {
   return { providers, modelToProvider };
 }
 
+// builds the rate limit store — redis-backed when session redis is available,
+// in-memory fallback otherwise (LLM2-03)
+function buildLlmRateLimitStore() {
+  const redis = getSessionRedis();
+  if (redis) {
+    return createRedisRateLimitStore({ redis });
+  }
+  return new LlmInMemoryRateLimitStore();
+}
+
+// durable rate limiter — exposed for composition root consumers (LLM2-03)
+export const getDurableRateLimiter = lazy(() =>
+  createDurableRateLimiter(buildLlmRateLimitStore()),
+);
+
 export const getLlmGateway = lazy(() => {
   const budgetStore = createDrizzleBudgetStore(
     db() as unknown as Parameters<typeof createDrizzleBudgetStore>[0],
@@ -476,11 +499,21 @@ export const getLlmGateway = lazy(() => {
 
   const { providers, modelToProvider } = buildLlmProviders();
 
+  // use redis-backed rate limit store when available (LLM2-03)
+  const rateLimitStore = buildLlmRateLimitStore();
+
+  // wire multi-provider router when 2+ providers are available (LLM2-04)
+  const router = providers.size >= 2
+    ? createProviderRouter({ providers, modelToProvider })
+    : undefined;
+
   return createLlmGateway({
     providers,
     budgetService: new BudgetService(budgetStore),
     usageLogger: new UsageLogger(usageLogStore),
+    rateLimiter: new TokenBucket(rateLimitStore),
     modelToProvider,
+    router,
   });
 });
 
@@ -659,4 +692,22 @@ export const getProcessAuditEventFn = lazy(() =>
 
 export const getReplayDlqEventsFn = lazy(() =>
   createReplayDlqEvents(getAuditService(), getDlqStore()),
+);
+
+// ---------------------------------------------------------------------------
+// pii read audit middleware (OBS-04)
+// ---------------------------------------------------------------------------
+
+export const getPiiReadAuditMiddleware = lazy(() =>
+  createPiiReadAuditMiddleware({
+    emit: async (event) => {
+      const auditService = getAuditService();
+      await auditService.emit({
+        actor: { id: event.actor, type: 'system' },
+        action: event.action,
+        resource: event.resource,
+        metadata: event.metadata,
+      });
+    },
+  }),
 );

@@ -175,9 +175,9 @@ All 25 findings empirically validated during spike week. 469 tests across 15 spi
 |---------|---------|-------------|
 | T1-W22 | PostgreSQL shared DB SPOF | accepted — Phase 1 risk (ADD §2.3.2) |
 | S3-W9 | MCP Redis recovery edge case | accepted — human review required |
-| S2-W5 | PII read audit trail | deferred — Phase 2+ |
+| S2-W5 | PII read audit trail | **resolved** (implemented) — `createPiiReadAuditMiddleware()` in `@aptivo/audit/middleware` (Sprint 12, OBS-04) |
 | S3-W10 | Event schema rollout order | **resolved** (documentation) — Event Schema Rollout Policy in ADD §12.5 |
-| S5-W17 | Burn-rate alerting | deferred — Phase 2+ |
+| S5-W17 | Burn-rate alerting | **resolved** (implemented) — multi-window burn-rate alerting in `slo-alerts.ts` (Sprint 12, OBS-01) |
 
 ---
 
@@ -294,7 +294,7 @@ All 25 findings empirically validated during spike week. 469 tests across 15 spi
 | S2-W2 | logging-pii | `sanitizeForLogging` only redacts auth fields, not PII | Extend to redact email, name, phone, address | Claude | **resolved** (implemented) — `sanitizeForLogging()` in `apps/web/src/lib/security/sanitize-logging.ts` (INT-06) |
 | S2-W3 | logging-pii | Access log PII not addressed (LB IPs, URLs, user agents) | Address PII in platform-level access logs | Claude | **resolved** (implemented) — `hashQueryParam()` in `security/sanitize-logging.ts` (INT-06) |
 | S2-W4 | logging-pii | App log retention not aligned with PII retention | Align log retention with PII requirements | Claude | **resolved** (documentation) |
-| S2-W5 | logging-pii | No audit trail for general PII data access (read operations) | Add audit for PII read operations | Claude | deferred |
+| S2-W5 | logging-pii | No audit trail for general PII data access (read operations) | Add audit for PII read operations | Claude | **resolved** (implemented) — `createPiiReadAuditMiddleware()` + `withPiiReadAudit` HOF in `@aptivo/audit/middleware` (Sprint 12, OBS-04) |
 | S2-W6 | data-retention | Legal basis not documented per data type | Map legal basis to each PII data type | All 3 | **resolved** (documentation) |
 | S2-W7 | data-retention | Consent collection/withdrawal mechanism undocumented | Document consent management mechanism | Claude, Gemini | **resolved** (documentation) |
 | S2-W8 | data-retention | Deletion cascade across systems undocumented | Document deletion cascade across all storage systems | Claude | **resolved** (documentation) |
@@ -364,7 +364,7 @@ All 25 findings empirically validated during spike week. 469 tests across 15 spi
 | S5-W14 | alerting-slo | HITL delivery latency SLO — no specific alert | Add HITL-specific latency alert | All 3 | **resolved** (implemented) — `hitlLatencyAlert` in `slo-alerts.ts` (INT-04) |
 | S5-W15 | alerting-slo | MCP success rate SLO — no alert | Add MCP success rate alert | Claude, Codex | **resolved** (implemented) — `mcpSuccessAlert` in `slo-alerts.ts` (INT-04) |
 | S5-W16 | alerting-slo | Audit integrity SLO — no alert | Add audit completeness alert | Claude | **resolved** (implemented) — `auditIntegrityAlert` in `slo-alerts.ts` (INT-04) |
-| S5-W17 | alerting-slo | No burn-rate alerting for any SLO | Document burn-rate alert plan | All 3 | deferred |
+| S5-W17 | alerting-slo | No burn-rate alerting for any SLO | Document burn-rate alert plan | All 3 | **resolved** (implemented) — `workflowBurnRateAlert` + `mcpBurnRateAlert` in `slo-alerts.ts` (Sprint 12, OBS-01) |
 | S5-W18 | alerting-slo | No SLO-alert cross-reference document | Create SLO-to-alert mapping table | All 3 | **resolved** (documentation) |
 
 ### Session 6: Operational Readiness

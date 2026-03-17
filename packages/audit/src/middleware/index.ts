@@ -11,3 +11,16 @@ export type {
   RbacChangeContext,
   AuditMiddlewareLogger,
 } from './audit-middleware.js';
+
+// OBS-04: pii read audit trail
+export {
+  createPiiReadAuditMiddleware,
+  createPiiFieldRegistry,
+  withPiiReadAudit,
+  DEFAULT_PII_FIELDS,
+} from './pii-read-audit.js';
+
+export type {
+  PiiReadAuditDeps,
+  PiiFieldRegistry,
+} from './pii-read-audit.js';

@@ -13,13 +13,13 @@ import {
   type SloMetrics,
 } from '../src/lib/observability/slo-alerts';
 
-// helper for healthy baseline metrics
+// helper for healthy baseline metrics (zero failures for burn-rate compat)
 const healthyMetrics: SloMetrics = {
   workflowTotal: 1000,
-  workflowSuccess: 999,
+  workflowSuccess: 1000,
   hitlDeliveryLatencyP95Ms: 2000,
   mcpCallTotal: 500,
-  mcpCallSuccess: 499,
+  mcpCallSuccess: 500,
   auditDlqPendingCount: 5,
   retentionFailureCount: 0,
   notificationTotal: 200,
@@ -98,9 +98,9 @@ describe('INT-04: SLO Alerts', () => {
   });
 
   describe('evaluateAllSlos', () => {
-    it('evaluates all 6 alerts', () => {
+    it('evaluates all 8 alerts (6 threshold + 2 burn-rate)', () => {
       const results = evaluateAllSlos(healthyMetrics);
-      expect(results.size).toBe(6);
+      expect(results.size).toBe(8);
     });
 
     it('all ok with healthy metrics', () => {
@@ -127,7 +127,7 @@ describe('INT-04: SLO Alerts', () => {
       for (const [, result] of results) {
         if (result.status === 'firing') firingCount++;
       }
-      expect(firingCount).toBe(6);
+      expect(firingCount).toBe(8);
     });
   });
 });

@@ -1,0 +1,35 @@
+/**
+ * LLM2-01: Prompt Injection Detection — barrel exports
+ * LLM2-02: Content Filtering Pipeline — barrel exports
+ * @task LLM2-01, LLM2-02
+ */
+
+// injection classifier (LLM2-01)
+export { createInjectionClassifier } from './injection-classifier.js';
+export type { InjectionClassifier } from './injection-classifier.js';
+
+export { DEFAULT_INJECTION_PATTERNS } from './injection-patterns.js';
+
+export type {
+  Domain,
+  InjectionVerdict,
+  DomainThresholds,
+  PatternCategory,
+  InjectionClassifierConfig,
+} from './safety-types.js';
+export { DEFAULT_DOMAIN_THRESHOLDS } from './safety-types.js';
+
+// content filter (LLM2-02)
+export { createContentFilter } from './content-filter.js';
+export type { ContentFilter, ContentFilterError } from './content-filter.js';
+
+export { DEFAULT_CONTENT_PATTERNS } from './content-patterns.js';
+export type { ContentPattern } from './content-patterns.js';
+
+export type {
+  ContentFilterStage,
+  ContentFilterVerdict,
+  DomainPolicyTier,
+  ContentFilterConfig,
+} from './safety-types.js';
+export { DEFAULT_DOMAIN_TIERS, DEFAULT_TIER_CATEGORIES } from './safety-types.js';

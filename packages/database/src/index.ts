@@ -5,7 +5,7 @@
  * @see docs/04-specs/common-patterns.md §2 (Result types for DB operations)
  */
 
-export { createDatabase, type Database } from './client.js';
+export { createDatabase, type Database, type PoolOptions } from './client.js';
 export {
   users,
   sessions,

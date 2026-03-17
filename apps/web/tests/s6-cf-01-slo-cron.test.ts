@@ -45,10 +45,10 @@ import {
 
 const healthyMetrics: SloMetrics = {
   workflowTotal: 1000,
-  workflowSuccess: 999,
+  workflowSuccess: 1000,
   hitlDeliveryLatencyP95Ms: 2000,
   mcpCallTotal: 500,
-  mcpCallSuccess: 499,
+  mcpCallSuccess: 500,
   auditDlqPendingCount: 5,
   retentionFailureCount: 0,
   notificationTotal: 200,
@@ -58,8 +58,8 @@ const healthyMetrics: SloMetrics = {
 function makeDeps(overrides?: Partial<SloMetricsDeps>): SloMetricsDeps {
   return {
     getAuditDlqPendingCount: async () => 5,
-    getWorkflowCounts: async () => ({ total: 1000, success: 999 }),
-    getMcpCallCounts: async () => ({ total: 500, success: 499 }),
+    getWorkflowCounts: async () => ({ total: 1000, success: 1000 }),
+    getMcpCallCounts: async () => ({ total: 500, success: 500 }),
     getHitlLatencyP95: async () => 2000,
     getRetentionFailureCount: async () => 0,
     getNotificationCounts: async () => ({ total: 200, delivered: 200 }),
@@ -155,10 +155,10 @@ describe('S6-CF-01: collectSloMetrics', () => {
 
     expect(metrics).toEqual({
       workflowTotal: 1000,
-      workflowSuccess: 999,
+      workflowSuccess: 1000,
       hitlDeliveryLatencyP95Ms: 2000,
       mcpCallTotal: 500,
-      mcpCallSuccess: 499,
+      mcpCallSuccess: 500,
       auditDlqPendingCount: 5,
       retentionFailureCount: 0,
       notificationTotal: 200,
@@ -199,7 +199,7 @@ describe('S6-CF-01: SLO cron function', () => {
     const { result } = await engine.execute();
 
     expect(result).toMatchObject({
-      totalAlerts: 6,
+      totalAlerts: 8,
       firingCount: 0,
     });
     expect(result.evaluatedAt).toBeDefined();

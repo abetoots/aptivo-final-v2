@@ -1,8 +1,14 @@
 /**
  * INT-04: core SLO alert definitions
- * @task INT-04, S6-CF-01
+ * @task INT-04, S6-CF-01, OBS-01
  * @warning S5-W13, S5-W14, S5-W15, S5-W16, S4-W10, T1-W23
  */
+
+import {
+  evaluateBurnRate,
+  DEFAULT_BURN_RATE_CONFIGS,
+  type WindowMetrics,
+} from './burn-rate.js';
 
 // -- types --
 
@@ -198,6 +204,80 @@ export const notificationDeliveryAlert: SloAlert = {
   },
 };
 
+// -- burn-rate alert helpers (OBS-01) --
+
+/**
+ * create an SloAlert adapter that wraps burn-rate evaluation into
+ * the existing SloAlertResult interface. the fast window metrics are
+ * derived from the standard SloMetrics snapshot (5-minute window).
+ * the slow window uses the same snapshot scaled — in production the
+ * slow window would come from a longer aggregation, but for the alert
+ * interface we use the same metrics and flag it accordingly.
+ */
+function createBurnRateAlert(configIndex: number): SloAlert {
+  const config = DEFAULT_BURN_RATE_CONFIGS[configIndex]!;
+
+  // derive window metrics from the SloMetrics snapshot
+  const deriveWindows = (
+    metrics: SloMetrics,
+  ): { fast: WindowMetrics; slow: WindowMetrics } => {
+    if (config.name === 'workflow-success-burn') {
+      const total = metrics.workflowTotal;
+      const failed = total - metrics.workflowSuccess;
+      return {
+        fast: { totalEvents: total, failedEvents: failed },
+        slow: { totalEvents: total, failedEvents: failed },
+      };
+    }
+    // mcp-success-burn
+    const total = metrics.mcpCallTotal;
+    const failed = total - metrics.mcpCallSuccess;
+    return {
+      fast: { totalEvents: total, failedEvents: failed },
+      slow: { totalEvents: total, failedEvents: failed },
+    };
+  };
+
+  return {
+    id: `slo-burn-${config.name}`,
+    name: `Burn Rate: ${config.name}`,
+    description: `Fires when ${config.name} burn rate exceeds ${config.fastBurnMultiplier}x (critical) or ${config.slowBurnMultiplier}x (warning)`,
+    warning: 'OBS-01',
+    evaluate: (metrics) => {
+      const { fast, slow } = deriveWindows(metrics);
+      const result = evaluateBurnRate(config, fast, slow);
+
+      if (result.status === 'critical') {
+        return {
+          status: 'firing',
+          value: result.fastBurnRate,
+          threshold: config.fastBurnMultiplier,
+          message: `${config.name} fast burn rate ${result.fastBurnRate.toFixed(1)}x exceeds ${config.fastBurnMultiplier}x threshold (critical)`,
+        };
+      }
+
+      if (result.status === 'warning') {
+        return {
+          status: 'firing',
+          value: result.slowBurnRate,
+          threshold: config.slowBurnMultiplier,
+          message: `${config.name} slow burn rate ${result.slowBurnRate.toFixed(1)}x exceeds ${config.slowBurnMultiplier}x threshold (warning)`,
+        };
+      }
+
+      // ok or suppressed
+      return {
+        status: 'ok',
+        value: result.fastBurnRate,
+        threshold: config.fastBurnMultiplier,
+      };
+    },
+  };
+}
+
+export const workflowBurnRateAlert: SloAlert = createBurnRateAlert(0);
+export const mcpBurnRateAlert: SloAlert = createBurnRateAlert(1);
+
 // -- aggregate evaluator --
 
 export const ALL_SLO_ALERTS: SloAlert[] = [
@@ -207,6 +287,8 @@ export const ALL_SLO_ALERTS: SloAlert[] = [
   auditIntegrityAlert,
   retentionFailureAlert,
   notificationDeliveryAlert,
+  workflowBurnRateAlert,
+  mcpBurnRateAlert,
 ];
 
 export function evaluateAllSlos(

@@ -97,9 +97,8 @@ export function getDbForDomain(domain: string = 'platform'): Database {
   const config = DEFAULT_POOL_CONFIG[domain] ?? DEFAULT_POOL_CONFIG.platform!;
   const { connectionString } = resolveConnectionString();
 
-  // create domain-scoped pool with isolated max connections.
-  // pool config varies by provider — this is the abstraction point.
-  const instance = createDatabase(connectionString);
+  // create domain-scoped pool with isolated max connections
+  const instance = createDatabase(connectionString, { max: config.max, idleTimeoutMs: config.idleTimeoutMs });
 
   domainInstances.set(domain, instance);
   console.info(`[db] pool initialized for domain "${domain}" (max: ${config.max})`);

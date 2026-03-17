@@ -160,47 +160,52 @@ export const contractApprovalFn = inngest.createFunction(
         const multiService = getHitlMultiApproverService();
 
         // attempt multi-approver sequential policy (HITL2-07)
+        // wrapped in try/catch so policy creation throws fall back to single-approver
         if (multiService) {
-          // create sequential policy: hr_reviewer then legal_reviewer
-          const policy = await multiService.policyStore.create({
-            name: `hr-contract-${draftResult.contractId}`,
-            type: 'sequential',
-            threshold: null,
-            approverRoles: ['hr_reviewer', 'legal_reviewer'],
-            maxRetries: 3,
-            timeoutSeconds: 86400,
-            escalationPolicy: null,
-          });
+          try {
+            // create sequential policy: hr_reviewer then legal_reviewer
+            const policy = await multiService.policyStore.create({
+              name: `hr-contract-${draftResult.contractId}`,
+              type: 'sequential',
+              threshold: null,
+              approverRoles: ['hr_reviewer', 'legal_reviewer'],
+              maxRetries: 3,
+              timeoutSeconds: 86400,
+              escalationPolicy: null,
+            });
 
-          const approverIds = [crypto.randomUUID(), crypto.randomUUID()];
+            const approverIds = [crypto.randomUUID(), crypto.randomUUID()];
 
-          const result = await multiService.createMultiApproverRequest({
-            workflowId: crypto.randomUUID(),
-            domain: 'hr',
-            actionType: 'hr.contract.approval',
-            summary: `Contract approval needed for ${candidateId}`,
-            details: {
-              contractId: draftResult.contractId,
-              candidateId,
-              positionId,
-              complianceFlags: complianceResult.complianceFlags,
-              contractText: draftResult.contractText,
-            },
-            approverIds,
-            policyId: policy.id,
-            ttlSeconds: 3600,
-          });
-
-          if (result.ok) {
-            return {
-              success: true as const,
-              requestId: result.value.requestId,
-              isMultiApprover: true as const,
-              policyId: policy.id,
+            const result = await multiService.createMultiApproverRequest({
+              workflowId: crypto.randomUUID(),
+              domain: 'hr',
+              actionType: 'hr.contract.approval',
+              summary: `Contract approval needed for ${candidateId}`,
+              details: {
+                contractId: draftResult.contractId,
+                candidateId,
+                positionId,
+                complianceFlags: complianceResult.complianceFlags,
+                contractText: draftResult.contractText,
+              },
               approverIds,
-            };
+              policyId: policy.id,
+              ttlSeconds: 3600,
+            });
+
+            if (result.ok) {
+              return {
+                success: true as const,
+                requestId: result.value.requestId,
+                isMultiApprover: true as const,
+                policyId: policy.id,
+                approverIds,
+              };
+            }
+            // multi-approver failed — fall through to single-approver
+          } catch {
+            // policy creation or multi-request threw — fall back to single-approver
           }
-          // multi-approver failed — fall through to single-approver
         }
 
         // fallback: single-approver hitl

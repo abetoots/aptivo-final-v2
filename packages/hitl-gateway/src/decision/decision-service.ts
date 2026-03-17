@@ -244,7 +244,9 @@ export async function recordDecision(
           decision: data.decision,
           approverId: request.approverId,
           decidedAt: now.toISOString(),
-          ...(data.decision === 'request_changes' ? { comment: data.comment } : {}),
+          ...(data.decision === 'request_changes'
+            ? { comment: data.comment, retryCount: request.retryCount ?? 0 }
+            : {}),
         },
       }).catch(() => {
         // fire-and-forget — log in production, swallow in tests

@@ -84,13 +84,19 @@ export function createDrizzleApprovalPolicyStore(db: DrizzleClient): ApprovalPol
     },
 
     async findByName(name) {
-      const rows = await db
-        .select()
-        .from(approvalPolicies)
-        .where(eq(approvalPolicies.name, name))
-        .limit(1);
-      if (rows.length === 0) return null;
-      return mapRow(rows[0]!);
+      try {
+        const rows = await db
+          .select()
+          .from(approvalPolicies)
+          .where(eq(approvalPolicies.name, name))
+          .limit(1);
+        if (rows.length === 0) return null;
+        return mapRow(rows[0]!);
+      } catch (err) {
+        // fail-open: return null on db errors for reads
+        console.warn('approval-policy-store: findByName failed, returning null', err);
+        return null;
+      }
     },
 
     async list() {

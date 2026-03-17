@@ -6,6 +6,7 @@
  */
 
 import type { Result } from '@aptivo/types';
+import type { InjectionVerdict } from '../safety/safety-types.js';
 
 // ---------------------------------------------------------------------------
 // domain types
@@ -110,7 +111,9 @@ export type LLMError =
   | { _tag: 'MonthlyBudgetExceeded'; monthlyUsed: number; monthlyLimit: number }
   | { _tag: 'RateLimitExceeded'; userId: string; limit: number }
   | { _tag: 'OutputValidationFailed'; zodErrors: string }
-  | { _tag: 'NetworkError'; cause: unknown };
+  | { _tag: 'NetworkError'; cause: unknown }
+  | { _tag: 'PromptInjectionBlocked'; verdict: InjectionVerdict }
+  | { readonly _tag: 'ContentBlocked'; readonly stage: 'pre_request' | 'post_response'; readonly reason: string; readonly category: string };
 
 // ---------------------------------------------------------------------------
 // provider interface

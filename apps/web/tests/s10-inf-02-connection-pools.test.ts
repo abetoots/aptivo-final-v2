@@ -209,6 +209,7 @@ describe('INF-02: connection string resolution', () => {
 
     expect(vi.mocked(createDatabase)).toHaveBeenCalledWith(
       'postgres://ha-primary:5432/aptivo',
+      expect.any(Object),
     );
   });
 
@@ -223,6 +224,7 @@ describe('INF-02: connection string resolution', () => {
 
     expect(vi.mocked(createDatabase)).toHaveBeenCalledWith(
       'postgres://standard:5432/aptivo',
+      expect.any(Object),
     );
   });
 });

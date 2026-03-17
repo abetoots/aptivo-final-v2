@@ -62,6 +62,7 @@ export interface RequestSnapshot {
   status: 'pending' | 'approved' | 'rejected' | 'expired' | 'canceled' | 'changes_requested';
   tokenHash: string;
   tokenExpiresAt: Date;
+  retryCount?: number;
 }
 
 // ---------------------------------------------------------------------------
