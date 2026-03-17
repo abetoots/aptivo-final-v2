@@ -94,3 +94,10 @@ These platform-core services use specifications defined at the TSD root level:
 - Runtime feature flag service (local JSON provider, LaunchDarkly-ready) — Sprint 13
 - Consent withdrawal API (DPA Art 7) with audit trail — Sprint 13
 - Anomaly detection for bulk PII access (z-score baseline) — Sprint 13
+
+### 4.6 Visual Builder + MCP Resilience + Operational Metrics (Sprint 14)
+- Visual workflow rule editor (FR-CORE-WFE-001) — step add/remove/reorder, draft/activate lifecycle
+- Dynamic MCP server discovery API — health status from CircuitBreakerRegistry
+- Per-tool MCP circuit breaker override — admin-configurable failure thresholds per tool
+- Approval SLA metrics + dashboard — per-approver latency, breach rate, policy-type grouping
+- Deferred modules buy/build analysis — 16 modules evaluated, Phase 3 sequence defined

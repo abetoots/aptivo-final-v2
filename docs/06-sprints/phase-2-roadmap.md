@@ -83,26 +83,28 @@ Source: [sprint-13-plan.md](./sprint-13-plan.md)
 
 Source: [sprint-10-plan.md](./sprint-10-plan.md), [platform-core-add.md](../03-architecture/platform-core-add.md) §2.3.2, §8.8
 
-### Epic 7: Platform Features — PARTIALLY DELIVERED (Sprint 13)
+### Epic 7: Platform Features — DELIVERED (Sprint 13-14)
 
 - ✅ Workflow definition CRUD API (FEAT-01, Sprint 13) — versioned, FR-CORE-INT-001
 - ✅ Extensible webhook action points (FEAT-02, Sprint 13) — HMAC-signed, FR-CORE-INT-002
 - ✅ Runtime feature flag service (FEAT-03, Sprint 13) — local JSON provider, LaunchDarkly-ready interface
 - ✅ Self-service consent withdrawal API (FEAT-04, Sprint 13) — DPA Art 7, audit trail
-- Visual workflow rule builder (FR-CORE-WFE-001) — Sprint 14
-- Dynamic MCP server discovery API — Sprint 14
-- Per-tool MCP circuit breaker override — Sprint 14
+- ✅ Visual workflow rule builder (FEAT-07, Sprint 14) — step editor, add/remove/reorder, activate lifecycle
+- ✅ Dynamic MCP server discovery API (FEAT-08, Sprint 14) — health status from CircuitBreakerRegistry
+- ✅ Per-tool MCP circuit breaker override (FEAT-09, Sprint 14) — configurable thresholds per tool
 
-Source: [sprint-13-plan.md](./sprint-13-plan.md), [platform-core-frd.md](../02-requirements/platform-core-frd.md)
+Source: [sprint-13-plan.md](./sprint-13-plan.md), [sprint-14-plan.md](./sprint-14-plan.md)
 
-### Epic 8: Deferred Modules (Buy vs Build)
+### Epic 8: Deferred Modules Analysis — DELIVERED (Sprint 14)
 
-- Financial & Admin (FA1-FA4): invoicing, payroll, expenses, budgeting
-- Ticketing & Support (CT1-CT5): CRUD, SLA tracking
-- Project Management (PM1-PM3): tasks, time tracking
-- CRM (CRM1-CRM4): contacts, pipeline, interactions
+Buy/build decision matrix completed. 16 modules evaluated, Phase 3 implementation sequence defined.
 
-Source: [deferred-contracts.md](../04-specs/deferred-contracts.md) §2-5 (interface contracts defined)
+- ✅ Financial & Admin (FA1-FA4) — 3 buy (Stripe, Deel, Expensify) + 1 build (budgeting)
+- ✅ Case Tracking (CT1-CT5) — 4 build (leverages workflow engine) + 1 defer (portal)
+- ✅ Project Management (PM1-PM3) — 2 buy (Asana, Toggl) + 1 defer (resource planning)
+- ✅ CRM (CRM1-CRM4) — 4 buy (HubSpot)
+
+Source: [phase-2-modules-analysis.md](./phase-2-modules-analysis.md)
 
 ---
 

@@ -280,7 +280,7 @@ These updates are delivered as part of ID2-08 and ID2-09 documentation tasks.
 
 | FRD ID | Title | Phase 1 Status | Phase 2 Sprint | Phase 2 Status |
 |--------|-------|----------------|----------------|----------------|
-| FR-CORE-WFE-001 | Workflow States/Transitions | Scope-limited | 6 | Visual builder foundation |
+| FR-CORE-WFE-001 | Workflow States/Transitions | Scope-limited | 6 | **Delivered (Sprint 14)** — visual builder + step editor + activate lifecycle |
 | FR-CORE-WFE-007 | Parent/Child Workflows | Deferred | 3 | **Delivered (Sprint 11)** |
 | FR-CORE-HITL-003 | Approve/Reject/Changes | Scope-limited | 3 | **Delivered (Sprint 11)** — request changes + resubmit |
 | FR-CORE-HITL-004 | Approval Policies | Scope-limited | 3 | **Delivered (Sprint 11)** — quorum, sequential, delegation MVP |
