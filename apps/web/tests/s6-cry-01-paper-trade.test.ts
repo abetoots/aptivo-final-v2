@@ -63,6 +63,7 @@ vi.mock('../src/lib/services', () => ({
   getCryptoTradeSignalStore: () => mockTradeSignalStore,
   getCryptoExecutionStore: () => mockExecutionStore,
   getHitlRequestDeps: () => mockHitlRequestDeps,
+  getHitlMultiApproverService: () => null, // single-approver fallback for legacy tests
   getNotificationService: () => mockNotificationService,
 }));
 

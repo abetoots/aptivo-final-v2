@@ -41,7 +41,7 @@ export interface DecisionStore {
    */
   insertDecisionAndUpdateRequest(
     decision: HitlDecisionRecord,
-    newStatus: 'approved' | 'rejected',
+    newStatus: 'approved' | 'rejected' | 'changes_requested',
   ): Promise<{ id: string }>;
 }
 
@@ -54,9 +54,11 @@ export interface DecisionEventEmitter {
     name: string;
     data: {
       requestId: string;
-      decision: 'approved' | 'rejected';
+      decision: 'approved' | 'rejected' | 'request_changes';
       approverId: string;
       decidedAt: string;
+      comment?: string;
+      retryCount?: number;
     };
   }): Promise<void>;
 }
@@ -134,8 +136,16 @@ export async function recordDecision(
 
   // verify token action permits the submitted decision
   // 'decide' tokens allow any decision; specific tokens ('approve'/'reject') are restricted
+  // 'request_changes' is allowed by 'decide' tokens only
   const tokenAction = tokenResult.value.action;
   if (tokenAction !== 'decide') {
+    if (data.decision === 'request_changes') {
+      return Result.err({
+        _tag: 'TokenVerificationError',
+        reason: 'invalid-action',
+        message: `Token action '${tokenAction}' does not permit 'request_changes' — requires a 'decide' token`,
+      });
+    }
     const expectedAction = data.decision === 'approved' ? 'approve' : 'reject';
     if (tokenAction !== expectedAction) {
       return Result.err({
@@ -201,11 +211,16 @@ export async function recordDecision(
     decidedAt: now,
   };
 
+  // determine the new request status
+  // request_changes → changes_requested (not finalized, can be re-submitted)
+  const newStatus: 'approved' | 'rejected' | 'changes_requested' =
+    data.decision === 'request_changes' ? 'changes_requested' : data.decision;
+
   // atomic insert + status update
   try {
     const { id } = await deps.store.insertDecisionAndUpdateRequest(
       record,
-      data.decision,
+      newStatus,
     );
 
     const result: RecordDecisionResult = {
@@ -216,14 +231,20 @@ export async function recordDecision(
     };
 
     // emit event for Inngest (fire-and-forget)
+    // request_changes emits a different event than approve/reject
     if (deps.eventEmitter) {
+      const eventName = data.decision === 'request_changes'
+        ? 'hitl/changes.requested'
+        : 'hitl/decision.recorded';
+
       deps.eventEmitter.emit({
-        name: 'hitl/decision.recorded',
+        name: eventName,
         data: {
           requestId: data.requestId,
           decision: data.decision,
           approverId: request.approverId,
           decidedAt: now.toISOString(),
+          ...(data.decision === 'request_changes' ? { comment: data.comment } : {}),
         },
       }).catch(() => {
         // fire-and-forget — log in production, swallow in tests

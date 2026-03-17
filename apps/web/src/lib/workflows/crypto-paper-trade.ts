@@ -14,6 +14,7 @@ import {
   getCryptoTradeSignalStore,
   getCryptoExecutionStore,
   getHitlRequestDeps,
+  getHitlMultiApproverService,
   getNotificationService,
 } from '../services.js';
 import { createRequest } from '@aptivo/hitl-gateway';
@@ -28,6 +29,7 @@ export type PaperTradeResult =
   | { status: 'rejected'; signalId: string; reason: string }
   | { status: 'expired'; signalId: string }
   | { status: 'risk-rejected'; signalId: string; reason: string }
+  | { status: 'changes-requested'; signalId: string; comment: string }
   | { status: 'error'; step: string; error: string };
 
 // ---------------------------------------------------------------------------
@@ -175,9 +177,56 @@ export const paperTradeFn = inngest.createFunction(
       return { status: 'risk-rejected', signalId, reason: riskResult.reason };
     }
 
-    // step 3: hitl-request — create HITL approval request
+    // step 3: hitl-request — try multi-approver quorum, fall back to single-approver
     const hitlResult = await step.run('hitl-request', async () => {
       try {
+        const multiService = getHitlMultiApproverService();
+
+        // attempt multi-approver quorum policy (HITL2-07)
+        if (multiService) {
+          // create quorum policy: 2-of-3 risk reviewers
+          const policy = await multiService.policyStore.create({
+            name: `crypto-trade-${signalId}`,
+            type: 'quorum',
+            threshold: 2,
+            approverRoles: ['risk_analyst', 'risk_analyst', 'risk_manager'],
+            maxRetries: 3,
+            timeoutSeconds: 900,
+            escalationPolicy: null,
+          });
+
+          const approverIds = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+
+          const result = await multiService.createMultiApproverRequest({
+            workflowId: crypto.randomUUID(),
+            domain: 'crypto',
+            actionType: 'trade-approval',
+            summary: `Paper trade: ${token} ${direction} (confidence: ${confidenceScore}%)`,
+            details: {
+              signalId,
+              token,
+              direction,
+              confidenceScore,
+              analysis: llmResult.analysis,
+            },
+            approverIds,
+            policyId: policy.id,
+            ttlSeconds: 900,
+          });
+
+          if (result.ok) {
+            return {
+              success: true as const,
+              requestId: result.value.requestId,
+              isMultiApprover: true as const,
+              policyId: policy.id,
+              approverIds,
+            };
+          }
+          // multi-approver failed — fall through to single-approver
+        }
+
+        // fallback: single-approver hitl
         const deps = getHitlRequestDeps();
         const result = await createRequest(
           {
@@ -200,7 +249,7 @@ export const paperTradeFn = inngest.createFunction(
         if (!result.ok) {
           return { success: false as const, error: `${result.error._tag}: ${result.error.message}` };
         }
-        return { success: true as const, requestId: result.value.requestId };
+        return { success: true as const, requestId: result.value.requestId, isMultiApprover: false as const };
       } catch (err: unknown) {
         return { success: false as const, error: err instanceof Error ? err.message : String(err) };
       }
@@ -208,6 +257,21 @@ export const paperTradeFn = inngest.createFunction(
 
     if (!hitlResult.success) {
       return { status: 'error', step: 'hitl-request', error: hitlResult.error };
+    }
+
+    // step 3a: emit multi-approver event if applicable
+    if (hitlResult.isMultiApprover) {
+      await step.run('emit-multi-approval-requested', async () => {
+        await inngest.send({
+          name: 'hitl/multi.approval.requested',
+          data: {
+            requestId: hitlResult.requestId,
+            policyId: hitlResult.policyId!,
+            approverIds: hitlResult.approverIds!,
+            domain: 'crypto',
+          },
+        });
+      });
     }
 
     // step 3b: notify approver — fire-and-forget
@@ -246,7 +310,27 @@ export const paperTradeFn = inngest.createFunction(
       return { status: 'expired', signalId };
     }
 
-    const decisionData = decision.data as { requestId: string; decision: string; reason?: string };
+    const decisionData = decision.data as { requestId: string; decision: string; reason?: string; comment?: string };
+
+    // handle request_changes — re-submission loop (HITL2-07)
+    if (decisionData.decision === 'request_changes') {
+      await step.run('emit-changes-requested', async () => {
+        await inngest.send({
+          name: 'hitl/changes.requested',
+          data: {
+            requestId: hitlResult.requestId,
+            approverId: 'reviewer',
+            comment: decisionData.comment ?? decisionData.reason ?? 'changes requested',
+            retryCount: 1,
+          },
+        });
+      });
+      return {
+        status: 'changes-requested',
+        signalId,
+        comment: decisionData.comment ?? decisionData.reason ?? 'changes requested',
+      };
+    }
 
     if (decisionData.decision === 'rejected') {
       await step.run('reject-by-human', async () => {

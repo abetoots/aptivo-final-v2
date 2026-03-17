@@ -90,7 +90,9 @@ import { createDataDeletionHandler } from '@aptivo/mcp-layer/workflows';
 
 // hitl-gateway
 import type { RequestServiceDeps, DecisionServiceDeps } from '@aptivo/hitl-gateway';
-import { createRequest, recordDecision } from '@aptivo/hitl-gateway';
+import { createRequest, recordDecision, createMultiApproverRequestService } from '@aptivo/hitl-gateway';
+import type { RequestTokenStore, HitlRequestTokenRecord } from '@aptivo/hitl-gateway';
+import { generateHitlToken, hashToken } from '@aptivo/hitl-gateway';
 
 // oidc provider (ID2-01)
 import { createClaimMapper, loadProvidersFromEnv } from './auth/oidc-provider.js';
@@ -235,6 +237,99 @@ export const getHitlService = lazy(() => ({
   createRequest: (input: Parameters<typeof createRequest>[0]) =>
     createRequest(input, getHitlRequestDeps()),
 }));
+
+// multi-approver hitl service (HITL2-02, wired in HITL2-07)
+export const getHitlMultiApproverService = lazy(() => {
+  const requestStore = createDrizzleHitlRequestStore(
+    db() as unknown as Parameters<typeof createDrizzleHitlRequestStore>[0],
+  );
+
+  // in-memory token store — sufficient for single-instance deployments;
+  // swap for a drizzle-backed store when hitl_request_tokens table is migrated
+  const tokenMap = new Map<string, HitlRequestTokenRecord[]>();
+  const inMemoryTokenStore: RequestTokenStore = {
+    async insertTokens(tokens: HitlRequestTokenRecord[]) {
+      for (const t of tokens) {
+        const existing = tokenMap.get(t.requestId) ?? [];
+        existing.push(t);
+        tokenMap.set(t.requestId, existing);
+      }
+    },
+    async findByRequestAndApprover(requestId: string, approverId: string) {
+      const tokens = tokenMap.get(requestId) ?? [];
+      return tokens.find((t) => t.approverId === approverId) ?? null;
+    },
+    async findByRequestId(requestId: string) {
+      return tokenMap.get(requestId) ?? [];
+    },
+  };
+
+  // in-memory policy store — policies are created inline by workflows
+  const policyMap = new Map<string, import('@aptivo/hitl-gateway').ApprovalPolicyRecord>();
+  const inMemoryPolicyStore: import('@aptivo/hitl-gateway').ApprovalPolicyStore = {
+    async create(policy) {
+      const record = {
+        ...policy,
+        id: crypto.randomUUID(),
+        createdAt: new Date(),
+      };
+      policyMap.set(record.id, record);
+      return record;
+    },
+    async findById(id: string) {
+      return policyMap.get(id) ?? null;
+    },
+    async findByName(name: string) {
+      for (const p of policyMap.values()) {
+        if (p.name === name) return p;
+      }
+      return null;
+    },
+    async list() {
+      return [...policyMap.values()];
+    },
+  };
+
+  const config = {
+    baseUrl: process.env.HITL_BASE_URL ?? 'http://localhost:3000',
+    signingSecret: process.env.HITL_SIGNING_SECRET ?? 'dev-hitl-secret-key-minimum-32-chars!!',
+    audience: 'aptivo-hitl',
+    issuer: 'aptivo-platform',
+  };
+
+  const service = createMultiApproverRequestService({
+    requestStore: requestStore as unknown as { insert(record: unknown): Promise<{ id: string }> },
+    tokenStore: inMemoryTokenStore,
+    policyStore: inMemoryPolicyStore,
+    generateToken: async (payload: Record<string, unknown>) => {
+      const result = await generateHitlToken(
+        {
+          requestId: payload.requestId as string,
+          approverId: payload.approverId as string,
+          action: (payload.action as 'approve' | 'reject' | 'decide') ?? 'decide',
+        },
+        {
+          signingSecret: config.signingSecret,
+          audience: config.audience,
+          issuer: config.issuer,
+          ttlSeconds: (payload.ttlSeconds as number) ?? 900,
+        },
+      );
+      if (!result.ok) throw new Error('token generation failed');
+      return {
+        token: result.value.token,
+        hash: hashToken(result.value.token),
+        expiresAt: new Date(result.value.expiresAt),
+      };
+    },
+    config: { baseUrl: config.baseUrl },
+  });
+
+  return {
+    ...service,
+    policyStore: inMemoryPolicyStore,
+  };
+});
 
 // ---------------------------------------------------------------------------
 // mcp wrapper (P1.5-04: real db-backed registry + allowlist)

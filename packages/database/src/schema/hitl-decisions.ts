@@ -22,6 +22,7 @@ import { users } from './users.js';
 export const hitlDecisionEnum = pgEnum('hitl_decision', [
   'approved',
   'rejected',
+  'request_changes',
 ]);
 
 export const hitlDecisions = pgTable(
@@ -49,8 +50,8 @@ export const hitlDecisions = pgTable(
       .notNull(),
   },
   (table) => [
-    // first-writer-wins: only one decision per request
-    uniqueIndex('hitl_decisions_request_id_idx').on(table.requestId),
+    // one decision per (request, approver) — supports multi-approver flows
+    uniqueIndex('hitl_decisions_request_approver_idx').on(table.requestId, table.approverId),
     index('hitl_decisions_approver_idx').on(table.approverId),
   ]
 );

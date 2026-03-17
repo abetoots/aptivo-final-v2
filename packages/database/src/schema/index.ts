@@ -22,6 +22,12 @@ export {
   notificationDeliveries,
 } from './notifications.js';
 
+// approval policies (HITL2-01)
+export { approvalPolicyTypeEnum, approvalPolicies } from './approval-policies.js';
+
+// per-approver tokens (HITL2-02)
+export { hitlRequestTokens } from './hitl-request-tokens.js';
+
 // crypto domain (S6-INF-CRY)
 export {
   monitoredWallets,

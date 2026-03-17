@@ -56,7 +56,7 @@ export interface HitlRequestRecord {
   summary: string;
   details?: Record<string, unknown>;
   approverId: string;
-  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'canceled';
+  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'canceled' | 'changes_requested';
   tokenHash: string;
   tokenExpiresAt: Date;
   createdAt: Date;

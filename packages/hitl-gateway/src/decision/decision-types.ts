@@ -13,12 +13,15 @@ import { z } from 'zod';
 export const RecordDecisionInputSchema = z.object({
   requestId: z.string().uuid(),
   token: z.string().min(1),
-  decision: z.enum(['approved', 'rejected']),
+  decision: z.enum(['approved', 'rejected', 'request_changes']),
   comment: z.string().optional(),
   channel: z.string().min(1).max(50),
   ipAddress: z.string().max(45).optional(),
   userAgent: z.string().optional(),
-});
+}).refine(
+  (data) => data.decision !== 'request_changes' || (data.comment && data.comment.trim().length > 0),
+  { message: 'Comment is required when requesting changes', path: ['comment'] }
+);
 
 export type RecordDecisionInput = z.infer<typeof RecordDecisionInputSchema>;
 
@@ -29,7 +32,7 @@ export type RecordDecisionInput = z.infer<typeof RecordDecisionInputSchema>;
 export interface RecordDecisionResult {
   decisionId: string;
   requestId: string;
-  decision: 'approved' | 'rejected';
+  decision: 'approved' | 'rejected' | 'request_changes';
   decidedAt: Date;
 }
 
@@ -41,7 +44,7 @@ export interface HitlDecisionRecord {
   id: string;
   requestId: string;
   approverId: string;
-  decision: 'approved' | 'rejected';
+  decision: 'approved' | 'rejected' | 'request_changes';
   comment?: string;
   channel: string;
   ipAddress?: string;
@@ -56,7 +59,7 @@ export interface HitlDecisionRecord {
 export interface RequestSnapshot {
   id: string;
   approverId: string;
-  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'canceled';
+  status: 'pending' | 'approved' | 'rejected' | 'expired' | 'canceled' | 'changes_requested';
   tokenHash: string;
   tokenExpiresAt: Date;
 }
@@ -68,7 +71,7 @@ export interface RequestSnapshot {
 export interface ExistingDecision {
   id: string;
   approverId: string;
-  decision: 'approved' | 'rejected';
+  decision: 'approved' | 'rejected' | 'request_changes';
   decidedAt: Date;
 }
 

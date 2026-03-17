@@ -11,6 +11,7 @@ import {
   getContractStore,
   getLlmGateway,
   getHitlService,
+  getHitlMultiApproverService,
   getNotificationService,
   getAuditService,
 } from '../services.js';
@@ -24,6 +25,7 @@ export type ContractApprovalResult =
   | { status: 'signed'; contractId: string; candidateId: string }
   | { status: 'rejected'; contractId: string; candidateId: string; reason: string }
   | { status: 'expired'; contractId: string; candidateId: string }
+  | { status: 'changes-requested'; contractId: string; candidateId: string; comment: string }
   | { status: 'error'; step: string; error: string };
 
 // ---------------------------------------------------------------------------
@@ -152,9 +154,56 @@ export const contractApprovalFn = inngest.createFunction(
       return { status: 'error', step: 'compliance-check', error: complianceResult.error };
     }
 
-    // step 3: hitl-approval — create HITL request for contract approval
+    // step 3: hitl-approval — try multi-approver, fall back to single-approver
     const hitlResult = await step.run('hitl-approval', async () => {
       try {
+        const multiService = getHitlMultiApproverService();
+
+        // attempt multi-approver sequential policy (HITL2-07)
+        if (multiService) {
+          // create sequential policy: hr_reviewer then legal_reviewer
+          const policy = await multiService.policyStore.create({
+            name: `hr-contract-${draftResult.contractId}`,
+            type: 'sequential',
+            threshold: null,
+            approverRoles: ['hr_reviewer', 'legal_reviewer'],
+            maxRetries: 3,
+            timeoutSeconds: 86400,
+            escalationPolicy: null,
+          });
+
+          const approverIds = [crypto.randomUUID(), crypto.randomUUID()];
+
+          const result = await multiService.createMultiApproverRequest({
+            workflowId: crypto.randomUUID(),
+            domain: 'hr',
+            actionType: 'hr.contract.approval',
+            summary: `Contract approval needed for ${candidateId}`,
+            details: {
+              contractId: draftResult.contractId,
+              candidateId,
+              positionId,
+              complianceFlags: complianceResult.complianceFlags,
+              contractText: draftResult.contractText,
+            },
+            approverIds,
+            policyId: policy.id,
+            ttlSeconds: 3600,
+          });
+
+          if (result.ok) {
+            return {
+              success: true as const,
+              requestId: result.value.requestId,
+              isMultiApprover: true as const,
+              policyId: policy.id,
+              approverIds,
+            };
+          }
+          // multi-approver failed — fall through to single-approver
+        }
+
+        // fallback: single-approver hitl
         const hitlService = getHitlService();
         const result = await hitlService.createRequest({
           workflowId: crypto.randomUUID(),
@@ -175,7 +224,7 @@ export const contractApprovalFn = inngest.createFunction(
         if (!result.ok) {
           return { success: false as const, error: `${result.error._tag}: ${result.error.message}` };
         }
-        return { success: true as const, requestId: result.value.requestId };
+        return { success: true as const, requestId: result.value.requestId, isMultiApprover: false as const };
       } catch (err: unknown) {
         return { success: false as const, error: err instanceof Error ? err.message : String(err) };
       }
@@ -185,7 +234,22 @@ export const contractApprovalFn = inngest.createFunction(
       return { status: 'error', step: 'hitl-approval', error: hitlResult.error };
     }
 
-    // step 4: wait for decision (48h timeout)
+    // step 3b: emit multi-approver event if applicable
+    if (hitlResult.isMultiApprover) {
+      await step.run('emit-multi-approval-requested', async () => {
+        await inngest.send({
+          name: 'hitl/multi.approval.requested',
+          data: {
+            requestId: hitlResult.requestId,
+            policyId: hitlResult.policyId!,
+            approverIds: hitlResult.approverIds!,
+            domain: 'hr',
+          },
+        });
+      });
+    }
+
+    // step 4: wait for decision (72h timeout)
     const decision = await step.waitForEvent('wait-for-contract-decision', {
       event: 'hr/contract.decision.submitted',
       timeout: '72h',
@@ -203,9 +267,30 @@ export const contractApprovalFn = inngest.createFunction(
 
     const decisionData = decision.data as {
       requestId: string;
-      decision: 'approved' | 'rejected';
+      decision: 'approved' | 'rejected' | 'request_changes';
       reviewerNotes?: string;
     };
+
+    // handle request_changes — re-submission loop (HITL2-07)
+    if (decisionData.decision === 'request_changes') {
+      await step.run('emit-changes-requested', async () => {
+        await inngest.send({
+          name: 'hitl/changes.requested',
+          data: {
+            requestId: hitlResult.requestId,
+            approverId: 'reviewer',
+            comment: decisionData.reviewerNotes ?? 'changes requested',
+            retryCount: 1,
+          },
+        });
+      });
+      return {
+        status: 'changes-requested',
+        contractId: draftResult.contractId,
+        candidateId,
+        comment: decisionData.reviewerNotes ?? 'changes requested',
+      };
+    }
 
     // step 5: finalize-contract — update status and notify candidate
     const finalStatus = decisionData.decision === 'approved' ? 'signed' : 'rejected';

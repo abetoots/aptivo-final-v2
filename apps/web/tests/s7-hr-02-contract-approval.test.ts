@@ -43,6 +43,7 @@ vi.mock('../src/lib/services', () => ({
   getContractStore: () => mockContractStore,
   getLlmGateway: () => mockLlmGateway,
   getHitlService: () => mockHitlService,
+  getHitlMultiApproverService: () => null, // single-approver fallback for legacy tests
   getNotificationService: () => mockNotificationService,
   getAuditService: () => mockAuditService,
 }));

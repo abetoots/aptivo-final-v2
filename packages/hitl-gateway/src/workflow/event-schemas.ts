@@ -51,6 +51,23 @@ export interface HitlDecisionRecordedData {
 }
 
 // ---------------------------------------------------------------------------
+// changes requested event — approver requested changes (HITL2-05)
+// ---------------------------------------------------------------------------
+
+export interface HitlChangesRequestedData {
+  /** UUID of the HITL request */
+  requestId: string;
+  /** UUID of the approver who requested changes */
+  approverId: string;
+  /** feedback comment (required for request_changes decisions) */
+  comment: string;
+  /** current retry count after the request_changes decision */
+  retryCount: number;
+  /** ISO timestamp of the decision */
+  decidedAt: string;
+}
+
+// ---------------------------------------------------------------------------
 // event names (constants for correlation)
 // ---------------------------------------------------------------------------
 
@@ -59,6 +76,19 @@ export const HITL_EVENTS = {
   APPROVAL_REQUESTED: 'hitl/approval.requested',
   /** response: decision recorded */
   DECISION_RECORDED: 'hitl/decision.recorded',
+  /** response: approver requested changes (HITL2-05) */
+  CHANGES_REQUESTED: 'hitl/changes.requested',
+} as const;
+
+// ---------------------------------------------------------------------------
+// orchestration event names (HITL2-06: parent/child coordination)
+// ---------------------------------------------------------------------------
+
+export const ORCHESTRATION_EVENTS = {
+  /** child workflow spawned by parent */
+  CHILD_SPAWNED: 'workflow/child.spawned',
+  /** child workflow completed, parent can resume */
+  CHILD_COMPLETED: 'workflow/child.completed',
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -68,5 +98,6 @@ export const HITL_EVENTS = {
 export type HitlApprovalResult =
   | { status: 'approved'; requestId: string; approverId: string; decidedAt: string }
   | { status: 'rejected'; requestId: string; approverId: string; decidedAt: string }
+  | { status: 'changes_requested'; requestId: string; approverId: string; decidedAt: string; comment: string }
   | { status: 'expired'; requestId: string }
   | { status: 'error'; requestId: string; error: string };

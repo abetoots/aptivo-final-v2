@@ -12,7 +12,8 @@
     "./decision": "./src/decision/index.ts",
     "./workflow": "./src/workflow/index.ts",
     "./notifications": "./src/notifications/index.ts",
-    "./auth": "./src/auth/index.ts"
+    "./auth": "./src/auth/index.ts",
+    "./policy": "./src/policy/index.ts"
   },
   "scripts": {
     "build": "tsc",

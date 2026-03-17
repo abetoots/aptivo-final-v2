@@ -206,9 +206,58 @@ type SloEvents = {
   };
 };
 
+// -- HITL2-06: parent/child orchestration event schemas --
+
+type OrchestrationEvents = {
+  'workflow/child.spawned': {
+    data: {
+      parentWorkflowId: string;
+      childWorkflowId: string;
+      childEventName: string;
+      spawnedAt: string;
+    };
+  };
+  'workflow/child.completed': {
+    data: {
+      parentWorkflowId: string;
+      childWorkflowId: string;
+      result: unknown;
+      completedAt: string;
+    };
+  };
+};
+
+// -- HITL2-07: multi-approver hitl v2 event schemas --
+
+type HitlV2Events = {
+  'hitl/multi.approval.requested': {
+    data: {
+      requestId: string;
+      policyId: string;
+      approverIds: string[];
+      domain: string;
+    };
+  };
+  'hitl/multi.decision.finalized': {
+    data: {
+      requestId: string;
+      aggregate: string;
+      policyId: string;
+    };
+  };
+  'hitl/changes.requested': {
+    data: {
+      requestId: string;
+      approverId: string;
+      comment: string;
+      retryCount: number;
+    };
+  };
+};
+
 export const inngest = new Inngest({
   id: 'aptivo-platform',
-  schemas: new EventSchemas().fromRecord<SpikeEvents & PlatformEvents & DemoEvents & CryptoEvents & HrEvents & SloEvents>(),
+  schemas: new EventSchemas().fromRecord<SpikeEvents & PlatformEvents & DemoEvents & CryptoEvents & HrEvents & SloEvents & OrchestrationEvents & HitlV2Events>(),
 });
 
 // -- SP-01 functions --

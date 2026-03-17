@@ -29,6 +29,11 @@ export {
   notificationPreferences,
   deliveryStatusEnum,
   notificationDeliveries,
+  // approval policies (HITL2-01)
+  approvalPolicyTypeEnum,
+  approvalPolicies,
+  // per-approver tokens (HITL2-02)
+  hitlRequestTokens,
 } from './schema/index.js';
 
 // domain seeds (S6-INF-SEED)

@@ -8,6 +8,7 @@
 import {
   char,
   index,
+  integer,
   jsonb,
   pgEnum,
   pgTable,
@@ -18,6 +19,7 @@ import {
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
+import { approvalPolicies } from './approval-policies.js';
 
 export const hitlStatusEnum = pgEnum('hitl_status', [
   'pending',
@@ -25,6 +27,7 @@ export const hitlStatusEnum = pgEnum('hitl_status', [
   'rejected',
   'expired',
   'canceled',
+  'changes_requested',
 ]);
 
 export const hitlRequests = pgTable(
@@ -45,6 +48,10 @@ export const hitlRequests = pgTable(
     approverId: uuid('approver_id')
       .references(() => users.id)
       .notNull(),
+    // approval policy (HITL2-01: nullable for backward compat)
+    policyId: uuid('policy_id').references(() => approvalPolicies.id),
+    // retry count for request_changes re-submissions
+    retryCount: integer('retry_count').notNull().default(0),
     // status
     status: hitlStatusEnum('status').default('pending').notNull(),
     // token — hash only, raw JWT never persisted (SP-11 security requirement)

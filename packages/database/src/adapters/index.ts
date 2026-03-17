@@ -107,6 +107,13 @@ export type {
   McpToolRecord as DrizzleMcpToolRecord,
 } from './mcp-registry-drizzle.js';
 
+// approval policy store (HITL2-01)
+export { createDrizzleApprovalPolicyStore } from './approval-policy-store.js';
+export type {
+  ApprovalPolicyStore as DrizzleApprovalPolicyStore,
+  ApprovalPolicyRecord as DrizzleApprovalPolicyRecord,
+} from './approval-policy-store.js';
+
 // webauthn credential store (INF-01)
 export { createDrizzleWebAuthnStore } from './webauthn-store.js';
 export type {
