@@ -397,10 +397,10 @@ The core architecture follows the **Durable Execution** pattern, ensuring that l
 - No passwords are stored in the database
 - Account recovery is supported without storing passwords
 - Authentication events are auditable
-- Multi-Factor Authentication (MFA): Phase 1 — optional enrollment with step-up for sensitive operations (see ADD §8.6). Phase 2 — mandatory MFA for admin roles
+- Multi-Factor Authentication (MFA): Phase 1 — optional enrollment. **Phase 2 (Sprint 9)** — mandatory MFA for admin roles, TOTP + WebAuthn
 - **Phase 1**: Magic links + social login (Google/GitHub OAuth) via Supabase Auth free tier
-- **Phase 2+**: SSO via standard protocols (OIDC/SAML) for enterprise deployments (requires Supabase Pro tier or equivalent)
-- **Phase 2+**: Integration with centralized Identity Provider for enterprise deployments
+- **Phase 2 (Sprint 9)**: ✅ SSO via OIDC for enterprise deployments; SAML 2.0 adapter contract defined (implementation when customer requires)
+- **Phase 2 (Sprint 9)**: ✅ JIT provisioning with IdP claim-to-role mapping for centralized Identity Provider integration
 
 ### FR-CORE-ID-002: Role-Based Access Control (RBAC)
 

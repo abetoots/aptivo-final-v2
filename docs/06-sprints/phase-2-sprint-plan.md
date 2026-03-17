@@ -281,15 +281,15 @@ These updates are delivered as part of ID2-08 and ID2-09 documentation tasks.
 | FRD ID | Title | Phase 1 Status | Phase 2 Sprint | Phase 2 Status |
 |--------|-------|----------------|----------------|----------------|
 | FR-CORE-WFE-001 | Workflow States/Transitions | Scope-limited | 6 | Visual builder foundation |
-| FR-CORE-WFE-007 | Parent/Child Workflows | Deferred | 3 | Full |
-| FR-CORE-HITL-003 | Approve/Reject/Changes | Scope-limited | 3 | Full (request changes) |
-| FR-CORE-HITL-004 | Approval Policies | Scope-limited | 3 | Full (multi-approver, quorum) |
+| FR-CORE-WFE-007 | Parent/Child Workflows | Deferred | 3 | **Delivered (Sprint 11)** |
+| FR-CORE-HITL-003 | Approve/Reject/Changes | Scope-limited | 3 | **Delivered (Sprint 11)** — request changes + resubmit |
+| FR-CORE-HITL-004 | Approval Policies | Scope-limited | 3 | **Delivered (Sprint 11)** — quorum, sequential, delegation MVP |
 | FR-CORE-LLM-003 | Fallback on Failure | Full (one-hop) | 4 | Full (multi-provider routing) |
 | FR-CORE-NOTIF-003 | Priority Routing | Deferred | 5 | Full |
 | FR-CORE-AUD-002 | Query & Export | Deferred | 4 | Full |
 | FR-CORE-AUD-003 | Retention Policies | Deferred | 4 | Full |
-| FR-CORE-ID-001 | Passwordless Auth | Buy (Supabase) | 1 | Full (SSO + WebAuthn) |
-| FR-CORE-ID-003 | Session Management | Scope-limited | 1 | Full (limits, blacklist, rotation) |
+| FR-CORE-ID-001 | Passwordless Auth | Buy (Supabase) | 1 | **Delivered (Sprint 9)** — OIDC SSO + WebAuthn + SAML contract |
+| FR-CORE-ID-003 | Session Management | Scope-limited | 1 | **Delivered (Sprint 9)** — limits, blacklist, rotation |
 | FR-CORE-INT-001 | Workflow Logic Export | Deferred | 5 | Full |
 | FR-CORE-INT-002 | Extensible Action Points | Deferred | 5 | Full |
 | FR-CORE-ADM-001 | Platform Health Dashboard | Full (P1) | — | Maintained |

@@ -655,45 +655,37 @@ async function verifyApprovalToken(token: string): Promise<HITLRequest> {
 
 **FRD Reference**: FR-CORE-HITL-004
 
+> **Updated Sprint 11**: Policy engine fully implemented with DB-persisted policies, quorum evaluation, and sequential chain runners. See [TSD §12](../04-specs/platform-core/hitl-gateway.md#12-approval-policy-engine-sprint-11) for schema and validation rules.
+
 ```typescript
-// approval policy configuration
-interface ApprovalPolicy {
-  type: 'single' | 'multi' | 'sequential';
-  approvers: ApproverSpec[];
-  quorum?: number;           // for multi: how many must approve
-  expiryTTL: Duration;       // auto-reject after
-  escalation?: EscalationPolicy;
-}
-
-interface ApproverSpec {
-  type: 'user' | 'role' | 'group';
+// packages/hitl-gateway/src/policy/policy-types.ts — implemented in Sprint 11
+interface ApprovalPolicyRecord {
   id: string;
-  required?: boolean;        // for sequential: must approve in order
+  name: string;
+  type: 'single' | 'quorum' | 'sequential';
+  threshold: number | null;        // M in M-of-N (quorum only)
+  approverRoles: string[];         // ordered for sequential
+  maxRetries: number;              // bounded re-submissions for request_changes
+  timeoutSeconds: number;          // per-approver timeout
+  escalationPolicy: EscalationPolicy | null;
+  createdAt: Date;
 }
 
-// policy evaluation
-async function evaluateApproval(
-  request: HITLRequest,
-  decisions: Decision[]
-): Promise<'pending' | 'approved' | 'rejected'> {
-  const policy = request.policy;
+// quorum evaluation — packages/hitl-gateway/src/policy/quorum-engine.ts
+// approved: approvalsCount >= threshold
+// rejected: rejectionsCount > (totalApprovers - threshold)
+// pending: otherwise
 
-  if (policy.type === 'single') {
-    return decisions.length > 0 ? decisions[0].outcome : 'pending';
-  }
-
-  if (policy.type === 'multi') {
-    const approvals = decisions.filter(d => d.outcome === 'approved');
-    if (approvals.length >= policy.quorum!) return 'approved';
-    const rejections = decisions.filter(d => d.outcome === 'rejected');
-    if (rejections.length > (policy.approvers.length - policy.quorum!)) return 'rejected';
-    return 'pending';
-  }
-
-  // sequential: each required approver must approve in order
-  // ... implementation
-}
+// sequential chain — packages/hitl-gateway/src/policy/sequential-chain.ts
+// walks approverRoles[] in order; rejection short-circuits; request_changes pauses
 ```
+
+**Implementations**:
+- Policy schema: `packages/database/src/schema/approval-policies.ts`
+- Quorum engine: `packages/hitl-gateway/src/policy/quorum-engine.ts`
+- Sequential chain: `packages/hitl-gateway/src/policy/sequential-chain.ts`
+- Multi-request creation: `packages/hitl-gateway/src/request/multi-request-service.ts`
+- Multi-decision service: `packages/hitl-gateway/src/decision/multi-decision-service.ts`
 
 ### 4.5 HITL API Endpoints
 
@@ -922,9 +914,122 @@ When a HITL request's TTL expires:
 1. The `step.waitForEvent()` call in the parent workflow returns `null` (no event received within timeout).
 2. The workflow follows its **TIMEOUT error path** — typically: log timeout, mark workflow as `timed_out`, notify admin.
 3. **Dependent workflows**: If the timed-out workflow was itself a step in a parent workflow (nested execution), the parent receives the timeout result and follows its own error path.
-4. **Cascade depth**: In Phase 1, workflows are not nested (no parent-child workflow chains). HITL timeout affects only the single workflow containing the approval gate.
+4. **Cascade depth**: Sprint 11 adds parent/child workflow orchestration (§4.8). A HITL timeout in a child workflow propagates as a `timed_out` child result to the parent; the parent decides whether to abort or continue with partial results.
 5. **Data impact**: No data is modified on HITL timeout. The workflow step that was gated by approval is simply skipped (or the workflow is marked as failed, depending on the error path design).
 6. **Notification**: On HITL timeout, a notification is sent to the workflow owner and the approver(s) indicating the approval request expired without a decision.
+
+### 4.7 Multi-Approver Token Security Model (Sprint 11)
+
+**FRD Reference**: FR-CORE-HITL-002, FR-CORE-HITL-004
+
+**TSD Reference**: [hitl-gateway.md §15](../04-specs/platform-core/hitl-gateway.md#15-multi-approver-request-flow-sprint-11)
+
+#### 4.7.1 Per-Approver JWT Tokens
+
+In the single-approver model (Sprint 2), one JWT token is issued per request. The multi-approver model (Sprint 11) issues a unique JWT per approver, each with the `approverId` embedded as a claim:
+
+```typescript
+// token payload includes approverId binding
+const token = await generateToken({
+  requestId,
+  approverId,       // unique per approver — prevents cross-approver impersonation
+  action: 'decide',
+  ttlSeconds,
+});
+```
+
+#### 4.7.2 Token Hash Join Table
+
+Per-approver token hashes are stored in the `hitl_request_tokens` join table rather than inline on the request record:
+
+```
+hitl_request_tokens
+├── id             (uuid PK)
+├── request_id     (FK → hitl_requests.id, cascade delete)
+├── approver_id    (FK → users.id)
+├── token_hash     (varchar 64) — SHA-256 hex, raw JWT never stored
+└── token_expires_at (timestamptz)
+
+UNIQUE INDEX (request_id, approver_id) — one token per approver per request
+```
+
+**Implementation**: `packages/database/src/schema/hitl-request-tokens.ts`
+
+#### 4.7.3 Cross-Approver Impersonation Prevention
+
+The multi-decision service verifies that the submitted token's hash matches the record for the specific approver:
+
+1. Look up `hitl_request_tokens` for the `(requestId, approverId)` pair
+2. If no record exists → reject with `TokenVerificationError`
+3. Verify the submitted token against the stored hash
+4. If hash mismatch → reject (approver B cannot use approver A's token)
+
+This prevents an approver who received their own valid token from submitting decisions on behalf of another approver.
+
+#### 4.7.4 Token Refresh on Resubmit
+
+When a `request_changes` decision triggers a resubmission cycle (§17 in TSD):
+
+1. Old tokens for the request are invalidated by the new status transition
+2. New tokens are minted for the current approver(s) on resubmit
+3. The `hitl_request_tokens` records are updated with fresh hashes and expiry times
+4. Retry count is incremented and checked against `maxRetries` from the policy
+
+### 4.8 Parent/Child Workflow Orchestration (Sprint 11, WFE-007)
+
+**FRD Reference**: FR-CORE-WFE-007
+
+**TSD Reference**: [hitl-gateway.md §18](../04-specs/platform-core/hitl-gateway.md#18-parentchild-workflow-orchestration-sprint-11)
+
+#### 4.8.1 Overview
+
+Parent workflows can spawn child workflows and wait for their completion using Inngest event correlation. The orchestrator is fully decoupled from Inngest internals via abstract `EventSender` and `WorkflowStep` interfaces.
+
+**Implementation**: `packages/hitl-gateway/src/workflow/orchestrator.ts`
+
+#### 4.8.2 Event Correlation Pattern
+
+Correlation uses `parentWorkflowId` in event data. The parent emits a spawn event, and the child emits a completion event when done:
+
+```
+Parent Workflow                          Child Workflow
+──────────────                          ──────────────
+spawnChild(parentId, childId, ...)
+  → emit childEventName                 ← triggered by childEventName
+  │   { parentWorkflowId, childWorkflowId }
+  │                                       │ ... child steps ...
+  │                                       │
+waitForChildren(step, config, [childId]) completeChild(parentId, childId, result)
+  │ step.waitForEvent(                    → emit 'workflow/child.completed'
+  │   'workflow/child.completed',           { parentWorkflowId, childWorkflowId, result }
+  │   if: parentId && childId match
+  │ )
+  ↓ resumed with child result
+```
+
+#### 4.8.3 Event Names
+
+| Event | Direction | Purpose |
+|-------|-----------|---------|
+| `workflow/child.spawned` | Parent → system | child workflow trigger (informational) |
+| `workflow/child.completed` | Child → parent | child signals completion with result |
+
+#### 4.8.4 Serial Child Waiting (Known Limitation)
+
+In Sprint 11, `waitForChildren` iterates over expected children sequentially:
+
+```typescript
+for (const childId of expectedChildren) {
+  const event = await step.waitForEvent(...);
+  // blocks until this child completes or times out before moving to next
+}
+```
+
+This means child B's timeout clock does not start until child A completes or times out. **Sprint 13** is planned to add parallel fan-out using `Promise.all` over concurrent `step.waitForEvent` calls.
+
+#### 4.8.5 Timeout Handling with Partial Results
+
+If a child times out, the orchestrator records `{ status: 'timed_out' }` for that child and continues waiting for remaining children. The aggregate result includes both `completedCount` and `timedOutCount`, allowing the parent workflow to decide whether partial results are acceptable.
 
 ---
 

@@ -2,9 +2,9 @@
 id: TSD-HITL-GATEWAY
 title: HITL Gateway Specification
 status: Draft
-version: 2.0.0
+version: 3.0.0
 owner: '@owner'
-last_updated: '2026-03-09'
+last_updated: '2026-03-17'
 parent: ../../03-architecture/platform-core-add.md
 domain: core
 ---
@@ -15,6 +15,7 @@ domain: core
 
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
+| v3.0.0 | 2026-03-17 | Sprint 11 (HITL2-09) | Multi-approver model: §12 rewrite, new §15–18 (quorum, sequential, request-changes, orchestrator) |
 | v2.0.0 | 2026-03-09 | Sprint 2 Implementation | Rewrite §2–10 to match Sprint 2 code; add RBAC, replay stores |
 | v1.1.0 | 2026-02-03 | Document Consolidation | Merged comprehensive schemas from root spec |
 | v1.0.0 | 2026-02-03 | Multi-Model Consensus | Initial creation |
@@ -29,20 +30,23 @@ The HITL Gateway pauses automated workflows for human approval and resumes upon 
 
 **Package**: `@aptivo/hitl-gateway`
 
-### 1.1 Phase 1 Scope (Sprint 2)
+### 1.1 Feature Matrix
 
-| Feature | Sprint 2 | Phase 2+ |
-|---------|----------|----------|
+| Feature | Sprint 2 (Phase 1) | Sprint 11 (Phase 2, delivered) |
+|---------|----------|-----------|
 | Single approver | ✅ | ✅ |
 | Token-based approval (JWT HS256) | ✅ | ✅ |
 | First-writer-wins (DB unique constraint) | ✅ | ✅ |
 | Replay prevention (ReplayStore) | ✅ | ✅ |
 | RBAC middleware (role + permission checks) | ✅ | ✅ |
 | Session revocation | ✅ | ✅ |
-| Multi-approver/quorum | ❌ | ✅ |
-| Sequential approval | ❌ | ✅ |
-| Escalation policies | ❌ | ✅ |
-| Request changes | ❌ | ✅ |
+| Multi-approver/quorum | ❌ | ✅ (§15) |
+| Sequential approval | ❌ | ✅ (§16) |
+| Escalation policies (timeout) | ❌ | ✅ (§16.3) |
+| Request changes | ❌ | ✅ (§17) |
+| Approval policies (DB-persisted) | ❌ | ✅ (§12) |
+| Per-approver token join table | ❌ | ✅ (§15.2) |
+| Parent/child workflow orchestration | ❌ | ✅ (§18) |
 
 ### 1.2 Module Structure
 
@@ -51,9 +55,20 @@ packages/hitl-gateway/src/
 ├── tokens/          # JWT generation, verification, hashing (HITL-03, HITL-04)
 ├── events/          # Event signing, envelope types (SP-14)
 ├── replay/          # ReplayStore interface + InMemory/Redis implementations (CF-03)
-├── request/         # Create request service (HITL-05)
-├── decision/        # Approve/reject decision service (HITL-06)
-├── workflow/        # Inngest step factory + event schemas (HITL-07)
+├── request/         # Create request service (HITL-05, HITL2-02)
+│   ├── multi-request-service.ts   # multi-approver request creation (HITL2-02)
+│   └── multi-request-types.ts     # input schema, result/error types, RequestTokenStore
+├── decision/        # Approve/reject decision service (HITL-06, HITL2-03)
+│   ├── multi-decision-service.ts  # per-approver decisions with quorum evaluation (HITL2-03)
+│   └── multi-decision-types.ts    # input schema, MultiDecisionResult, MultiDecisionError
+├── policy/          # Approval policy model + evaluation engines (HITL2-01, HITL2-03, HITL2-04)
+│   ├── policy-types.ts            # ApprovalPolicy schema, ApprovalPolicyStore interface
+│   ├── quorum-engine.ts           # M-of-N threshold evaluation (HITL2-03)
+│   └── sequential-chain.ts        # ordered approval chain runner (HITL2-04)
+├── workflow/        # Inngest step factory + event schemas (HITL-07, HITL2-06)
+│   ├── event-schemas.ts           # HITL + orchestration event contracts
+│   ├── orchestrator.ts            # parent/child workflow coordination (HITL2-06)
+│   └── orchestrator-types.ts      # ChildResult, OrchestrationResult, OrchestratorError
 ├── notifications/   # Novu notification adapter (HITL-08)
 ├── auth/            # RBAC middleware + session revocation (ID-02, HITL-11)
 └── index.ts
@@ -548,35 +563,71 @@ const expireOrphans = inngest.createFunction(
 
 ---
 
-## 12. Approval Policy Engine (Phase 2+)
+## 12. Approval Policy Engine (Sprint 11)
 
-> Phase 2+ feature. Sprint 2 implements single-approver only.
+**FRD Reference**: FR-CORE-HITL-004
+
+**Implementation**: `packages/hitl-gateway/src/policy/policy-types.ts`
 
 ### 12.1 Policy Types
 
 | Type | Description | Sprint |
 |------|-------------|--------|
 | `single` | One approver decides | Sprint 2 ✅ |
-| `multi` | Quorum-based (e.g., 2 of 3 approve) | Phase 2+ |
-| `sequential` | Ordered approval chain | Phase 2+ |
+| `quorum` | M-of-N threshold (e.g., 2 of 3 approve) | Sprint 11 ✅ |
+| `sequential` | Ordered approval chain | Sprint 11 ✅ |
 
-### 12.2 Schema (Deferred)
+### 12.2 Policy Schema
 
 ```typescript
-// deferred to phase 2 — schema for reference
-export const hitlPolicies = pgTable('hitl_policies', {
+// packages/database/src/schema/approval-policies.ts
+export const approvalPolicies = pgTable('approval_policies', {
   id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
-  name: varchar('name', { length: 255 }).notNull(),
-  type: hitlPolicyTypeEnum('type').default('single').notNull(),
-  approvers: jsonb('approvers').$type<ApproverSpec[]>().notNull(),
-  quorum: integer('quorum').default(1),
-  expiryTTLMinutes: integer('expiry_ttl_minutes').default(15).notNull(),
-  escalationEnabled: boolean('escalation_enabled').default(false),
-  domain: varchar('domain', { length: 50 }),
-  isActive: boolean('is_active').default(true).notNull(),
-  ...timestamps,
+  name: varchar('name', { length: 100 }).notNull().unique(),
+  type: approvalPolicyTypeEnum('type').notNull(),  // 'single' | 'quorum' | 'sequential'
+  threshold: integer('threshold'),                  // null for single/sequential
+  approverRoles: jsonb('approver_roles').notNull().$type<string[]>(),
+  maxRetries: integer('max_retries').notNull().default(3),
+  timeoutSeconds: integer('timeout_seconds').notNull().default(86400),
+  escalationPolicy: jsonb('escalation_policy').$type<EscalationPolicy | null>(),
+  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
 ```
+
+### 12.3 Validation Rules
+
+The `ApprovalPolicySchema` enforces the following constraints:
+
+| Constraint | Rule |
+|------------|------|
+| Quorum requires threshold | `type === 'quorum'` must have `threshold >= 1` |
+| Threshold ceiling | `threshold <= approverRoles.length` |
+| Non-quorum rejects threshold | `type !== 'quorum'` must not set `threshold` |
+| Escalation requires target | `escalationPolicy.timeoutAction === 'escalate'` requires `escalateToRole` |
+| Max retries cap | `maxRetries` clamped to 0–10 |
+| Timeout range | `timeoutSeconds` between 60 (1 min) and 604,800 (7 days) |
+
+### 12.4 Escalation Policy
+
+```typescript
+interface EscalationPolicy {
+  timeoutAction: 'skip' | 'escalate' | 'reject';  // behavior when current approver times out
+  escalateToRole?: string;                          // required when timeoutAction = 'escalate'
+}
+```
+
+### 12.5 Store Interface
+
+```typescript
+interface ApprovalPolicyStore {
+  create(policy: Omit<ApprovalPolicyRecord, 'id' | 'createdAt'>): Promise<ApprovalPolicyRecord>;
+  findById(id: string): Promise<ApprovalPolicyRecord | null>;
+  findByName(name: string): Promise<ApprovalPolicyRecord | null>;
+  list(): Promise<ApprovalPolicyRecord[]>;
+}
+```
+
+**Implementation**: `packages/database/src/adapters/approval-policy-store.ts`
 
 ---
 
@@ -597,13 +648,349 @@ export const hitlPolicies = pgTable('hitl_policies', {
 
 ## 14. Phase 2+ Roadmap
 
-- Multi-approver with quorum (e.g., 2 of 3 must approve)
-- Sequential approval chains
-- Escalation policies (notify manager after X hours)
+**Delivered in Sprint 11:**
+- ✅ Multi-approver with quorum (§15)
+- ✅ Sequential approval chains (§16)
+- ✅ Timeout escalation (§16.3)
+- ✅ Request changes with bounded retries (§17)
+- ✅ Approval policies persisted in DB (§12)
+- ✅ Per-approver token join table (§15.2)
+- ✅ Parent/child workflow orchestration (§18)
+
+**Remaining (Phase 2 Sprint 13+):**
 - Delegation (approve on behalf of)
-- Request changes (does NOT resolve workflow, just records feedback)
+- Parallel child workflow execution (serial only in Sprint 11 — see §18.5)
 - Approval dashboard with filtering
 - RBAC cache eviction strategy (MED-4 tech debt)
+
+---
+
+## 15. Multi-Approver Request Flow (Sprint 11)
+
+**Task**: HITL2-02
+
+**Implementation**: `packages/hitl-gateway/src/request/multi-request-service.ts`
+
+### 15.1 Overview
+
+The multi-approver flow extends the single-approver model to support M-of-N quorum and sequential chain policies. Each approver receives a unique JWT token bound to their identity, preventing cross-approver impersonation.
+
+### 15.2 Per-Approver Token Join Table
+
+```typescript
+// packages/database/src/schema/hitl-request-tokens.ts
+export const hitlRequestTokens = pgTable('hitl_request_tokens', {
+  id: uuid('id').primaryKey().default(sql`gen_random_uuid()`),
+  requestId: uuid('request_id').references(() => hitlRequests.id, { onDelete: 'cascade' }).notNull(),
+  approverId: uuid('approver_id').references(() => users.id).notNull(),
+  tokenHash: varchar('token_hash', { length: 64 }).notNull(),
+  tokenExpiresAt: timestamp('token_expires_at', { withTimezone: true }).notNull(),
+}, (table) => [
+  uniqueIndex('hitl_request_tokens_request_approver_idx').on(table.requestId, table.approverId),
+]);
+```
+
+### 15.3 Request Creation Sequence
+
+1. **Validate** input via `CreateMultiApproverRequestInputSchema` (Zod)
+2. **Fetch policy** from `ApprovalPolicyStore.findById(policyId)`
+3. **Validate approver count** against policy threshold (quorum: `approverIds.length >= threshold`)
+4. **Generate requestId** via `crypto.randomUUID()`
+5. **Mint first token** and persist request record with backward-compatible `approverId` + `tokenHash`
+6. **Mint per-approver tokens** — one JWT per approver with `approverId` as a claim
+7. **Bulk insert** token records into `hitl_request_tokens`
+8. **Return** `{ requestId, policyId, approvers: [{ approverId, token, tokenHash, approveUrl, rejectUrl }] }`
+
+### 15.4 Input Schema
+
+```typescript
+const CreateMultiApproverRequestInputSchema = z.object({
+  workflowId: z.string().uuid(),
+  workflowStepId: z.string().max(100).optional(),
+  domain: z.string().min(1).max(50),
+  actionType: z.string().min(1).max(100),
+  summary: z.string().min(1),
+  details: z.record(z.string(), z.unknown()).optional(),
+  approverIds: z.array(z.string().uuid()).min(1),
+  policyId: z.string().uuid(),
+  ttlSeconds: z.number().int().min(1).max(3600).default(900),
+});
+```
+
+### 15.5 Error Types
+
+| Error Tag | Cause |
+|-----------|-------|
+| `ValidationError` | Invalid input |
+| `PolicyNotFoundError` | Policy ID does not exist |
+| `PolicyValidationError` | Approver count < quorum threshold |
+| `TokenGenerationError` | JWT signing failed |
+| `PersistenceError` | DB insert failed |
+
+### 15.6 Backward Compatibility
+
+The `hitl_requests` table retains its `approverId` and `tokenHash` columns. For multi-approver requests, the first approver is stored as the primary approver. The `policyId` column is nullable — existing single-approver requests continue to work without a policy.
+
+---
+
+## 16. Sequential Chain Logic (Sprint 11)
+
+**Task**: HITL2-04
+
+**Implementation**: `packages/hitl-gateway/src/policy/sequential-chain.ts`
+
+### 16.1 Overview
+
+Sequential chains require approvers to decide in a defined order. The `approverRoles` array in the policy specifies the sequence. Only the current approver is active; their token is minted on-demand when the previous approver completes.
+
+### 16.2 Chain Evaluation Algorithm
+
+The `createSequentialChainRunner().evaluateChain()` method walks the `approverRoles` array:
+
+1. For each role in order, find a matching decision (by `role` or `approverId`)
+2. If no decision exists for the current role → chain is **pending** at that step
+3. If the decision is `rejected` → chain is **rejected** (short-circuit)
+4. If the decision is `request_changes` → chain is **paused** at the current step
+5. If the decision is `approved` → advance to the next step
+6. If all steps are approved → chain is **approved**
+
+```typescript
+interface ChainState {
+  currentStep: number;       // 0-indexed position in approverRoles
+  currentRole: string | null; // null when chain is complete
+  isComplete: boolean;
+  aggregate: 'pending' | 'approved' | 'rejected';
+  completedSteps: number;
+  totalSteps: number;
+}
+```
+
+### 16.3 Timeout Escalation
+
+When the current approver's token expires without a decision, the escalation policy determines the next action:
+
+| `timeoutAction` | Behavior |
+|-----------------|----------|
+| `skip` | Advance to the next approver in the chain |
+| `escalate` | Assign to the role specified by `escalateToRole` |
+| `reject` | Short-circuit the chain with rejection |
+
+### 16.4 Helper Methods
+
+```typescript
+// get the next approver role (null if chain complete/rejected)
+getNextApprover(decisions, policy): Result<string | null, ChainError>
+
+// check if a specific approver's turn has arrived
+isApproverActive(approverId, decisions, policy): Result<boolean, ChainError>
+```
+
+---
+
+## 17. Request Changes Flow (Sprint 11)
+
+**Task**: HITL2-05
+
+### 17.1 Overview
+
+Approvers can respond with `request_changes` instead of `approved` or `rejected`. This does **not** finalize the request — instead it transitions the request to `changes_requested` status and allows the requestor to resubmit.
+
+### 17.2 Decision Enum Extension
+
+The `hitl_decision` enum now includes three values:
+
+```sql
+CREATE TYPE hitl_decision AS ENUM ('approved', 'rejected', 'request_changes');
+```
+
+The `hitl_status` enum now includes `changes_requested`:
+
+```sql
+CREATE TYPE hitl_status AS ENUM ('pending', 'approved', 'rejected', 'expired', 'canceled', 'changes_requested');
+```
+
+### 17.3 Event Contract
+
+```typescript
+// packages/hitl-gateway/src/workflow/event-schemas.ts
+interface HitlChangesRequestedData {
+  requestId: string;
+  approverId: string;
+  comment: string;      // required for request_changes decisions
+  retryCount: number;   // current count after the decision
+  decidedAt: string;    // ISO timestamp
+}
+
+const HITL_EVENTS = {
+  APPROVAL_REQUESTED: 'hitl/approval.requested',
+  DECISION_RECORDED: 'hitl/decision.recorded',
+  CHANGES_REQUESTED: 'hitl/changes.requested',   // new in Sprint 11
+} as const;
+```
+
+### 17.4 Bounded Retries
+
+The `maxRetries` field on the approval policy (default 3, max 10) limits re-submissions:
+
+1. Approver submits `request_changes` with a required `comment`
+2. Request status transitions to `changes_requested`
+3. `retryCount` increments on the request record
+4. If `retryCount >= maxRetries` → request is **rejected** (cannot resubmit again)
+5. On resubmit, a new token is minted and the request transitions back to `pending`
+
+### 17.5 Workflow Result Extension
+
+```typescript
+type HitlApprovalResult =
+  | { status: 'approved'; ... }
+  | { status: 'rejected'; ... }
+  | { status: 'changes_requested'; requestId: string; approverId: string; decidedAt: string; comment: string }
+  | { status: 'expired'; ... }
+  | { status: 'error'; ... };
+```
+
+---
+
+## 18. Parent/Child Workflow Orchestration (Sprint 11)
+
+**Task**: HITL2-06
+
+**FRD Reference**: FR-CORE-WFE-007
+
+**Implementation**: `packages/hitl-gateway/src/workflow/orchestrator.ts`
+
+### 18.1 Overview
+
+Parent workflows can spawn child workflows via Inngest events and wait for their completion. Correlation is achieved through `parentWorkflowId` in event data. The orchestrator is decoupled from Inngest internals via abstract interfaces (`EventSender`, `WorkflowStep`).
+
+### 18.2 Event Contract
+
+```typescript
+// packages/hitl-gateway/src/workflow/event-schemas.ts
+const ORCHESTRATION_EVENTS = {
+  CHILD_SPAWNED: 'workflow/child.spawned',
+  CHILD_COMPLETED: 'workflow/child.completed',
+} as const;
+
+interface ChildSpawnedEvent {
+  parentWorkflowId: string;
+  childWorkflowId: string;
+  childEventName: string;
+  spawnedAt: string;        // ISO timestamp
+}
+
+interface ChildCompletedEvent {
+  parentWorkflowId: string;
+  childWorkflowId: string;
+  result: unknown;          // child's return value
+  completedAt: string;      // ISO timestamp
+}
+```
+
+### 18.3 Orchestrator API
+
+```typescript
+const orchestrator = createWorkflowOrchestrator({ eventSender });
+
+// spawn a child by emitting its trigger event with parent correlation
+await orchestrator.spawnChild(parentWorkflowId, childWorkflowId, childEventName, childEventData);
+
+// wait for N children to complete, with per-child timeout
+const result = await orchestrator.waitForChildren(step, config, expectedChildren);
+
+// called by child workflows to signal completion to parent
+await orchestrator.completeChild(parentWorkflowId, childWorkflowId, result);
+```
+
+### 18.4 Event Correlation
+
+`waitForChildren` uses `step.waitForEvent` with an `if` expression that matches both `parentWorkflowId` and `childWorkflowId`:
+
+```typescript
+const event = await step.waitForEvent(`wait-child-${childId}`, {
+  event: 'workflow/child.completed',
+  timeout: config.childTimeout,
+  if: `async.data.parentWorkflowId == '${config.parentWorkflowId}' && async.data.childWorkflowId == '${childId}'`,
+});
+```
+
+### 18.5 Known Limitations
+
+| Limitation | Detail | Resolution |
+|------------|--------|------------|
+| Serial waiting | Children are awaited sequentially in a `for` loop — no parallel fan-out | Sprint 13: parallel child execution |
+| Timeout partial results | If child N times out, subsequent children are still awaited | Consumer decides whether to abort early |
+
+### 18.6 Result Types
+
+```typescript
+interface OrchestrationResult {
+  parentWorkflowId: string;
+  children: ChildResult[];     // per-child status + result
+  allCompleted: boolean;
+  completedCount: number;
+  timedOutCount: number;
+}
+
+interface ChildResult {
+  childWorkflowId: string;
+  status: 'completed' | 'timed_out';
+  result?: unknown;
+}
+```
+
+---
+
+## 19. Quorum Evaluation Algorithm (Sprint 11)
+
+**Task**: HITL2-03
+
+**Implementation**: `packages/hitl-gateway/src/policy/quorum-engine.ts`
+
+### 19.1 Overview
+
+The quorum engine evaluates a set of individual decisions against a policy's threshold to determine aggregate status. It supports an optional `actualApproverCount` override for cases where the request has a different number of approvers than the policy's `approverRoles.length`.
+
+### 19.2 Algorithm
+
+Given `threshold` (M), `totalApprovers` (N), and a list of decisions:
+
+| Condition | Aggregate | Finalized? |
+|-----------|-----------|------------|
+| `approvalsCount >= threshold` | `approved` | Yes |
+| `rejectionsCount > (totalApprovers - threshold)` | `rejected` | Yes |
+| Otherwise | `pending` | No |
+
+The rejection rule ensures early termination: when enough approvers have rejected that it is mathematically impossible to reach the threshold, the request is rejected without waiting for remaining approvers.
+
+### 19.3 Result Type
+
+```typescript
+interface QuorumResult {
+  aggregate: 'pending' | 'approved' | 'rejected';
+  approvalsCount: number;
+  rejectionsCount: number;
+  threshold: number;
+  totalApprovers: number;
+  isFinalized: boolean;
+}
+```
+
+### 19.4 Multi-Decision Service Integration
+
+The `createMultiDecisionService` (HITL2-03) orchestrates per-approver decision recording with quorum evaluation:
+
+1. **Validate** input via `RecordMultiApproverDecisionInputSchema`
+2. **Fetch request** — reject if not found or already finalized
+3. **Verify per-approver token** via `RequestTokenStore.findByRequestAndApprover`
+4. **Idempotency check** — reject if this approver already decided
+5. **Insert** individual decision record
+6. **Evaluate quorum** via `quorumEngine.evaluate(allDecisions, policy)`
+7. **Optimistic lock** — `UPDATE hitl_requests SET status = $1 WHERE id = $2 AND status = 'pending'`
+8. **Emit event** only if this approver's decision triggered finalization (`affected > 0`)
+9. If `affected === 0` — another approver finalized first; re-read actual state
+
+This first-finalizer-wins pattern ensures exactly one `hitl/decision.recorded` event per request finalization, even under concurrent approvals.
 
 ---
 
@@ -630,6 +1017,8 @@ export const hitlPolicies = pgTable('hitl_policies', {
 | Trade Signal Approvals | crypto/workflow-engine.md | HITL integration |
 | Contract Approvals | hr/workflow-automation.md | HITL integration |
 | HITL Multi-Model Review | SPRINT_2_HITL_MULTI_REVIEW.md | Sign-off verdict |
+| Multi-Approver Token Security | platform-core-add.md | §4.7 |
+| Parent/Child Orchestration | platform-core-add.md | §4.8 |
 
 ### Sprint 2 Implementation Evidence
 
@@ -648,3 +1037,16 @@ export const hitlPolicies = pgTable('hitl_policies', {
 | ID-01 RBAC Schema | — | Done |
 | ID-02 RBAC Middleware | 13 | Done |
 | **Total** | **157** | **All pass** |
+
+### Sprint 11 Implementation Evidence
+
+| Task | Test File | Status |
+|------|-----------|--------|
+| HITL2-00 Session DELETE Blacklisting | `s11-hitl2-00-session-blacklist.test.ts` | Done |
+| HITL2-01 Approval Policy Model | `s11-hitl2-01-approval-policy.test.ts` | Done |
+| HITL2-02 Multi-Approver Request | `s11-hitl2-02-multi-request.test.ts` | Done |
+| HITL2-03 Quorum Decision Engine | `s11-hitl2-03-quorum-engine.test.ts` | Done |
+| HITL2-04 Sequential Chain | `s11-hitl2-04-sequential-chain.test.ts` | Done |
+| HITL2-05 Request Changes | `s11-hitl2-05-request-changes.test.ts` | Done |
+| HITL2-06 Parent/Child Orchestration | `s11-hitl2-06-parent-child.test.ts` | Done |
+| HITL2-07 Domain Workflow Upgrades | `s11-hitl2-07-domain-workflows.test.ts` | Done |

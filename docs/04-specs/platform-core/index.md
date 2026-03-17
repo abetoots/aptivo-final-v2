@@ -68,10 +68,11 @@ These platform-core services use specifications defined at the TSD root level:
 - Rate limit queueing
 
 ### 4.2 HITL Gateway
-- Single approver only (multi-approver deferred to Phase 2)
-- JWT-signed approval tokens
-- Inngest `step.waitForEvent()` integration
-- 24-hour default timeout
+- Single + multi-approver (quorum, sequential) — Sprint 11
+- Per-approver JWT-signed tokens with join table
+- Request changes decision type with bounded retries
+- Inngest `step.waitForEvent()` integration + parent/child orchestration
+- Configurable timeout with escalation policies
 
 ### 4.3 LLM Gateway
 - Per-workflow usage logging

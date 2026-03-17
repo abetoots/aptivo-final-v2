@@ -19,23 +19,25 @@ Phase 1 delivered 232 SP across 8 sprints (+ 24 SP Phase 1.5 wiring). This docum
 
 ## 2. Epic Groupings
 
-### Epic 1: Identity & Access Hardening
+### Epic 1: Identity & Access Hardening — DELIVERED (Sprint 9)
 
-- SSO via OIDC/SAML (FR-CORE-ID-001, T1-W4) — enterprise deployment blocker
-- Mandatory MFA for admin roles (T3-E2)
-- WebAuthn/Passkeys ([authentication.md](../04-specs/authentication.md) §6.2) — depends on Supabase roadmap
-- Concurrent session limits per role ([ADD](../03-architecture/platform-core-add.md) §8.5)
-- Token blacklist for immediate revocation ([ADD](../03-architecture/platform-core-add.md) §8.5)
+- ✅ SSO via OIDC/SAML (FR-CORE-ID-001) — OIDC provider + SAML contract
+- ✅ Mandatory MFA for admin roles — `requireMfa` middleware + TOTP enrollment
+- ✅ WebAuthn/Passkeys — registration, authentication, counter replay protection
+- ✅ Concurrent session limits per role — admin:1, user:3 (configurable)
+- ✅ Token blacklist for immediate revocation — Redis-backed with TTL
 
-Source: [platform-core-frd.md](../02-requirements/platform-core-frd.md) §9, [authentication.md](../04-specs/authentication.md), [platform-core-add.md](../03-architecture/platform-core-add.md) §8
+Source: [sprint-9-plan.md](./sprint-9-plan.md), [authentication.md](../04-specs/authentication.md) §6.4
 
-### Epic 2: HITL Gateway v2 — Multi-Approver
+### Epic 2: HITL Gateway v2 — Multi-Approver — DELIVERED (Sprint 11)
 
-- Quorum-based approval (2-of-3) (FR-CORE-HITL-004)
-- Sequential approval chains
-- Approval delegation and timeout escalation
+- ✅ Quorum-based approval (M-of-N configurable) (FR-CORE-HITL-004)
+- ✅ Sequential approval chains with timeout escalation
+- ✅ Request changes decision type with bounded retries (FR-CORE-HITL-003)
+- ✅ Parent/child workflow orchestration (FR-CORE-WFE-007)
+- ✅ HR contract → sequential dual-approver, Crypto trade → 2-of-3 quorum
 
-Source: [hitl-gateway.md](../04-specs/platform-core/hitl-gateway.md) §12-14
+Source: [sprint-11-plan.md](./sprint-11-plan.md), [hitl-gateway.md](../04-specs/platform-core/hitl-gateway.md) §12-19
 
 ### Epic 3: LLM Safety & Optimization
 
@@ -68,16 +70,18 @@ Source: [WARNINGS_REGISTER.md](../WARNINGS_REGISTER.md) (Bucket D), [platform-co
 
 Source: [platform-core-add.md](../03-architecture/platform-core-add.md) §6, Tier 1 re-evaluation C-3
 
-### Epic 6: Infrastructure Hardening
+### Epic 6: Infrastructure Hardening — DELIVERED (Sprint 10)
 
-- HA-tier managed database with automatic failover (T1-W22, [ADD](../03-architecture/platform-core-add.md) §2.3.2) — critical for 99.9% SLO
-- Per-domain connection pool isolation ([ADD](../03-architecture/platform-core-add.md) §2.3.2)
-- Separate Redis instances for jobs vs cache ([ADD](../03-architecture/platform-core-add.md) §2.3.2)
-- Dedicated secrets manager — Vault/AWS SM ([ADD](../03-architecture/platform-core-add.md) §8.8)
-- Worker auto-scaling based on queue depth ([ADD](../03-architecture/platform-core-add.md) §6.2)
-- Multi-region DR ([ADD](../03-architecture/platform-core-add.md) §2.3.2) — Phase 3+
+- ✅ HA database connection handling + failover script
+- ✅ Per-domain connection pool isolation (crypto, HR, platform)
+- ✅ Separate Redis instances (session vs jobs) with backward compat
+- ✅ Secrets provider abstraction with dual-key rotation
+- ✅ Worker auto-scaling config (.do/app.yaml, 5-min cooldown)
+- ✅ Drift detection CI pipeline (weekly GitHub Actions)
+- ✅ Circuit-breaker lifecycle tests (EP-1 closure)
+- Multi-region DR — Phase 3+
 
-Source: [platform-core-add.md](../03-architecture/platform-core-add.md) §2.3.2, §8.8
+Source: [sprint-10-plan.md](./sprint-10-plan.md), [platform-core-add.md](../03-architecture/platform-core-add.md) §2.3.2, §8.8
 
 ### Epic 7: Platform Features
 
