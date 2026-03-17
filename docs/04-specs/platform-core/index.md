@@ -75,7 +75,9 @@ These platform-core services use specifications defined at the TSD root level:
 - Configurable timeout with escalation policies
 
 ### 4.3 LLM Gateway
-- Per-workflow usage logging
-- Daily/monthly budget caps
+- Per-workflow usage logging + daily/monthly budget caps
 - Provider abstraction (OpenAI, Anthropic)
-- Defer: multi-provider routing, fallback strategies
+- Prompt injection detection classifier (4 pattern categories, Unicode normalization) — Sprint 12
+- Content filtering pipeline (pre-request + post-response, 3 domain tiers) — Sprint 12
+- Per-user durable rate limits (Redis-backed token bucket) — Sprint 12
+- Multi-provider routing (lowest_cost / latency_optimized / failover_only) — Sprint 12

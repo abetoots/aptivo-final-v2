@@ -39,26 +39,25 @@ Source: [sprint-9-plan.md](./sprint-9-plan.md), [authentication.md](../04-specs/
 
 Source: [sprint-11-plan.md](./sprint-11-plan.md), [hitl-gateway.md](../04-specs/platform-core/hitl-gateway.md) §12-19
 
-### Epic 3: LLM Safety & Optimization
+### Epic 3: LLM Safety & Optimization — DELIVERED (Sprint 12)
 
-- Prompt injection detection classifier ([ADD](../03-architecture/platform-core-add.md) §14.5.1, RR-2)
-- Content filtering for harmful output ([ADD](../03-architecture/platform-core-add.md) §14.5.1, RR-3)
-- Per-user rate limits ([llm-gateway.md](../04-specs/platform-core/llm-gateway.md) §1.2)
-- Multi-provider routing (cost vs latency optimization)
-- Automatic fallback on provider failure (FR-CORE-LLM-003)
+- ✅ Prompt injection detection classifier (LLM2-01) — 16 patterns, 4 categories, Unicode normalization (RR-2)
+- ✅ Content filtering pipeline (LLM2-02) — pre-request + post-response, 3 domain tiers (RR-3)
+- ✅ Per-user durable rate limits (LLM2-03) — Redis-backed token bucket with tier support
+- ✅ Multi-provider routing (LLM2-04) — cost/latency/failover strategies (FR-CORE-LLM-003)
 
-Source: [llm-gateway.md](../04-specs/platform-core/llm-gateway.md) §10, [platform-core-add.md](../03-architecture/platform-core-add.md) §14.5
+Source: [sprint-12-plan.md](./sprint-12-plan.md), [llm-gateway.md](../04-specs/platform-core/llm-gateway.md) §12
 
-### Epic 4: Observability Maturity
+### Epic 4: Observability Maturity — DELIVERED (Sprint 12)
 
-- Burn-rate alerting for SLOs (S5-W17)
-- Event schema rollout policy (S3-W10)
-- PII read audit trail (S2-W5, DPA compliance)
-- Regex-based PII scanning in OTLP pipeline ([ADD](../03-architecture/platform-core-add.md) §14.3)
-- Anomaly detection for bulk data access ([ADD](../03-architecture/platform-core-add.md) §14.3, RR-6)
-- Grafana DLQ monitoring dashboard
+- ✅ Burn-rate SLO alerting (OBS-01) — multi-window (5m + 1h), error budget model — S5-W17 resolved
+- ✅ Audit query & export (OBS-02) — CSV/JSON with SHA-256 checksum — FR-CORE-AUD-002
+- ✅ Retention policies (OBS-03) — domain overrides (HR 7yr, crypto 5yr) — FR-CORE-AUD-003
+- ✅ PII read audit trail (OBS-04) — pii.read/bulk/export actions, withPiiReadAudit HOF — S2-W5 resolved
+- Event schema rollout policy (S3-W10) — documented in ADD §12.5 (Sprint 9)
+- Anomaly detection for bulk data access (RR-6) — deferred to Sprint 13
 
-Source: [WARNINGS_REGISTER.md](../WARNINGS_REGISTER.md) (Bucket D), [platform-core-add.md](../03-architecture/platform-core-add.md) §11, §14.3
+Source: [sprint-12-plan.md](./sprint-12-plan.md), [WARNINGS_REGISTER.md](../WARNINGS_REGISTER.md)
 
 ### Epic 5: Notification Expansion
 

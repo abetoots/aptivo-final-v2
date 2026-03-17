@@ -284,10 +284,10 @@ These updates are delivered as part of ID2-08 and ID2-09 documentation tasks.
 | FR-CORE-WFE-007 | Parent/Child Workflows | Deferred | 3 | **Delivered (Sprint 11)** |
 | FR-CORE-HITL-003 | Approve/Reject/Changes | Scope-limited | 3 | **Delivered (Sprint 11)** — request changes + resubmit |
 | FR-CORE-HITL-004 | Approval Policies | Scope-limited | 3 | **Delivered (Sprint 11)** — quorum, sequential, delegation MVP |
-| FR-CORE-LLM-003 | Fallback on Failure | Full (one-hop) | 4 | Full (multi-provider routing) |
+| FR-CORE-LLM-003 | Fallback on Failure | Full (one-hop) | 4 | **Delivered (Sprint 12)** — multi-provider routing (3 strategies) |
 | FR-CORE-NOTIF-003 | Priority Routing | Deferred | 5 | Full |
-| FR-CORE-AUD-002 | Query & Export | Deferred | 4 | Full |
-| FR-CORE-AUD-003 | Retention Policies | Deferred | 4 | Full |
+| FR-CORE-AUD-002 | Query & Export | Deferred | 4 | **Delivered (Sprint 12)** — paginated query + CSV/JSON export + SHA-256 |
+| FR-CORE-AUD-003 | Retention Policies | Deferred | 4 | **Delivered (Sprint 12)** — domain overrides (HR 7yr, crypto 5yr) |
 | FR-CORE-ID-001 | Passwordless Auth | Buy (Supabase) | 1 | **Delivered (Sprint 9)** — OIDC SSO + WebAuthn + SAML contract |
 | FR-CORE-ID-003 | Session Management | Scope-limited | 1 | **Delivered (Sprint 9)** — limits, blacklist, rotation |
 | FR-CORE-INT-001 | Workflow Logic Export | Deferred | 5 | Full |
@@ -295,8 +295,8 @@ These updates are delivered as part of ID2-08 and ID2-09 documentation tasks.
 | FR-CORE-ADM-001 | Platform Health Dashboard | Full (P1) | — | Maintained |
 | FR-CORE-ADM-002 | LLM Usage & Budget | Full (P1) | — | Maintained |
 | FR-CORE-ADM-003 | Audit Log Viewer | Full (P1) | — | Maintained |
-| FR-CORE-OBS-001 | SLO Monitoring | Full (P1) | 4 | Enhanced (burn-rate) |
-| FR-CORE-OBS-002 | Threshold Alerting | Full (P1) | 4 | Enhanced (burn-rate) |
+| FR-CORE-OBS-001 | SLO Monitoring | Full (P1) | 4 | **Delivered (Sprint 12)** — burn-rate multi-window alerting |
+| FR-CORE-OBS-002 | Threshold Alerting | Full (P1) | 4 | **Delivered (Sprint 12)** — burn-rate + error budget model |
 
 **Summary**: 12 requirements addressed in Phase 2 (6 deferred + 4 scope-limited + 2 enhanced)
 

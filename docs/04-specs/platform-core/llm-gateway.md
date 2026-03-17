@@ -734,17 +734,25 @@ See [Admin Operations API TSD](admin-ops-api.md) for full endpoint specification
 
 ---
 
-## 12. Phase 2+ Roadmap
+## 12. Roadmap Status
 
-- Multi-provider routing (cost vs latency optimization)
-- Automatic fallback on provider failure
+### Delivered (Sprint 12)
+
+- ✅ Prompt injection detection classifier — rule-based, 4 pattern categories, Unicode normalization (LLM2-01)
+- ✅ Content filtering pipeline — pre-request + post-response, 3 domain tiers (LLM2-02)
+- ✅ Per-user durable rate limits — Redis-backed token bucket with tier support (LLM2-03)
+- ✅ Multi-provider routing — cost/latency/failover strategies with health tracking (LLM2-04)
+- ✅ Automatic fallback on provider failure — router fallback chain (LLM2-04)
+
+### Future (Phase 3+)
+
+- ML-based injection classifier (replaces rule-based)
 - Model benchmarking for quality vs cost
 - Token estimation before request
 - Prompt caching for repeated queries
 - Vision and multimodal support
 - Embeddings API
-- Per-user rate limits (S5-W17 deferred)
-- Prompt injection classifier (ADD §14 deferred)
+- Streaming content filter
 
 ---
 
