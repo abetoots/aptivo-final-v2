@@ -8,7 +8,8 @@
     "./middleware": "./src/middleware/index.ts",
     "./async": "./src/async/index.ts",
     "./query": "./src/query/index.ts",
-    "./retention": "./src/retention/index.ts"
+    "./retention": "./src/retention/index.ts",
+    "./anomaly": "./src/anomaly/index.ts"
   },
   "scripts": {
     "build": "tsc",

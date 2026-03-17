@@ -34,7 +34,13 @@ export {
   approvalPolicies,
   // per-approver tokens (HITL2-02)
   hitlRequestTokens,
+  // workflow definitions (FEAT-01)
+  workflowStatusEnum,
+  workflowDefinitions,
 } from './schema/index.js';
+
+// workflow step type (FEAT-01)
+export type { WorkflowStep } from './schema/index.js';
 
 // domain seeds (S6-INF-SEED)
 export {

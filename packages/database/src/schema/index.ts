@@ -47,3 +47,7 @@ export {
   positions,
   contracts,
 } from './hr-domain.js';
+
+// workflow definitions (FEAT-01)
+export { workflowStatusEnum, workflowDefinitions } from './workflow-definitions.js';
+export type { WorkflowStep } from './workflow-definitions.js';

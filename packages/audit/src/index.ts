@@ -43,3 +43,14 @@ export type {
   RetentionPurgeResult,
   RetentionStore,
 } from './retention/index.js';
+
+// OBS-05: anomaly detection
+export { createAnomalyDetector, DEFAULT_ANOMALY_CONFIG } from './anomaly/index.js';
+export type {
+  AccessPattern,
+  BaselineStats,
+  AnomalyResult,
+  AnomalyDetectorConfig,
+  AnomalyError,
+  AnomalyDetectorDeps,
+} from './anomaly/index.js';

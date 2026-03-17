@@ -192,6 +192,19 @@ type HrEvents = {
   };
 };
 
+// -- FEAT-04: consent withdrawal event schema --
+
+type ConsentEvents = {
+  'platform/consent.withdrawn': {
+    data: {
+      userId: string;
+      consentType: string;
+      reason: string;
+      withdrawnAt: string;
+    };
+  };
+};
+
 // -- S6-CF-01 SLO alert event schemas --
 
 type SloEvents = {
@@ -257,7 +270,7 @@ type HitlV2Events = {
 
 export const inngest = new Inngest({
   id: 'aptivo-platform',
-  schemas: new EventSchemas().fromRecord<SpikeEvents & PlatformEvents & DemoEvents & CryptoEvents & HrEvents & SloEvents & OrchestrationEvents & HitlV2Events>(),
+  schemas: new EventSchemas().fromRecord<SpikeEvents & PlatformEvents & DemoEvents & CryptoEvents & HrEvents & SloEvents & OrchestrationEvents & HitlV2Events & ConsentEvents>(),
 });
 
 // -- SP-01 functions --

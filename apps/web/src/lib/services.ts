@@ -72,7 +72,11 @@ import {
   createNotificationService,
   NovuNotificationAdapter,
   createTemplateRegistry,
+  createSmtpAdapter,
+  createFailoverAdapter,
+  validateSmtpConfig,
 } from '@aptivo/notifications';
+import type { FailoverPolicy, MailTransport, NotificationAdapter } from '@aptivo/notifications';
 import { createNovuSdkClient, createNovuStubClient } from './novu-client.js';
 import type { NovuSdkInstance } from './novu-client.js';
 
@@ -99,6 +103,21 @@ import { generateHitlToken, hashToken } from '@aptivo/hitl-gateway';
 
 // oidc provider (ID2-01)
 import { createClaimMapper, loadProvidersFromEnv } from './auth/oidc-provider.js';
+
+// workflow definition service (FEAT-01)
+import { createWorkflowDefinitionService } from './workflows/workflow-definition-service.js';
+import type { WorkflowDefinitionStore, WorkflowDefinitionRecord } from './workflows/workflow-definition-service.js';
+
+// consent service (FEAT-04)
+import { createConsentService } from './consent/consent-service.js';
+
+// webhook service (FEAT-02)
+import { createWebhookService } from './webhooks/webhook-service.js';
+import type { WebhookStore, WebhookRegistration } from './webhooks/webhook-service.js';
+
+// feature flag service (FEAT-03)
+import { createFeatureFlagService } from './feature-flags/feature-flag-service.js';
+import { createLocalFlagProvider, DEFAULT_FLAGS } from './feature-flags/local-provider.js';
 
 // llm-gateway
 import {
@@ -213,9 +232,59 @@ const getNovuAdapter = lazy(() =>
   ),
 );
 
+// smtp adapter — env-gated: only created when SMTP_HOST is set (NOTIF2-01)
+const getSmtpAdapter = lazy((): NotificationAdapter | null => {
+  const configResult = validateSmtpConfig({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT) || 0,
+    user: process.env.SMTP_USER ?? '',
+    pass: process.env.SMTP_PASS ?? '',
+    from: process.env.SMTP_FROM ?? '',
+    secure: process.env.SMTP_SECURE === 'true',
+  });
+  if (!configResult.ok) return null;
+
+  // build mail transport — uses nodemailer when available, otherwise null
+  let transport: MailTransport | null = null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const nodemailer = require('nodemailer') as {
+      createTransport: (opts: Record<string, unknown>) => MailTransport;
+    };
+    transport = nodemailer.createTransport({
+      host: configResult.value.host,
+      port: configResult.value.port,
+      secure: configResult.value.secure,
+      auth: { user: configResult.value.user, pass: configResult.value.pass },
+    });
+  } catch {
+    console.warn('nodemailer not installed, smtp adapter unavailable');
+    return null;
+  }
+
+  return createSmtpAdapter(transport, configResult.value);
+});
+
+// failover adapter — wraps novu + smtp when both are available (NOTIF2-01)
+const getNotificationAdapter = lazy((): NotificationAdapter => {
+  const smtp = getSmtpAdapter();
+  const novu = getNovuAdapter();
+
+  if (!smtp) return novu;
+
+  const policy = (process.env.NOTIFICATION_FAILOVER_POLICY ?? 'novu_primary') as FailoverPolicy;
+
+  if (policy === 'smtp_primary') {
+    return createFailoverAdapter(smtp, novu, policy);
+  }
+
+  // default: novu primary, smtp secondary
+  return createFailoverAdapter(novu, smtp, policy);
+});
+
 export const getNotificationService = lazy(() =>
   createNotificationService({
-    adapter: getNovuAdapter(),
+    adapter: getNotificationAdapter(),
     preferenceStore: getPreferenceStore(),
     deliveryLogStore: getDeliveryLogStore(),
     templateRegistry: getTemplateRegistry(),
@@ -683,6 +752,58 @@ export const getOidcClaimMapper = lazy(() => {
 });
 
 // ---------------------------------------------------------------------------
+// workflow definition service (FEAT-01)
+// ---------------------------------------------------------------------------
+
+// in-memory store — progressive pattern: swap for drizzle-backed store when
+// workflow_definitions table is migrated
+export const getWorkflowDefinitionService = lazy(() => {
+  const records = new Map<string, WorkflowDefinitionRecord>();
+
+  const inMemoryStore: WorkflowDefinitionStore = {
+    async create(record) {
+      const id = crypto.randomUUID();
+      const now = new Date();
+      const full: WorkflowDefinitionRecord = {
+        ...record,
+        id,
+        createdAt: now,
+        updatedAt: now,
+      };
+      records.set(id, full);
+      return full;
+    },
+    async findById(id) {
+      return records.get(id) ?? null;
+    },
+    async findByName(name, domain) {
+      return [...records.values()].filter((r) => r.name === name && r.domain === domain);
+    },
+    async list(domain) {
+      const all = [...records.values()];
+      if (domain) return all.filter((r) => r.domain === domain);
+      return all;
+    },
+    async update(id, data) {
+      const existing = records.get(id);
+      if (!existing) return null;
+      const updated: WorkflowDefinitionRecord = {
+        ...existing,
+        ...data,
+        updatedAt: new Date(),
+      };
+      records.set(id, updated);
+      return updated;
+    },
+    async delete(id) {
+      return records.delete(id);
+    },
+  };
+
+  return createWorkflowDefinitionService({ store: inMemoryStore });
+});
+
+// ---------------------------------------------------------------------------
 // inngest function handler factories
 // ---------------------------------------------------------------------------
 
@@ -710,4 +831,77 @@ export const getPiiReadAuditMiddleware = lazy(() =>
       });
     },
   }),
+);
+
+// ---------------------------------------------------------------------------
+// consent service (FEAT-04)
+// ---------------------------------------------------------------------------
+
+export const getConsentService = lazy(() =>
+  createConsentService({
+    emitAudit: async (event) => {
+      const auditService = getAuditService();
+      await auditService.emit({
+        actor: { id: event.actor, type: 'user' },
+        action: event.action,
+        resource: event.resource,
+        metadata: event.metadata,
+      });
+    },
+    emitEvent: async (event) => {
+      const { inngest } = await import('./inngest.js');
+      await inngest.send({
+        name: event.name as 'platform/consent.withdrawn',
+        data: event.data as { userId: string; consentType: string; reason: string; withdrawnAt: string },
+      });
+    },
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// webhook service (FEAT-02)
+// ---------------------------------------------------------------------------
+
+// in-memory store — progressive pattern: swap for drizzle-backed store when
+// webhooks table is migrated
+export const getWebhookService = lazy(() => {
+  const records = new Map<string, WebhookRegistration>();
+
+  const inMemoryStore: WebhookStore = {
+    async register(reg) {
+      const id = crypto.randomUUID();
+      const full: WebhookRegistration = {
+        ...reg,
+        id,
+        createdAt: new Date(),
+      };
+      records.set(id, full);
+      return full;
+    },
+    async findByEvent(event) {
+      return [...records.values()].filter((r) => r.events.includes(event));
+    },
+    async findById(id) {
+      return records.get(id) ?? null;
+    },
+    async deactivate(id) {
+      const existing = records.get(id);
+      if (!existing) return false;
+      records.set(id, { ...existing, active: false });
+      return true;
+    },
+    async list() {
+      return [...records.values()];
+    },
+  };
+
+  return createWebhookService({ store: inMemoryStore });
+});
+
+// ---------------------------------------------------------------------------
+// feature flag service (FEAT-03)
+// ---------------------------------------------------------------------------
+
+export const getFeatureFlagService = lazy(() =>
+  createFeatureFlagService({ provider: createLocalFlagProvider(DEFAULT_FLAGS) }),
 );
