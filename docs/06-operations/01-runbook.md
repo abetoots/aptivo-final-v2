@@ -2,7 +2,7 @@
 id: RUNBOOK-DEPLOYMENT
 title: 6.a Deployment & Operations
 status: Draft
-version: 2.3.0
+version: 2.4.0
 owner: "@owner"
 last_updated: "2026-03-04"
 parent: ../03-architecture/platform-core-add.md
@@ -1674,6 +1674,460 @@ During a DigitalOcean regional failure, the following SaaS dependencies are affe
 
 ---
 
+## **16. Sprint 15 Production Deployment Checklist**
+
+> **Status**: PENDING — code complete, infrastructure not provisioned
+> **Owner**: DevOps + Senior Engineer
+> **Prerequisite**: Sprint 15 commit `96a52fc` merged to main
+> **Release gate**: All 9 steps must have evidence artifacts before GO decision
+
+This checklist converts Sprint 15's simulated validations into real production readiness. Each step lists the human actions, the env vars to set, and verification steps that prove the step is complete.
+
+**Authentication note**: In production, auth uses Supabase cookie-based sessions (not bearer tokens). Browser-based verification steps require SSO login first. For API-based verification in staging, use the dev-mode header `x-user-id: <user-uuid>` (only works when `NODE_ENV !== 'production'`).
+
+**Existing routes** (verified in codebase):
+- Health: `GET /health/live`, `GET /health/ready`
+- Admin: `GET /api/admin/overview`, `/api/admin/feature-flags`, `/api/admin/approval-sla`, `/api/admin/hitl`, `/api/admin/audit`
+- Auth: `GET /api/auth/sso/status`, `GET /api/auth/mfa/enroll`, `POST /api/auth/mfa/challenge`, `POST /api/auth/mfa/verify`
+- Workflows: `GET /api/workflows`, `POST /api/workflows`, `GET /api/workflows/:id`
+- MCP: `GET /api/mcp/servers`, `GET /api/mcp/servers/:id/health`
+
+**Note**: There are no HITL request creation, LLM completion, or notification test endpoints in the current codebase. Steps 6 and 8 include manual alternatives.
+
+---
+
+### 16.0 Step 0 — Complete Env Var Inventory
+
+Before starting, ensure ALL production env vars are planned. The composition root (`apps/web/src/lib/services.ts`) reads these vars at runtime:
+
+**Required for Sprint 15 (this checklist):**
+```
+NODE_ENV=production
+NEXT_PUBLIC_SUPABASE_URL=<from Step 1>
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<from Step 1>
+OIDC_PROVIDERS_CONFIG=<from Step 1>
+DATABASE_URL_HA=<from Step 3>
+DATABASE_URL=<from Step 3>
+UPSTASH_REDIS_SESSION_URL=<from Step 5>
+UPSTASH_REDIS_SESSION_TOKEN=<from Step 5>
+UPSTASH_REDIS_JOBS_URL=<from Step 5>
+UPSTASH_REDIS_JOBS_TOKEN=<from Step 5>
+SMTP_HOST=<from Step 6>
+SMTP_PORT=<from Step 6>
+SMTP_USER=<from Step 6>
+SMTP_PASS=<from Step 6>
+SMTP_FROM=<from Step 6>
+SMTP_SECURE=<from Step 6>
+FEATURE_FLAGS=<from Step 7>
+```
+
+**Required for full production (not Sprint 15 scope but must be set):**
+```
+HITL_BASE_URL=https://<app-url>
+HITL_SIGNING_SECRET=<min 32 chars, generate with: openssl rand -hex 32>
+NOVU_API_KEY=<from Novu dashboard>
+NOVU_WORKFLOW_ID=generic-notification
+NOTIFICATION_FAILOVER_POLICY=novu_primary
+OPENAI_API_KEY=<from OpenAI>
+ANTHROPIC_API_KEY=<from Anthropic>
+MCP_SERVER_URL=<if using MCP>
+MCP_SIGNING_KEY=<generate with: openssl rand -hex 16>
+DO_SPACES_BUCKET=<from DO Spaces>
+DO_SPACES_REGION=nyc3
+DO_SPACES_KEY=<from DO Spaces>
+DO_SPACES_SECRET=<from DO Spaces>
+WEBAUTHN_RP_ID=yourdomain.com
+WEBAUTHN_RP_NAME=Aptivo
+WEBAUTHN_ORIGIN=https://yourdomain.com
+```
+
+**Runtime package dependencies** (verify installed in `apps/web/package.json`):
+- `@supabase/supabase-js` — required by real MFA client
+- `@supabase/ssr` — required by production auth extraction
+- `@upstash/redis` — required by Redis clients
+- `nodemailer` — required by SMTP adapter
+
+---
+
+### 16.1 Step 1 — Supabase Pro OIDC SSO + MFA (PR-01)
+
+**Human actions:**
+1. Upgrade Supabase project to Pro plan at https://supabase.com/dashboard
+2. Navigate to Authentication → Providers → Enable OIDC (Okta)
+   - Set Issuer URL, Client ID, Client Secret from your Okta admin console
+   - Map Okta groups to Aptivo roles in the provider config
+3. Navigate to Authentication → Providers → Enable OIDC (Azure AD) as secondary
+4. Navigate to Authentication → MFA → Enable TOTP
+   - Set enforcement: "Required for users with admin role"
+5. Create break-glass local admin account:
+   - Authentication → Users → Create user with email + password
+   - Store credentials in secrets provider (1Password/Vault), not in code
+
+**Env vars to set in deployment platform:**
+```
+NEXT_PUBLIC_SUPABASE_URL=https://<project-id>.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon-key>
+OIDC_PROVIDERS_CONFIG='[{"providerId":"okta","displayName":"Okta SSO","issuerUrl":"https://<org>.okta.com","clientId":"<id>","groupToRoleMapping":{"admins":"admin","developers":"developer","viewers":"viewer"},"defaultRole":"user","domains":["company.com"]},{"providerId":"azure-ad","displayName":"Azure AD","issuerUrl":"https://login.microsoftonline.com/<tenant>/v2.0","clientId":"<id>","groupToRoleMapping":{"Admins":"admin"},"defaultRole":"user","domains":["company.com"]}]'
+```
+
+**Verification (browser-based):**
+- [ ] SSO login via Okta produces authenticated session with mapped roles
+- [ ] MFA enrollment prompts on first admin login
+- [ ] Break-glass local login works when OIDC providers are unreachable
+- [ ] Screenshot: Supabase Pro plan confirmation + provider config
+
+**Evidence artifact**: `evidence/pr-01-sso-mfa.md` — screenshots, login trace, role mapping proof
+
+---
+
+### 16.2 Step 2 — MFA Stub Removal Verification (PR-02)
+
+**Human actions:**
+1. Verify `NEXT_PUBLIC_SUPABASE_URL` is set in production env (from Step 1)
+2. Deploy the application with `NODE_ENV=production`
+3. Confirm startup succeeds (no crash from missing Supabase URL)
+
+**Verification:**
+```bash
+# verify the app starts and health endpoints respond
+curl -s https://<app-url>/health/live | jq .
+# should return { "status": "ok" }
+
+curl -s https://<app-url>/health/ready | jq .
+# should return { "status": "ok" }
+```
+
+**Browser-based MFA verification:**
+1. Log in via SSO (from Step 1)
+2. Navigate to a page that triggers `GET /api/auth/mfa/enroll`
+3. Confirm enrollment flow starts (not a 503 error)
+
+**Verification:**
+- [ ] Application starts in production without MFA-related crash
+- [ ] Health endpoints (`/health/live`, `/health/ready`) respond with `ok`
+- [ ] MFA enrollment works via browser session (not 503)
+- [ ] Check deployment logs — no `createMfaStubClient` calls in production
+
+**Evidence artifact**: `evidence/pr-02-mfa-stub.md` — health responses, deployment logs
+
+---
+
+### 16.3 Step 3 — HA PostgreSQL Cluster (PR-03)
+
+**Human actions:**
+1. Go to DigitalOcean → Databases → Create Database Cluster
+   - Engine: PostgreSQL 16
+   - Plan: Production (includes standby node)
+   - Region: same as App Platform (e.g., nyc3)
+   - Name: `aptivo-db-ha`
+2. Note the connection string (connection pooler endpoint)
+3. Add the App Platform app as a trusted source
+
+**Env vars to set:**
+```
+DATABASE_URL_HA=postgresql://<user>:<pass>@<host>:25060/<db>?sslmode=require
+DATABASE_URL=postgresql://<user>:<pass>@<host>:25060/<db>?sslmode=require
+```
+
+**Verification — failover drill:**
+```bash
+# 1. record timestamp
+date -u
+
+# 2. trigger failover (DO console → Database → Actions → Promote standby)
+
+# 3. measure RTO — time from failover trigger to first successful query
+while true; do
+  psql "$DATABASE_URL_HA" -c "SELECT 1" 2>/dev/null && echo "$(date -u) CONNECTED" && break
+  echo "$(date -u) waiting..."
+  sleep 1
+done
+
+# target: reconnect within 30 seconds
+```
+
+**Verification:**
+- [ ] HA cluster provisioned with primary + standby (screenshot from DO console)
+- [ ] Application connects to HA cluster after deploy
+- [ ] Failover drill executed: RTO measured at _____ seconds (target <30s)
+- [ ] Application reconnects automatically after failover
+- [ ] Post-failover queries succeed
+
+**Evidence artifact**: `evidence/pr-03-ha-database.md` — cluster screenshot, failover timeline with timestamps, RTO measurement
+
+---
+
+### 16.4 Step 4 — Pool Config Enforcement (PR-04)
+
+**Human actions:**
+1. No infrastructure provisioning needed — uses the cluster from Step 3
+2. Verify pool settings are applied by checking connection counts under load
+
+**Verification:**
+```bash
+# check total active connections (application doesn't set application_name per domain,
+# so verify total connection count stays within expected limits)
+psql "$DATABASE_URL_HA" -c "SELECT count(*) FROM pg_stat_activity WHERE datname = '<db>';"
+
+# verify pool config values are correct in code
+# crypto: max 10, hr: max 10, platform: max 20 (defined in packages/database/src/pool-config.ts)
+```
+
+**Note**: Per-domain pool isolation is enforced in code (`DOMAIN_POOL_DEFAULTS` in `pool-config.ts`) but not distinguishable via `pg_stat_activity` because `application_name` is not set per domain. Verification is code-level, not infrastructure-level.
+
+**Verification:**
+- [ ] Total connection count stays within expected limits under load
+- [ ] `pool-config.ts` domain defaults reviewed: crypto=10, hr=10, platform=20
+- [ ] Connection exhaustion produces error, not hang
+
+**Evidence artifact**: `evidence/pr-04-pool-config.md` — connection count output, code review confirmation
+
+---
+
+### 16.5 Step 5 — Split Redis Instances (PR-05)
+
+**Human actions:**
+1. Go to Upstash → Create Database → name: `aptivo-session` (region: same as app)
+2. Go to Upstash → Create Database → name: `aptivo-jobs` (region: same as app)
+3. Copy REST URLs and tokens for each
+
+**Env vars to set:**
+```
+UPSTASH_REDIS_SESSION_URL=https://<session-id>.upstash.io
+UPSTASH_REDIS_SESSION_TOKEN=<session-token>
+UPSTASH_REDIS_JOBS_URL=https://<jobs-id>.upstash.io
+UPSTASH_REDIS_JOBS_TOKEN=<jobs-token>
+```
+
+**Verification:**
+```bash
+# verify session redis is reachable
+curl -s "$UPSTASH_REDIS_SESSION_URL/ping" -H "Authorization: Bearer $UPSTASH_REDIS_SESSION_TOKEN"
+# should return "PONG"
+
+# verify jobs redis is reachable (different instance)
+curl -s "$UPSTASH_REDIS_JOBS_URL/ping" -H "Authorization: Bearer $UPSTASH_REDIS_JOBS_TOKEN"
+# should return "PONG"
+
+# verify they are different instances
+echo "Session: $UPSTASH_REDIS_SESSION_URL"
+echo "Jobs: $UPSTASH_REDIS_JOBS_URL"
+```
+
+**Verification:**
+- [ ] Two separate Upstash databases created (screenshot)
+- [ ] Both respond to PING
+- [ ] Token blacklist writes go to session Redis (verified via `getTokenBlacklist` → `getSessionRedis` call chain in `services.ts`)
+
+**Note**: `getJobsRedis()` is defined but not yet consumed by any runtime service. The jobs Redis instance is provisioned now for future use (Inngest workers, background jobs). Current verification is infrastructure-only — runtime wiring is a follow-up task.
+
+**Evidence artifact**: `evidence/pr-05-redis-split.md` — Upstash dashboard screenshots, PING responses
+
+---
+
+### 16.6 Step 6 — SMTP Credentials + Failover (PR-06)
+
+**Human actions:**
+1. Sign up for SendGrid (or Mailgun) if not already configured
+2. Create API key with "Mail Send" permission
+3. Verify sending domain (SendGrid → Settings → Sender Authentication)
+   - Add SPF record: `v=spf1 include:sendgrid.net ~all`
+   - Add DKIM record: CNAME records from SendGrid wizard
+4. Wait for DNS propagation (can take up to 48h, usually minutes)
+
+**Env vars to set:**
+```
+SMTP_HOST=smtp.sendgrid.net
+SMTP_PORT=587
+SMTP_USER=apikey
+SMTP_PASS=SG.<your-api-key>
+SMTP_FROM=noreply@yourdomain.com
+SMTP_SECURE=false
+NOVU_API_KEY=<from Novu dashboard>
+NOTIFICATION_FAILOVER_POLICY=novu_primary
+```
+
+**Verification:**
+```bash
+# verify DNS records
+dig TXT yourdomain.com +short | grep spf
+dig CNAME s1._domainkey.yourdomain.com +short
+
+# send test email directly via SMTP (no app endpoint needed)
+# using swaks (install: apt install swaks):
+swaks --to your-email@gmail.com \
+  --from noreply@yourdomain.com \
+  --server smtp.sendgrid.net:587 \
+  --auth-user apikey \
+  --auth-password "SG.<your-api-key>" \
+  --tls \
+  --body "Sprint 15 SMTP verification test"
+```
+
+**Note**: There is no `/api/test/send-notification` endpoint in the codebase. Use `swaks` or a similar SMTP test tool to verify delivery independently of the application. Failover testing (Novu → SMTP) requires both `NOVU_API_KEY` and SMTP credentials to be set, then temporarily invalidating the Novu key.
+
+**Verification:**
+- [ ] SPF record resolves correctly
+- [ ] DKIM record resolves correctly
+- [ ] Test email delivered to inbox via `swaks` (not spam)
+- [ ] Failover test: set invalid `NOVU_API_KEY` → app falls back to SMTP delivery
+- [ ] Re-set valid `NOVU_API_KEY` → primary path resumes
+
+**Evidence artifact**: `evidence/pr-06-smtp.md` — DNS dig output, delivered email headers, failover logs
+
+---
+
+### 16.7 Step 7 — Feature Flag Rollout Controls (PR-07)
+
+**Human actions:**
+1. Set production feature flag policy
+
+**Env var to set:**
+```
+FEATURE_FLAGS='[{"key":"multi-approver-hitl","enabled":true},{"key":"llm-safety-pipeline","enabled":true},{"key":"burn-rate-alerting","enabled":true},{"key":"smtp-fallback","enabled":true},{"key":"workflow-crud","enabled":false},{"key":"llm-streaming-filter","enabled":false}]'
+```
+
+**Verification (requires authenticated session — use browser after SSO login):**
+1. Log in via SSO (Step 1)
+2. Navigate to admin panel or call from browser console:
+   ```
+   fetch('/api/admin/feature-flags').then(r => r.json()).then(console.log)
+   ```
+3. Verify response shows all flags with `source` annotation
+
+**Alternative (staging only, dev mode with x-user-id header):**
+```bash
+curl -s https://<staging-url>/api/admin/feature-flags \
+  -H "x-user-id: admin-user-uuid" | jq .
+```
+
+**Verification:**
+- [ ] Admin endpoint returns all flags with `source` annotation
+- [ ] `workflow-crud` = false (deny-by-default)
+- [ ] `llm-streaming-filter` = false (deny-by-default)
+- [ ] `smtp-fallback` = true (enabled after Step 6 validation)
+
+**Evidence artifact**: `evidence/pr-07-feature-flags.md` — admin endpoint JSON response
+
+---
+
+### 16.8 Step 8 — Production E2E Against Real Staging (PR-08)
+
+**Human actions:**
+1. Confirm Steps 1-7 are complete with evidence
+2. Deploy latest main to staging environment
+3. Run E2E validation
+
+**Golden path (browser-based, requires SSO login):**
+
+| Step | Action | Expected Result |
+|------|--------|----------------|
+| 1 | Navigate to `https://<staging-url>` → "Sign in with Okta" | Redirect to Okta → authenticate → return to app |
+| 2 | Navigate to admin panel | Prompted for TOTP (MFA step-up) |
+| 3 | Enter authenticator code | Admin panel access granted |
+| 4 | View `GET /api/admin/overview` | Returns `pendingHitlCount`, `activeWorkflowCount`, `sloHealth` |
+| 5 | View `GET /api/admin/feature-flags` | Returns all flags matching Step 7 config |
+| 6 | View `GET /api/mcp/servers` | Returns server list (may be empty if no MCP servers configured) |
+| 7 | Create workflow via `POST /api/workflows` | Returns workflow with `version: 1`, `status: 'draft'` |
+
+**Infrastructure verification (from terminal):**
+```bash
+# health endpoints
+curl -s https://<staging-url>/health/live | jq .
+curl -s https://<staging-url>/health/ready | jq .
+
+# verify the app is running against HA database (check deployment logs for DATABASE_URL_HA)
+# verify Redis is connected (check deployment logs for Upstash connections)
+```
+
+**Note**: HITL request creation and LLM completion require Inngest runtime and LLM provider keys. If not yet configured, document as known limitation and verify in a follow-up deployment.
+
+**Verification:**
+- [ ] SSO login → MFA step-up → admin access (video or screenshots)
+- [ ] Admin overview endpoint returns data
+- [ ] Feature flags endpoint reflects production policy
+- [ ] Workflow CRUD endpoint works
+- [ ] Health endpoints return `ok`
+- [ ] Deployment logs confirm HA database + Redis connections
+
+**Evidence artifact**: `evidence/pr-08-e2e.md` — golden path walkthrough with screenshots/responses
+
+---
+
+### 16.9 Step 9 — Game-Day Drills (PR-09)
+
+**Prerequisites**: Steps 1-8 complete. Schedule a 1-hour window with 2+ team members.
+
+**Drill A — Database Failover (repeat of Step 3 drill, now with full app running):**
+```
+1. Record start time: _____________
+2. Trigger failover: DO Console → Database → Promote Standby
+3. Monitor app health:
+   while true; do curl -s https://<app-url>/health/ready | jq .status; sleep 2; done
+4. Record reconnect time: _____________
+5. RTO = reconnect - start = _______ seconds (target <30s)
+6. Verify admin endpoints still work after failover
+```
+
+**Drill B — Application Rollback:**
+```
+1. Record start time: _____________
+2. Deploy previous version:
+   doctl apps create-deployment <app-id> --wait
+   # or use App Platform UI → Deployments → Rollback
+3. Monitor health:
+   while true; do curl -s https://<app-url>/health/ready | jq .status; sleep 5; done
+4. Record health-check-pass time: _____________
+5. Rollback time = health-pass - start = _______ seconds (target <2min)
+```
+
+**Drill C — Incident Communication (manual):**
+```
+1. Compose a test incident notification email manually via SendGrid dashboard
+   or use swaks (from Step 6) to send to on-call distribution list
+2. Verify notification reaches on-call channel (email/Slack)
+3. Record delivery time: _____________
+```
+
+**Note**: There is no `/api/admin/test-incident-notification` endpoint. Drill C uses manual email or SMTP tooling to verify the communication channel works.
+
+**Verification:**
+- [ ] Drill A executed with timestamps and RTO
+- [ ] Drill B executed with timestamps and rollback duration
+- [ ] Drill C executed with delivery confirmation
+- [ ] Any runbook corrections identified during drills are applied
+
+**Evidence artifact**: `evidence/pr-09-drills.md` — timestamped drill logs, corrections applied
+
+---
+
+### 16.10 Release Decision
+
+Once all 9 steps have evidence artifacts:
+
+1. Update `docs/06-sprints/sprint-15-e2e-results.md`:
+   - Change **Decision** from `PENDING` to `GO`
+   - Replace "simulated infrastructure" with real evidence references
+2. Collect all `evidence/pr-*.md` files
+3. Final sign-off by Senior Engineer + DevOps
+
+```
+[ ] PR-01 evidence reviewed: _______________  Date: ___________
+[ ] PR-02 evidence reviewed: _______________  Date: ___________
+[ ] PR-03 evidence reviewed: _______________  Date: ___________
+[ ] PR-04 evidence reviewed: _______________  Date: ___________
+[ ] PR-05 evidence reviewed: _______________  Date: ___________
+[ ] PR-06 evidence reviewed: _______________  Date: ___________
+[ ] PR-07 evidence reviewed: _______________  Date: ___________
+[ ] PR-08 evidence reviewed: _______________  Date: ___________
+[ ] PR-09 evidence reviewed: _______________  Date: ___________
+
+Release Decision: [ ] GO  [ ] NO-GO
+Signed: _________________________ Date: ___________
+```
+
+---
+
 ## **Revision History**
 
 | Version | Date       | Author                | Changes                                                                                                                                                                                                |
@@ -1684,3 +2138,4 @@ During a DigitalOcean regional failure, the following SaaS dependencies are affe
 | v2.1.0  | 2026-02-03 | Multi-Model Consensus | Aligned with ADD: replaced K8s with DigitalOcean App Platform, TBD environments, Build Once Deploy Many pipeline, added security scan status |
 | v2.2.0  | 2026-03-04 | Documentation Review  | Fixed feature flag §2.4 to reflect Phase 1 compile-time constants; added playbooks (MCP circuit breaker, LLM failure/budget, File Storage/ClamAV, BullMQ stall, ClamAV ops); added §9 Rollback Procedures (app, DB migration, secret rotation, infrastructure, Inngest workflow, multi-component order); added §12 Vendor Escalation Contacts; added §13 DR Test Procedure; added §14 Regional SaaS Isolation Map; renumbered sections 10–11 |
 | v2.3.0  | 2026-03-17 | Phase 2 Closure       | Added §15 Phase 2 Service Operations (notification failover, workflow CRUD, feature flags, consent, approval SLA, visual workflow builder) |
+| v2.4.0  | 2026-03-18 | Sprint 15 Deployment  | Added §16 Sprint 15 Production Deployment Checklist — 9-step human-actionable deployment gate with env vars, verification commands, and evidence requirements |
