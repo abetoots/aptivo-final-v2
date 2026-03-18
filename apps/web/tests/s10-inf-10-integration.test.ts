@@ -228,15 +228,18 @@ describe('INF-10: Secrets Provider in Composition Root', () => {
 // ---------------------------------------------------------------------------
 
 describe('INF-10: Redis Split Backward Compatibility', () => {
-  it('buildSessionRedis prefers session-specific URL, falls back to shared', () => {
-    const source = readSource('src/lib/services.ts');
-    // verify the fallback chain exists in the buildSessionRedis function
-    expect(source).toContain('UPSTASH_REDIS_SESSION_URL');
-    expect(source).toContain('UPSTASH_REDIS_URL');
+  it('redis resolver prefers session-specific URL, falls back to shared', () => {
+    const resolverSource = readSource('src/lib/redis/redis-resolver.ts');
+    // verify the fallback chain exists in the extracted resolver
+    expect(resolverSource).toContain('UPSTASH_REDIS_SESSION_URL');
+    expect(resolverSource).toContain('UPSTASH_REDIS_URL');
     // the ?? operator does the fallback
-    expect(source).toContain(
-      "process.env.UPSTASH_REDIS_SESSION_URL ?? process.env.UPSTASH_REDIS_URL",
+    expect(resolverSource).toContain(
+      'env.UPSTASH_REDIS_SESSION_URL ?? env.UPSTASH_REDIS_URL',
     );
+    // services.ts delegates to the resolver
+    const servicesSource = readSource('src/lib/services.ts');
+    expect(servicesSource).toContain('resolveSessionRedisConfig');
   });
 
   it('getTokenBlacklist and getSessionLimitService both use getSessionRedis', () => {

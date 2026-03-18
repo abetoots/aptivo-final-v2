@@ -39,6 +39,7 @@
   "devDependencies": {
     "@aptivo/eslint-config": "workspace:*",
     "@aptivo/typescript-config": "workspace:*",
+    "@electric-sql/pglite": "^0.4.0",
     "@inngest/test": "^0.1.9",
     "@types/node": "^25.3.3",
     "@types/react": "^19.2.14",

@@ -1,3 +1,4 @@
+// @testtype doc-lint — validates documentation structure, not code behavior
 /**
  * PR-09: Game-Day Runbook Drills — validation tests
  * @task PR-09

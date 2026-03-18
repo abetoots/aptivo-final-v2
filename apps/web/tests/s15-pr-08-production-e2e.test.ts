@@ -9,6 +9,8 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Result } from '@aptivo/types';
+import { resolveMfaClient } from '../src/lib/auth/mfa-client-resolver';
+import { resolveSessionRedisConfig, resolveJobsRedisConfig } from '../src/lib/redis/redis-resolver';
 
 // ---------------------------------------------------------------------------
 // 1. connection resolution
@@ -102,17 +104,13 @@ describe('PR-08: MFA Client Resolution', () => {
     expect(stub._isStub).toBe(true);
   });
 
-  it('production without supabase URL throws', () => {
-    // replicate the logic
-    function getMfaClientLogic(env: Record<string, string | undefined>) {
-      if (env.NEXT_PUBLIC_SUPABASE_URL) return { _isStub: false };
-      if (env.NODE_ENV === 'production') {
-        throw new Error('NEXT_PUBLIC_SUPABASE_URL is required in production');
-      }
-      return { _isStub: true };
+  it('production without supabase URL returns error resolution', () => {
+    // use the extracted resolver instead of inline replica
+    const resolution = resolveMfaClient({ NODE_ENV: 'production' });
+    expect(resolution.type).toBe('error');
+    if (resolution.type === 'error') {
+      expect(resolution.message).toContain('NEXT_PUBLIC_SUPABASE_URL is required in production');
     }
-
-    expect(() => getMfaClientLogic({ NODE_ENV: 'production' })).toThrow();
   });
 });
 
@@ -121,15 +119,7 @@ describe('PR-08: MFA Client Resolution', () => {
 // ---------------------------------------------------------------------------
 
 describe('PR-08: Redis Split Verification', () => {
-  // replicate the env resolution logic for session and jobs redis
-
-  function resolveSessionUrl(env: Record<string, string | undefined>): string | undefined {
-    return env.UPSTASH_REDIS_SESSION_URL ?? env.UPSTASH_REDIS_URL;
-  }
-
-  function resolveJobsUrl(env: Record<string, string | undefined>): string | undefined {
-    return env.UPSTASH_REDIS_JOBS_URL ?? env.UPSTASH_REDIS_URL;
-  }
+  // use the extracted resolvers instead of inline replicas
 
   it('session and jobs use different URLs when split', () => {
     const env = {
@@ -137,12 +127,14 @@ describe('PR-08: Redis Split Verification', () => {
       UPSTASH_REDIS_JOBS_URL: 'https://jobs.upstash.io',
     };
 
-    const sessionUrl = resolveSessionUrl(env);
-    const jobsUrl = resolveJobsUrl(env);
+    const sessionConfig = resolveSessionRedisConfig(env);
+    const jobsConfig = resolveJobsRedisConfig(env);
 
-    expect(sessionUrl).toBe('https://session.upstash.io');
-    expect(jobsUrl).toBe('https://jobs.upstash.io');
-    expect(sessionUrl).not.toBe(jobsUrl);
+    expect(sessionConfig).not.toBeNull();
+    expect(jobsConfig).not.toBeNull();
+    expect(sessionConfig!.url).toBe('https://session.upstash.io');
+    expect(jobsConfig!.url).toBe('https://jobs.upstash.io');
+    expect(sessionConfig!.url).not.toBe(jobsConfig!.url);
   });
 
   it('single URL backward compat', () => {
@@ -150,11 +142,13 @@ describe('PR-08: Redis Split Verification', () => {
       UPSTASH_REDIS_URL: 'https://shared.upstash.io',
     };
 
-    const sessionUrl = resolveSessionUrl(env);
-    const jobsUrl = resolveJobsUrl(env);
+    const sessionConfig = resolveSessionRedisConfig(env);
+    const jobsConfig = resolveJobsRedisConfig(env);
 
-    expect(sessionUrl).toBe('https://shared.upstash.io');
-    expect(jobsUrl).toBe('https://shared.upstash.io');
+    expect(sessionConfig).not.toBeNull();
+    expect(jobsConfig).not.toBeNull();
+    expect(sessionConfig!.url).toBe('https://shared.upstash.io');
+    expect(jobsConfig!.url).toBe('https://shared.upstash.io');
   });
 
   it('token blacklist uses session redis', async () => {

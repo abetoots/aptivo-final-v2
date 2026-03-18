@@ -9,10 +9,11 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Result } from '@aptivo/types';
+import { resolveMfaClient } from '../src/lib/auth/mfa-client-resolver';
 
 // ---------------------------------------------------------------------------
-// helpers — replicate the getMfaClient env-resolution logic in isolation
-// (direct import from services.ts requires 20+ transitive deps)
+// helpers — use the extracted resolver for env-resolution logic
+// (no more inline replicas — resolveMfaClient is directly importable)
 // ---------------------------------------------------------------------------
 
 interface MockMfaClient {
@@ -24,15 +25,14 @@ function buildMfaClientLogic(
   env: Record<string, string | undefined>,
   createRealClient: () => MockMfaClient,
 ): MockMfaClient {
-  if (env.NEXT_PUBLIC_SUPABASE_URL) {
+  const resolution = resolveMfaClient(env);
+
+  if (resolution.type === 'real') {
     return createRealClient();
   }
 
-  // production guard
-  if (env.NODE_ENV === 'production') {
-    throw new Error(
-      'NEXT_PUBLIC_SUPABASE_URL is required in production — MFA stub is not allowed',
-    );
+  if (resolution.type === 'error') {
+    throw new Error(resolution.message);
   }
 
   return { _isStub: true, enroll: async () => Result.ok({ factorId: 'stub' }) };
@@ -253,16 +253,28 @@ describe('PR-02: MFA route guard stub detection', () => {
 // ---------------------------------------------------------------------------
 
 describe('PR-02: Composition Root Production Guard', () => {
-  it('services.ts contains production guard for MFA', async () => {
+  it('mfa-client-resolver contains production guard logic', async () => {
+    const fs = await import('node:fs');
+    const resolverSource = fs.readFileSync(
+      new URL('../src/lib/auth/mfa-client-resolver.ts', import.meta.url),
+      'utf-8',
+    );
+
+    // production guard logic lives in the extracted resolver
+    expect(resolverSource).toContain("env.NODE_ENV === 'production'");
+    expect(resolverSource).toContain('NEXT_PUBLIC_SUPABASE_URL is required in production');
+  });
+
+  it('services.ts delegates to resolveMfaClient for production guard', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(
       new URL('../src/lib/services.ts', import.meta.url),
       'utf-8',
     );
 
-    // should contain the production guard
-    expect(source).toContain("process.env.NODE_ENV === 'production'");
-    expect(source).toContain('NEXT_PUBLIC_SUPABASE_URL is required in production');
+    // services.ts uses the extracted resolver and throws on error resolution
+    expect(source).toContain('resolveMfaClient');
+    expect(source).toContain("resolution.type === 'error'");
   });
 
   it('services.ts still falls back to stub in non-production', async () => {

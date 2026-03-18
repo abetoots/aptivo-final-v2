@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { resolveFeatureFlagProvider } from '../src/lib/feature-flags/flag-resolver';
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -318,6 +319,30 @@ describe('PR-07: Admin Feature Flags Endpoint', () => {
     );
 
     expect(source).toContain('createEnvFlagProvider');
-    expect(source).toContain('process.env.FEATURE_FLAGS');
+    expect(source).toContain('resolveFeatureFlagProvider');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PR-07: resolveFeatureFlagProvider — pure resolver
+// ---------------------------------------------------------------------------
+
+describe('PR-07: resolveFeatureFlagProvider', () => {
+  it('returns env when FEATURE_FLAGS is set', () => {
+    expect(resolveFeatureFlagProvider({ FEATURE_FLAGS: '[]' })).toBe('env');
+  });
+
+  it('returns local when FEATURE_FLAGS is not set', () => {
+    expect(resolveFeatureFlagProvider({})).toBe('local');
+  });
+
+  it('returns env even when FEATURE_FLAGS is a non-empty string', () => {
+    expect(
+      resolveFeatureFlagProvider({ FEATURE_FLAGS: '[{"key":"test","enabled":true}]' }),
+    ).toBe('env');
+  });
+
+  it('returns local when FEATURE_FLAGS is undefined', () => {
+    expect(resolveFeatureFlagProvider({ FEATURE_FLAGS: undefined })).toBe('local');
   });
 });

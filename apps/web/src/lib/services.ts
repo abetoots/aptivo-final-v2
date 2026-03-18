@@ -53,6 +53,9 @@ import { createMfaStubClient } from './auth/mfa-enforcement.js';
 import { createSupabaseMfaClient } from './auth/supabase-mfa-client.js';
 import type { SupabaseAuthClient } from './auth/supabase-mfa-client.js';
 
+// mfa client resolver (PR-02: pure env-resolution logic)
+import { resolveMfaClient } from './auth/mfa-client-resolver.js';
+
 // observability
 import { createMetricService } from './observability/metric-service.js';
 import { createApprovalSlaService } from './observability/approval-sla-service.js';
@@ -134,6 +137,12 @@ import type { WebhookStore, WebhookRegistration } from './webhooks/webhook-servi
 import { createFeatureFlagService } from './feature-flags/feature-flag-service.js';
 import { createLocalFlagProvider, DEFAULT_FLAGS } from './feature-flags/local-provider.js';
 import { createEnvFlagProvider } from './feature-flags/env-provider.js';
+
+// feature flag resolver (PR-07: pure env-resolution logic)
+import { resolveFeatureFlagProvider } from './feature-flags/flag-resolver.js';
+
+// redis resolver (PR-05: pure env-resolution logic)
+import { resolveSessionRedisConfig, resolveJobsRedisConfig } from './redis/redis-resolver.js';
 
 // llm-gateway
 import {
@@ -701,14 +710,14 @@ export const getLlmUsageStore = lazy(() =>
 // ---------------------------------------------------------------------------
 
 // prefer session-specific redis, fall back to shared
+// uses resolveSessionRedisConfig for pure env-resolution (PR-05)
 export function buildSessionRedis(): RedisClient | null {
-  const url = process.env.UPSTASH_REDIS_SESSION_URL ?? process.env.UPSTASH_REDIS_URL;
-  const token = process.env.UPSTASH_REDIS_SESSION_TOKEN ?? process.env.UPSTASH_REDIS_TOKEN;
-  if (!url) return null;
+  const config = resolveSessionRedisConfig(process.env as Record<string, string | undefined>);
+  if (!config) return null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { Redis } = require('@upstash/redis') as { Redis: new (opts: { url: string; token: string }) => RedisClient };
-    return new Redis({ url, token: token ?? '' });
+    return new Redis({ url: config.url, token: config.token });
   } catch {
     console.warn('@upstash/redis not installed');
     return null;
@@ -722,14 +731,14 @@ export const getSessionRedis = lazy(() => buildSessionRedis());
 // ---------------------------------------------------------------------------
 
 // prefer jobs-specific redis, fall back to shared
+// uses resolveJobsRedisConfig for pure env-resolution (PR-05)
 export function buildJobsRedis(): RedisClient | null {
-  const url = process.env.UPSTASH_REDIS_JOBS_URL ?? process.env.UPSTASH_REDIS_URL;
-  const token = process.env.UPSTASH_REDIS_JOBS_TOKEN ?? process.env.UPSTASH_REDIS_TOKEN;
-  if (!url) return null;
+  const config = resolveJobsRedisConfig(process.env as Record<string, string | undefined>);
+  if (!config) return null;
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { Redis } = require('@upstash/redis') as { Redis: new (opts: { url: string; token: string }) => RedisClient };
-    return new Redis({ url, token: token ?? '' });
+    return new Redis({ url: config.url, token: config.token });
   } catch {
     console.warn('@upstash/redis not installed');
     return null;
@@ -787,15 +796,20 @@ export const getSecretsProvider = lazy(() => createEnvSecretsProvider());
 
 export const getMfaClient = lazy(() => {
   // env-gated: real supabase mfa when configured, stub fallback (PR-01)
-  // PR-02: production guard — refuse to start with stub in production
-  if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
+  // PR-02: production guard — uses resolveMfaClient for pure env-resolution
+  const resolution = resolveMfaClient({
+    NODE_ENV: process.env.NODE_ENV,
+    NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL,
+  });
+
+  if (resolution.type === 'real') {
     try {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { createClient } = require('@supabase/supabase-js') as {
         createClient: (url: string, key: string) => { auth: SupabaseAuthClient };
       };
       const supabase = createClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        resolution.url,
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '',
       );
       return createSupabaseMfaClient(supabase.auth);
@@ -804,11 +818,8 @@ export const getMfaClient = lazy(() => {
     }
   }
 
-  // PR-02: in production, missing supabase url is a fatal config error
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error(
-      'NEXT_PUBLIC_SUPABASE_URL is required in production — MFA stub is not allowed',
-    );
+  if (resolution.type === 'error') {
+    throw new Error(resolution.message);
   }
 
   return createMfaStubClient();
@@ -979,8 +990,10 @@ export const getWebhookService = lazy(() => {
 // ---------------------------------------------------------------------------
 
 // PR-07: env provider takes precedence when FEATURE_FLAGS is set
+// uses resolveFeatureFlagProvider for pure env-resolution
 export const getFeatureFlagService = lazy(() => {
-  const provider = process.env.FEATURE_FLAGS
+  const providerType = resolveFeatureFlagProvider(process.env as Record<string, string | undefined>);
+  const provider = providerType === 'env'
     ? createEnvFlagProvider(DEFAULT_FLAGS)
     : createLocalFlagProvider(DEFAULT_FLAGS);
   return createFeatureFlagService({ provider });

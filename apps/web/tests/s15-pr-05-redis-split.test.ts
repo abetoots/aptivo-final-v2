@@ -8,11 +8,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import {
+  resolveSessionRedisConfig,
+  resolveJobsRedisConfig,
+} from '../src/lib/redis/redis-resolver';
 
 // ---------------------------------------------------------------------------
-// helpers — simulate the buildJobsRedis / buildSessionRedis logic
-// (direct import from services.ts requires mocking 20+ transitive deps;
-// instead we extract and test the env-resolution logic in isolation)
+// helpers — use the extracted resolvers for env-resolution logic
+// (no more inline replicas — resolvers are directly importable)
 // ---------------------------------------------------------------------------
 
 interface MockRedisClient {
@@ -24,20 +27,18 @@ function buildJobsRedisLogic(
   env: Record<string, string | undefined>,
   createRedis: (opts: { url: string; token: string }) => MockRedisClient,
 ): MockRedisClient | null {
-  const url = env.UPSTASH_REDIS_JOBS_URL ?? env.UPSTASH_REDIS_URL;
-  const token = env.UPSTASH_REDIS_JOBS_TOKEN ?? env.UPSTASH_REDIS_TOKEN;
-  if (!url) return null;
-  return createRedis({ url, token: token ?? '' });
+  const config = resolveJobsRedisConfig(env);
+  if (!config) return null;
+  return createRedis(config);
 }
 
 function buildSessionRedisLogic(
   env: Record<string, string | undefined>,
   createRedis: (opts: { url: string; token: string }) => MockRedisClient,
 ): MockRedisClient | null {
-  const url = env.UPSTASH_REDIS_SESSION_URL ?? env.UPSTASH_REDIS_URL;
-  const token = env.UPSTASH_REDIS_SESSION_TOKEN ?? env.UPSTASH_REDIS_TOKEN;
-  if (!url) return null;
-  return createRedis({ url, token: token ?? '' });
+  const config = resolveSessionRedisConfig(env);
+  if (!config) return null;
+  return createRedis(config);
 }
 
 function mockRedisFactory(opts: { url: string; token: string }): MockRedisClient {
@@ -240,15 +241,16 @@ describe('PR-05: Token blacklist uses session Redis', () => {
     expect(source).toContain('export const getSessionRedis');
   });
 
-  it('buildJobsRedis reads UPSTASH_REDIS_JOBS_URL env var', async () => {
+  it('redis resolver reads UPSTASH_REDIS_JOBS_URL env var', async () => {
+    // env-resolution logic extracted to redis-resolver.ts (directly importable)
     const fs = await import('node:fs');
-    const source = fs.readFileSync(
-      new URL('../src/lib/services.ts', import.meta.url),
+    const resolverSource = fs.readFileSync(
+      new URL('../src/lib/redis/redis-resolver.ts', import.meta.url),
       'utf-8',
     );
 
-    expect(source).toContain('UPSTASH_REDIS_JOBS_URL');
-    expect(source).toContain('UPSTASH_REDIS_JOBS_TOKEN');
+    expect(resolverSource).toContain('UPSTASH_REDIS_JOBS_URL');
+    expect(resolverSource).toContain('UPSTASH_REDIS_JOBS_TOKEN');
   });
 
   it('buildJobsRedis mirrors buildSessionRedis pattern', async () => {
@@ -258,7 +260,7 @@ describe('PR-05: Token blacklist uses session Redis', () => {
       'utf-8',
     );
 
-    // both builders follow the same structure: check url → require redis → construct
+    // both builders follow the same structure: resolve config → require redis → construct
     expect(source).toContain('export function buildSessionRedis(): RedisClient | null');
     expect(source).toContain('export function buildJobsRedis(): RedisClient | null');
 
@@ -274,5 +276,9 @@ describe('PR-05: Token blacklist uses session Redis', () => {
 
     expect(sessionSection).toContain("require('@upstash/redis')");
     expect(jobsSection).toContain("require('@upstash/redis')");
+
+    // both delegate env-resolution to extracted resolvers
+    expect(source).toContain('resolveSessionRedisConfig');
+    expect(source).toContain('resolveJobsRedisConfig');
   });
 });
