@@ -290,6 +290,7 @@ describe('INF-02: PoolConfig interface', () => {
 // ---------------------------------------------------------------------------
 
 describe('INF-02: composition root domain-scoped getters', () => {
+  // @testtype doc-lint
   it('services.ts exports getCryptoDb and getHrDb', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(
@@ -305,6 +306,7 @@ describe('INF-02: composition root domain-scoped getters', () => {
     expect(source).toContain('getDbForDomain');
   });
 
+  // @testtype doc-lint
   it('services.ts imports getDbForDomain from db module', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(

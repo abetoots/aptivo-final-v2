@@ -339,6 +339,7 @@ describe('INT-08: MCP transport traceparent contract (S7-W27)', () => {
     expect(capturedInput!.param1).toBe('value1');
   });
 
+  // @testtype doc-lint
   it('agentkit adapter source contains _metadata traceparent injection', async () => {
     // contract test: verify the agentkit adapter source includes the
     // INT-08 traceparent injection logic via source code inspection

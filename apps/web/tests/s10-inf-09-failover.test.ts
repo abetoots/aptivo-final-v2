@@ -30,6 +30,7 @@ describe('INF-09: HA failover validation', () => {
   // failover test script validation
   // -------------------------------------------------------------------------
 
+  // @testtype doc-lint
   describe('failover-test.sh', () => {
     it('failover test script exists', () => {
       const { existsSync } = require('fs');

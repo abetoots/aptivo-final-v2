@@ -151,6 +151,7 @@ describe('PR-08: Redis Split Verification', () => {
     expect(jobsConfig!.url).toBe('https://shared.upstash.io');
   });
 
+  // @testtype doc-lint
   it('token blacklist uses session redis', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(
@@ -262,6 +263,7 @@ describe('PR-08: Feature Flag Rollout', () => {
     expect(smtp!.enabled).toBe(false);
   });
 
+  // @testtype doc-lint
   it('admin endpoint file exists with correct structure', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(
@@ -434,10 +436,9 @@ describe('PR-08: Full Golden Path Simulation', () => {
     const crudFlag = await flagService.isEnabled('workflow-crud');
     expect(crudFlag.ok).toBe(true);
 
-    if (crudFlag.ok && !crudFlag.value) {
-      // feature is gated — should return 404 or similar
-      const gateResponse = { status: 404, body: 'feature not available' };
-      expect(gateResponse.status).toBe(404);
+    // workflow-crud is deny-by-default so flag should be disabled
+    if (crudFlag.ok) {
+      expect(crudFlag.value).toBe(false);
     }
 
     // verify variant for gated features

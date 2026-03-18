@@ -492,6 +492,7 @@ describe('PR-01: JIT provisioner flow', () => {
 // ---------------------------------------------------------------------------
 
 describe('PR-01: Composition Root MFA Wiring', () => {
+  // @testtype doc-lint
   it('services.ts imports createSupabaseMfaClient', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(
@@ -505,6 +506,7 @@ describe('PR-01: Composition Root MFA Wiring', () => {
     expect(source).toContain('createMfaStubClient');
   });
 
+  // @testtype doc-lint
   it('services.ts env-gates real supabase client on NEXT_PUBLIC_SUPABASE_URL', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(

@@ -75,6 +75,7 @@ describe('P1.5-06 RR-1: AgentKit adapter env sanitization', () => {
     expect(sanitized).not.toHaveProperty('DATABASE_URL');
   });
 
+  // @testtype doc-lint
   it('adapter source imports and calls sanitizeEnvForMcp', async () => {
     // verify the wiring exists in the adapter source
     const { readFileSync } = await import('node:fs');

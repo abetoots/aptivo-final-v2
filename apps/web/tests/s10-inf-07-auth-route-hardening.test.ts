@@ -14,6 +14,7 @@ import { resolve } from 'path';
 // part 1: admin route migration verification (source-level checks)
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('INF-07: Admin route migration to checkPermissionWithBlacklist', () => {
   const adminRoutes = [
     {

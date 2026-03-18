@@ -66,6 +66,7 @@ describe('INF-10: WebAuthn Persistence via Drizzle Adapter', () => {
     expect(typeof adapters.createDrizzleWebAuthnStore).toBe('function');
   });
 
+  // @testtype doc-lint
   it('services.ts imports createDrizzleWebAuthnStore (not in-memory)', () => {
     const source = readSource('src/lib/services.ts');
 
@@ -158,6 +159,7 @@ describe('INF-10: Session Eviction Atomicity (shared Redis)', () => {
 // 3. admin routes use enhanced middleware
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('INF-10: Admin Routes Use Enhanced Middleware', () => {
   const adminRoutes = [
     { name: 'admin/overview', path: 'src/app/api/admin/overview/route.ts' },
@@ -181,6 +183,7 @@ describe('INF-10: Admin Routes Use Enhanced Middleware', () => {
 // 4. session routes wired to service
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('INF-10: Session Routes Wired to Service', () => {
   it('GET /api/auth/sessions imports from @/lib/services.js', () => {
     const source = readSource('src/app/api/auth/sessions/route.ts');
@@ -200,12 +203,14 @@ describe('INF-10: Session Routes Wired to Service', () => {
 // ---------------------------------------------------------------------------
 
 describe('INF-10: Secrets Provider in Composition Root', () => {
+  // @testtype doc-lint
   it('services.ts exports getSecretsProvider', () => {
     const source = readSource('src/lib/services.ts');
     expect(source).toContain('export const getSecretsProvider');
     expect(source).toContain('createEnvSecretsProvider');
   });
 
+  // @testtype doc-lint
   it('services.ts exports getMfaClient', () => {
     const source = readSource('src/lib/services.ts');
     expect(source).toContain('export const getMfaClient');
@@ -227,6 +232,7 @@ describe('INF-10: Secrets Provider in Composition Root', () => {
 // 6. redis split backward compatibility
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('INF-10: Redis Split Backward Compatibility', () => {
   it('redis resolver prefers session-specific URL, falls back to shared', () => {
     const resolverSource = readSource('src/lib/redis/redis-resolver.ts');
@@ -270,6 +276,7 @@ describe('INF-10: Redis Split Backward Compatibility', () => {
 // 7. infrastructure config validation
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('INF-10: Infrastructure Config Validation', () => {
   it('.do/app.yaml exists and contains autoscaling config', () => {
     const source = readFileSync(resolve(__dirname, '../../..', '.do/app.yaml'), 'utf-8');
@@ -306,6 +313,7 @@ describe('INF-10: Infrastructure Config Validation', () => {
 // 8. ha database configuration
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('INF-10: HA Database Configuration', () => {
   it('db.ts exports resolveConnectionString', () => {
     const source = readSource('src/lib/db.ts');

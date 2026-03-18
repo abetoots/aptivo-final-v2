@@ -557,6 +557,7 @@ describe('F-4: workflow falls back to single-approver when policyStore.create th
 // F-6: TSD does not contain `approverOrder`
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('F-6: TSD column name correctness', () => {
   it('hitl-gateway.md does not contain approverOrder', () => {
     const tsdPath = path.resolve(

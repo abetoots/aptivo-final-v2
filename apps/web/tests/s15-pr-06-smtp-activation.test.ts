@@ -407,6 +407,7 @@ describe('PR-06: SmtpConfigSchema', () => {
 // ---------------------------------------------------------------------------
 
 describe('PR-06: Composition root wiring', () => {
+  // @testtype doc-lint
   it('services.ts imports smtp-config-validator', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(

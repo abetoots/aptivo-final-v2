@@ -294,6 +294,7 @@ describe('PR-03: createConnectionManager — domain clients', () => {
 // PR-03: failover test script exists
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('PR-03: Failover Test Script', () => {
   it('failover-test.sh exists and is well-formed', async () => {
     const fs = await import('node:fs');
@@ -323,6 +324,7 @@ describe('PR-03: Failover Test Script', () => {
 // PR-03: existing db.ts patterns preserved
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('PR-03: Existing db.ts HA patterns', () => {
   it('db.ts exports resolveConnectionString, getDb, reconnect, isHaMode', async () => {
     const fs = await import('node:fs');
@@ -337,6 +339,7 @@ describe('PR-03: Existing db.ts HA patterns', () => {
     expect(source).toContain('export function isHaMode()');
   });
 
+  // @testtype doc-lint
   it('db.ts exports getDbForDomain for domain pool isolation', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(
@@ -348,6 +351,7 @@ describe('PR-03: Existing db.ts HA patterns', () => {
     expect(source).toContain('DEFAULT_POOL_CONFIG');
   });
 
+  // @testtype doc-lint
   it('db.ts exports getPoolStats for monitoring', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(

@@ -610,6 +610,7 @@ describe('PII Read Audit Trail', () => {
 // 7. Pool Config Verification (source-level)
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('Pool Config Verification', () => {
   const dbSource = fs.readFileSync(
     path.resolve(import.meta.dirname, '../src/lib/db.ts'),
@@ -636,6 +637,7 @@ describe('Pool Config Verification', () => {
 // 8. Carry-Over Verification (source-level)
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint
 describe('Carry-Over Verification', () => {
   it('decision-service.ts emits retryCount in changes.requested event', () => {
     const decisionSource = fs.readFileSync(

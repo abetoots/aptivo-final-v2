@@ -265,6 +265,7 @@ describe('INF-01: WebAuthn Drizzle Adapter', () => {
 // ---------------------------------------------------------------------------
 
 describe('INF-01: Composition Root WebAuthn Wiring', () => {
+  // @testtype doc-lint
   it('services.ts imports createDrizzleWebAuthnStore (not in-memory)', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(
@@ -298,52 +299,41 @@ describe('INF-01: HA Database Connection', () => {
   });
 
   it('prefers DATABASE_URL_HA when set', async () => {
-    const fs = await import('node:fs');
-    const source = fs.readFileSync(
-      new URL('../src/lib/db.ts', import.meta.url),
-      'utf-8',
-    );
+    process.env.DATABASE_URL = 'postgres://standard:5432/db';
+    process.env.DATABASE_URL_HA = 'postgres://ha-primary:5432/db';
 
-    // verify source checks DATABASE_URL_HA first
-    expect(source).toContain('DATABASE_URL_HA');
+    const dbModule = await import('../src/lib/db.js');
+    const result = dbModule.resolveConnectionString();
 
-    // verify ha mode is tracked
-    expect(source).toContain('ha mode active');
+    expect(result.connectionString).toBe('postgres://ha-primary:5432/db');
+    expect(result.ha).toBe(true);
   });
 
   it('falls back to DATABASE_URL when DATABASE_URL_HA is not set', async () => {
-    const fs = await import('node:fs');
-    const source = fs.readFileSync(
-      new URL('../src/lib/db.ts', import.meta.url),
-      'utf-8',
-    );
+    process.env.DATABASE_URL = 'postgres://standard:5432/db';
+    delete process.env.DATABASE_URL_HA;
 
-    // verify fallback logic exists
-    expect(source).toContain('DATABASE_URL');
-    expect(source).toContain("throw new Error('DATABASE_URL not set')");
+    const dbModule = await import('../src/lib/db.js');
+    const result = dbModule.resolveConnectionString();
+
+    expect(result.connectionString).toBe('postgres://standard:5432/db');
+    expect(result.ha).toBe(false);
   });
 
   it('exposes reconnect() for failover', async () => {
-    const fs = await import('node:fs');
-    const source = fs.readFileSync(
-      new URL('../src/lib/db.ts', import.meta.url),
-      'utf-8',
-    );
+    process.env.DATABASE_URL = 'postgres://test:5432/db';
 
-    // verify reconnect function is exported
-    expect(source).toContain('export function reconnect()');
-    // verify it resets the cached client
-    expect(source).toContain('_db = null');
+    const dbModule = await import('../src/lib/db.js');
+
+    expect(typeof dbModule.reconnect).toBe('function');
   });
 
   it('exposes isHaMode() status check', async () => {
-    const fs = await import('node:fs');
-    const source = fs.readFileSync(
-      new URL('../src/lib/db.ts', import.meta.url),
-      'utf-8',
-    );
+    process.env.DATABASE_URL = 'postgres://test:5432/db';
 
-    expect(source).toContain('export function isHaMode()');
+    const dbModule = await import('../src/lib/db.js');
+
+    expect(typeof dbModule.isHaMode).toBe('function');
   });
 
   it('resolveConnectionString selects HA url first', async () => {
