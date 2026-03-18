@@ -1,8 +1,8 @@
 name: Deploy to Preview
 
-# Preview deployment workflow
-# Strategy: Build and deploy from any branch for stakeholder review
-# Philosophy: Separate from release pipeline - artifacts are disposable
+# preview deployment workflow
+# strategy: build and deploy from any branch for stakeholder review
+# philosophy: separate from release pipeline - artifacts are disposable
 
 on:
   workflow_dispatch:
@@ -62,13 +62,14 @@ jobs:
           cache-from: type=gha,scope=preview
           cache-to: type=gha,mode=max,scope=preview
 
-      - name: Deploy to Preview (DigitalOcean)
-        uses: digitalocean/app_action/deploy@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-          app_name: aptivo-final-v2-Preview
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy to Preview (Railway)
         env:
-          IMAGE_TAG_WEB_SERVICE: preview-${{ steps.get-sha.outputs.sha }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --environment preview --detach
 
       - name: Summary
         run: |

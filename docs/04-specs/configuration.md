@@ -237,13 +237,13 @@ spec:
 All services must expose:
 
 ```typescript
-// app/health/live/route.ts (matches Runbook §5.3, DO App Platform config)
+// app/health/live/route.ts (matches Runbook §5.3, Railway config)
 export async function GET() {
   // basic liveness - is the process running?
   return Response.json({ status: 'ok', timestamp: new Date().toISOString() });
 }
 
-// app/health/ready/route.ts (matches Runbook §5.3, DO App Platform config)
+// app/health/ready/route.ts (matches Runbook §5.3, Railway config)
 export async function GET() {
   const checks: HealthCheck[] = [
     { name: 'database', check: checkDatabase },
@@ -285,18 +285,18 @@ const checkRedis = async (): Promise<void> => {
 
 ```
 
-### 4.3 DO App Platform Health Checks
+### 4.3 Railway Health Checks
 
-> **Note**: Production uses DigitalOcean App Platform (not Kubernetes). See Runbook §3.3 for the full app spec.
+> **Note**: Production uses Railway (not Kubernetes). See Runbook §3.3 for the full railway.json config.
 
-```yaml
-# .do/app.yaml (excerpt)
-services:
-  - name: api
-    health_check:
-      http_path: /health/live
-      initial_delay_seconds: 10
-      period_seconds: 10
+```json
+// railway.json (excerpt)
+{
+  "deploy": {
+    "healthcheckPath": "/health/live",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
 ```
 
 Health check paths are standardized across all documents:
@@ -458,13 +458,13 @@ export const serviceUrls = {
 };
 ```
 
-### 7.2 DO App Platform Service Discovery
+### 7.2 Railway Service Discovery
 
 ```yaml
-# DO App Platform injects internal URLs as environment variables
-# Format: ${service_name.PRIVATE_URL} in app spec → resolved at runtime
-# See Runbook §3.3 for full app spec configuration
-CANDIDATE_SERVICE_URL=${candidate-service.PRIVATE_URL}
+# Railway injects internal URLs as environment variables
+# Services within the same Railway project can communicate via private networking
+# See Runbook §3.3 for full railway.json configuration
+CANDIDATE_SERVICE_URL=${RAILWAY_PRIVATE_DOMAIN}:3000
 ```
 
 ---

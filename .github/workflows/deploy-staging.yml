@@ -1,8 +1,8 @@
 name: Deploy to Staging
 
-# Staging deployment workflow
-# Strategy: Deploy SHA-tagged images from main branch (NEVER rebuild)
-# Philosophy: Test the exact artifact that will go to production
+# staging deployment workflow
+# strategy: deploy SHA-tagged images from main branch (NEVER rebuild)
+# philosophy: test the exact artifact that will go to production
 
 on:
   workflow_dispatch:
@@ -26,6 +26,11 @@ jobs:
       contents: read
       packages: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.sha }}
+
       - name: Set lowercase image prefix
         id: image-prefix
         run: echo "PREFIX=${{ env.REGISTRY }}/${GITHUB_REPOSITORY_OWNER,,}/aptivo-final-v2" >> $GITHUB_OUTPUT
@@ -36,7 +41,7 @@ jobs:
           SHA=${{ inputs.sha }}
           echo "sha=$SHA" >> $GITHUB_OUTPUT
 
-      # Verify build.yml succeeded for this SHA
+      # verify build.yml succeeded for this SHA
       - name: Verify build.yml success
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -65,13 +70,14 @@ jobs:
           docker manifest inspect ${{ steps.image-prefix.outputs.PREFIX }}:$SHA
           echo "✅ Image verified"
 
-      - name: Deploy to Staging (DigitalOcean)
-        uses: digitalocean/app_action/deploy@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-          app_name: aptivo-final-v2-Staging
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy to Staging (Railway)
         env:
-          IMAGE_TAG_WEB_SERVICE: ${{ steps.resolve.outputs.sha }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --environment staging --detach
 
       - name: Summary
         run: |

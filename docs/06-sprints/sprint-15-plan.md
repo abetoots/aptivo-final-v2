@@ -25,7 +25,7 @@ This sprint is a deployment gate: no subsequent Phase 3 sprints should ship prod
 |-----------|----------------|-----------------|
 | OIDC SSO | `createClaimMapper` + `loadProvidersFromEnv` with `OIDC_PROVIDERS_CONFIG` | Real Okta/Azure AD provider configured via Supabase Pro |
 | MFA enforcement | `createMfaStubClient()` returned in all environments | Stub removed in production; real Supabase MFA client wired |
-| HA database | `resolveConnectionString()` supports `DATABASE_URL_HA` | Real DO Managed PostgreSQL cluster with measured failover |
+| HA database | `resolveConnectionString()` supports `DATABASE_URL_HA` | Real Railway PostgreSQL cluster (Patroni HA) with measured failover |
 | Connection pooling | `createDatabase(url, { max, idleTimeoutMs })` accepted but untested under load | Pool config verified at pg driver level under load |
 | Redis split | `buildSessionRedis()` reads `UPSTASH_REDIS_SESSION_URL` with fallback | Separate session + jobs Redis instances configured and verified |
 | SMTP failover | `createSmtpAdapter` + `createFailoverAdapter` implemented | Real SMTP credentials set; failover tested (Novu down -> SMTP delivers) |
@@ -127,10 +127,10 @@ This sprint is a deployment gate: no subsequent Phase 3 sprints should ship prod
 
 #### PR-03: HA Database Cluster Provisioning + Real Failover Exercise (5 SP)
 
-**Description**: Provision a DigitalOcean Managed PostgreSQL cluster with a standby node. Execute the failover test script (`scripts/failover-test.sh`) in real mode (not dry-run), measure Recovery Time Objective (RTO) against the <30 second target, and verify the application reconnects automatically via the `reconnect()` function in `db.ts`. The failover evidence — timestamps, RTO measurement, reconnection logs — is documented in the operator runbook. This task also configures `DATABASE_URL_HA` as the primary connection string and validates that `isHaMode()` returns true in the deployment.
+**Description**: Provision a Railway Managed PostgreSQL cluster with Patroni HA (standby node). Execute the failover test script (`scripts/failover-test.sh`) in real mode (not dry-run), measure Recovery Time Objective (RTO) against the <30 second target, and verify the application reconnects automatically via the `reconnect()` function in `db.ts`. The failover evidence — timestamps, RTO measurement, reconnection logs — is documented in the operator runbook. This task also configures `DATABASE_URL_HA` as the primary connection string and validates that `isHaMode()` returns true in the deployment.
 
 **Acceptance Criteria**:
-- [ac] DO Managed PostgreSQL cluster provisioned with primary + standby node
+- [ac] Railway PostgreSQL cluster provisioned with primary + standby node (Patroni HA)
 - [ac] `DATABASE_URL_HA` set to the cluster's connection string (connection pooler endpoint)
 - [ac] `isHaMode()` returns `true` when `DATABASE_URL_HA` is set
 - [ac] Failover test executed: primary node manually failed, standby promoted
@@ -559,7 +559,7 @@ Senior carries the highest SP (11) because PR-01 and PR-03 are the most complex 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
 | Supabase Pro plan activation delay (vendor SLA) | Medium | High | Start procurement Day 0; parallel work on PR-02/PR-07 not gated by Supabase |
-| HA database failover takes longer than 30s RTO target | Medium | Medium | DO Managed PostgreSQL documented RTO is 15-30s; if >30s, document actual RTO and escalate to DO support |
+| HA database failover takes longer than 30s RTO target | Medium | Medium | Railway PostgreSQL (Patroni HA) documented RTO is 15-30s; if >30s, document actual RTO and escalate to Railway support |
 | Redis split misconfiguration (session data in jobs Redis) | Medium | High | Key prefix isolation (`bl:` for blacklist, `sess:` for sessions); integration tests verify correct Redis target |
 | SMTP deliverability issues (SPF/DKIM misconfiguration) | Medium | Medium | Validate DNS records before deployment; use SendGrid domain verification wizard |
 | Streaming filter false positives on legitimate chunked output | Medium | Medium | Feature flag kill-switch (default off); evaluation threshold prevents premature triggering |

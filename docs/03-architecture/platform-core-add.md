@@ -42,9 +42,9 @@ This document defines **HOW** the Aptivo Agentic Core is architected to meet the
 | Identity | **Supabase Auth Pro** ($25/mo) | OIDC SSO + SAML + MFA for enterprise. Free tier lacks SSO. | Auth0 (free OIDC but 7K MAU, no free SAML), Keycloak (free but self-hosted ops) | Standard OIDC/JWT; exit to Keycloak documented in Auth TSD §1.2 | Claude (S9), ratified by human (S15). SAML review: when first customer requests it |
 | Notifications | **Novu** (Buy) | Multi-channel, templates, quiet hours, saves 3 weeks | Knock (newer), custom build (3+ weeks) | Template-based; adapter interface enables swap | Multi-model consensus (S0), ratified by human (S15) |
 | Runtime | Node.js 24 LTS + TypeScript | Async I/O, strong typing, LangGraph.js compatibility | Deno (less ecosystem), Go (no LangGraph) | Standard Node.js; no vendor lock-in | Multi-model consensus (S0), ratified by human (S15) |
-| Database | **PostgreSQL 16** (DO Managed HA) | ACID, JSONB, full-text search. HA cluster for <30s failover. | CockroachDB (distributed but complex), PlanetScale (MySQL-based) | Standard SQL; Drizzle adapters are thin wrappers | Multi-model consensus (S0), ratified by human (S15) |
-| Cache / Redis Hosting | **Upstash** (serverless Redis 7) | Per-request pricing ($0-10/mo), DO region compat, REST API for edge | AWS ElastiCache ($15+/mo base), self-hosted Redis (ops burden) | Standard Redis protocol; swap URL + token | Claude (S10), ratified by human (S15) |
-| File Storage | **DigitalOcean Spaces** (S3-compat) | Integrated with DO App Platform, $5/mo flat, CDN included | AWS S3 (cross-cloud networking), Cloudflare R2 (zero egress), MinIO (self-hosted) | S3 API; swap endpoint + credentials | Claude (S6), ratified by human (S15) |
+| Database | **PostgreSQL 16** (Railway Managed, Patroni HA) | ACID, JSONB, full-text search. HA cluster for <30s failover. | CockroachDB (distributed but complex), PlanetScale (MySQL-based) | Standard SQL; Drizzle adapters are thin wrappers | Multi-model consensus (S0), ratified by human (S15) |
+| Cache / Redis Hosting | **Upstash** (serverless Redis 7) | Per-request pricing ($0-10/mo), Railway region compat, REST API for edge | AWS ElastiCache ($15+/mo base), self-hosted Redis (ops burden) | Standard Redis protocol; swap URL + token | Claude (S10), ratified by human (S15) |
+| File Storage | **Railway Volumes** (S3-compat) | Integrated with Railway platform, usage-based pricing | AWS S3 (cross-cloud networking), Cloudflare R2 (zero egress), MinIO (self-hosted) | S3 API; swap endpoint + credentials | Claude (S6), ratified by human (S15) |
 | ORM | **Drizzle** | Type-safe SQL, zero runtime overhead, lightweight | Prisma (heavier Rust runtime, slower cold starts), Kysely (smaller ecosystem) | Standard SQL; adapters are thin wrappers over queries | Claude (S0), ratified by human (S15) |
 | LLM Provider (Primary) | **OpenAI** (GPT-4o) | Best reasoning quality, widest model range, well-documented API | Anthropic Claude, Google Gemini | Provider interface abstraction in `@aptivo/llm-gateway` | Claude (S1), ratified by human (S15) |
 | LLM Provider (Secondary) | **Anthropic** (Claude) | Fallback + cost optimization for structured tasks | Google Gemini, single-provider (simpler but no fallback) | Same provider interface as primary | Claude (S1), ratified by human (S15) |
@@ -111,13 +111,13 @@ This document defines **HOW** the Aptivo Agentic Core is architected to meet the
 
 Every component declares its failure boundary, blast radius, propagation characteristics, isolation mechanisms, and fallback behavior. This section is the authoritative reference for incident triage and recovery prioritization.
 
-> **Phase 1 Reality**: Aptivo runs as a single-region monolith deployment on DigitalOcean App Platform with a shared PostgreSQL instance and a single Redis node. True failure domain isolation (separate databases per domain, multi-region DR) is a Phase 2+ capability. Phase 1 relies on logical isolation (schema separation, circuit breakers, timeout paths) and documented degradation behavior.
+> **Phase 1 Reality**: Aptivo runs as a single-region monolith deployment on Railway with a shared PostgreSQL instance and a single Redis node. True failure domain isolation (separate databases per domain, multi-region DR) is a Phase 2+ capability. Phase 1 relies on logical isolation (schema separation, circuit breakers, timeout paths) and documented degradation behavior.
 
 #### 2.3.1 Component Criticality Classification
 
 | Tier | Definition | Recovery Priority | Components |
 |------|-----------|-------------------|------------|
-| **Critical** | Failure causes platform-wide outage, data corruption risk, or compliance violation | Immediate (SEV-1/SEV-2) | Workflow Engine, HITL Gateway, Identity Service, Audit Service, PostgreSQL, Redis, DO App Platform |
+| **Critical** | Failure causes platform-wide outage, data corruption risk, or compliance violation | Immediate (SEV-1/SEV-2) | Workflow Engine, HITL Gateway, Identity Service, Audit Service, PostgreSQL, Redis, Railway |
 | **Standard** | Failure causes feature degradation; core platform continues operating | High (SEV-2/SEV-3) | MCP Integration Layer, LLM Gateway, Notification Bus, File Storage, BullMQ |
 | **Non-critical** | Failure is tolerable for extended periods | Normal (SEV-3/SEV-4) | — (all Phase 1 components are standard or critical) |
 
@@ -211,7 +211,7 @@ Every component declares its failure boundary, blast radius, propagation charact
 
 | Field | Value |
 |-------|-------|
-| **Failure Domain** | File management boundary. Depends on S3-compatible object storage (Minio/DO Spaces) for binary data and PostgreSQL for file metadata. ClamAV for malware scanning. |
+| **Failure Domain** | File management boundary. Depends on S3-compatible object storage (Minio/Railway Volumes) for binary data and PostgreSQL for file metadata. ClamAV for malware scanning. |
 | **Blast Radius** | File upload, download, and link operations fail. Workflows requiring document attachments (HR contracts, resumes) degrade. Audit export downloads fail. Core platform operations (workflows without files, HITL, auth) continue. |
 | **Propagation Mode** | Async (file operations are typically workflow steps, not blocking API-level) |
 | **Propagation Outcome** | Degraded — file-dependent workflow steps fail; non-file workflows continue. |
@@ -268,29 +268,29 @@ Failure isolation requires **infrastructure separation** — separate database i
 
 #### Resource Allocation (Phase 1)
 
-| Component | DO App Platform Slug | vCPU | RAM | Notes |
+| Component | Railway Service | vCPU | RAM | Notes |
 |---|---|---|---|---|
-| API Server | `basic-xxs` | 1 shared vCPU | 512 MiB | Auto-scale 1–3 containers |
-| Workflow Worker | `basic-xxs` | 1 shared vCPU | 512 MiB | Single container Phase 1 |
-| ClamAV Scanner | `basic-s` | 1 shared vCPU | 2 GiB | Signature DB minimum 1.2 GiB; peak 2.4 GiB during `freshclam` updates (§6.7) |
-| PostgreSQL | `db-s-1vcpu-1gb` | 1 shared vCPU | 1 GiB | 25 GiB storage, 20 max connections |
-| Redis | `db-s-1vcpu-1gb` | 1 shared vCPU | 1 GiB | Basic tier (no HA) |
+| API Server | Web service | 1 shared vCPU | 512 MiB | Auto-scale 1–3 containers |
+| Workflow Worker | Worker service | 1 shared vCPU | 512 MiB | Single container Phase 1 |
+| ClamAV Scanner | Worker service | 1 shared vCPU | 2 GiB | Signature DB minimum 1.2 GiB; peak 2.4 GiB during `freshclam` updates (§6.7) |
+| PostgreSQL | Railway PostgreSQL | 1 shared vCPU | 1 GiB | 25 GiB storage, 20 max connections |
+| Redis | Upstash (external) | Serverless | Serverless | Per-request pricing |
 
-> **Note**: Slug names map to DigitalOcean App Platform instance sizes. Actual CPU burst behavior depends on host load. These are Phase 1 minimum allocations; auto-scaling triggers are documented in §10.
+> **Note**: Railway uses usage-based pricing with per-service resource allocation. Actual CPU burst behavior depends on host load. These are Phase 1 minimum allocations; auto-scaling triggers are documented in §10.
 
 #### Graceful Shutdown Behavior
 
-- **SIGTERM Handling**: DO App Platform sends `SIGTERM` to containers during rolling deployments and scale-down events. The platform allows a **configurable drain period** (default: 30s on DO App Platform) before sending `SIGKILL`.
+- **SIGTERM Handling**: Railway sends `SIGTERM` to containers during rolling deployments and scale-down events. The platform allows a **configurable drain period** (default: 30s on Railway) before sending `SIGKILL`.
 - **API Server**: On SIGTERM, stop accepting new connections, drain in-flight HTTP requests (30s timeout), then exit. Express/Fastify built-in graceful shutdown handles this.
 - **Workflow Worker**: On SIGTERM, stop polling for new Inngest events, allow in-progress workflow steps to complete (bounded by Inngest step timeout, typically ≤120s), then exit. Inngest memoization ensures incomplete workflows resume from last completed step on new container.
 - **BullMQ Worker**: On SIGTERM, stop processing new jobs, allow current job to complete (bounded by job timeout), then exit. Stalled jobs are auto-retried by BullMQ's stall detection (default: 30s stall interval).
 - **Implementation Note**: All containers MUST handle SIGTERM. Node.js requires explicit `process.on('SIGTERM', ...)` handler — the default behavior terminates immediately without drain.
 
-> **Worker Health Check Model (Phase 1)**: The workflow worker runs as a separate DO App Platform **worker** component (not a web service). Workers do not expose HTTP ports. Health is determined by: (1) Process liveness — DO App Platform restarts workers that exit unexpectedly; (2) Inngest heartbeat — the Inngest SDK maintains a connection to Inngest Cloud; if the worker disconnects, Inngest redistributes pending work to other instances. Phase 1 runs a single worker instance. Phase 2: Add explicit health check endpoint on a diagnostic port for custom monitoring.
+> **Worker Health Check Model (Phase 1)**: The workflow worker runs as a separate Railway **worker** service (not a web service). Workers do not expose HTTP ports. Health is determined by: (1) Process liveness — Railway restarts workers that exit unexpectedly; (2) Inngest heartbeat — the Inngest SDK maintains a connection to Inngest Cloud; if the worker disconnects, Inngest redistributes pending work to other instances. Phase 1 runs a single worker instance. Phase 2: Add explicit health check endpoint on a diagnostic port for custom monitoring.
 
 > **Phase 2+ PostgreSQL HA — Design Target (NOT YET OPERATIONAL)**: The following design parameters must be documented before Phase 2 go-live:
-> - **Failover Trigger**: DigitalOcean managed HA databases use automatic primary promotion on health check failure. Document: health check interval, failure threshold, promotion time (typically 15–30s for managed PostgreSQL HA). Application must handle brief connection interruption during promotion.
-> - **Replication Mode**: DigitalOcean managed HA uses streaming replication (asynchronous by default). Document: expected replication lag under normal load, RPO during failover (potential loss of uncommitted transactions), per-schema impact assessment (`aptivo_trading` financial data vs. `aptivo_hr` operational data).
+> - **Failover Trigger**: Railway PostgreSQL with Patroni HA uses automatic primary promotion on health check failure. Document: health check interval, failure threshold, promotion time (typically 15–30s for managed PostgreSQL HA). Application must handle brief connection interruption during promotion.
+> - **Replication Mode**: Railway PostgreSQL with Patroni HA uses streaming replication (asynchronous by default). Document: expected replication lag under normal load, RPO during failover (potential loss of uncommitted transactions), per-schema impact assessment (`aptivo_trading` financial data vs. `aptivo_hr` operational data).
 > - **Failback Procedure**: After standby promotion, the old primary becomes a new standby. Document: whether failback is automatic or manual, data verification steps post-failover, connection string update requirements (managed service typically handles transparently via connection pooler).
 > - **Connection Pool Behavior**: Document: pool per schema/domain, connection string failover handling, application retry behavior during promotion window.
 
@@ -308,17 +308,17 @@ Failure isolation requires **infrastructure separation** — separate database i
 
 > **Accepted Risk (Phase 1)**: Single Redis node. BullMQ job accumulation could cause OOM affecting all Redis consumers. Mitigation: memory limit monitoring, key TTL enforcement, consumer-specific degradation policies documented above.
 
-##### DigitalOcean App Platform — Critical (Infrastructure)
+##### Railway — Critical (Infrastructure)
 
 | Field | Value |
 |-------|-------|
-| **Failure Domain** | **Platform infrastructure boundary.** Single-region deployment on DigitalOcean App Platform. All containers (API, workers) run in one region. |
-| **Blast Radius** | **Total platform outage** on regional failure. All API endpoints, workflow workers, and background jobs unavailable. |
+| **Failure Domain** | **Platform infrastructure boundary.** Single-region deployment on Railway. All containers (API, workers) run in one region. Railway uses an isolated container model — each service runs in its own container with dedicated resources. |
+| **Blast Radius** | **Total platform outage** on regional failure. All API endpoints, workflow workers, and background jobs unavailable. Individual container failures are isolated to the affected service. |
 | **Propagation Mode** | Sync (infrastructure failure immediately affects all hosted services) |
-| **Propagation Outcome** | **Cascading** — regional outage takes down all services simultaneously. |
+| **Propagation Outcome** | **Cascading** — regional outage takes down all services simultaneously. Container-level failures are isolated (Railway restarts individual containers). |
 | **Impacted Components** | All services and infrastructure |
-| **Isolation Mechanisms** | Health checks (liveness, readiness, startup probes) trigger container restarts for individual container failures; rolling deployment with rollback; auto-scaling 1–3 containers. These mitigate container-level failures but not regional outages. |
-| **Fallback Behavior** | Container failure: automatic restart via health checks. Regional outage: restore to alternate region manually (RTO < 8h per RUNBOOK §8.6). Rollback via redeployment with previous container image (Phase 1: no runtime feature flag service — see §5.5 Feature Flag State). Phase 2+: multi-region DR with DNS failover (RTO < 4h). |
+| **Isolation Mechanisms** | Health checks (liveness probes via healthcheck path) trigger container restarts for individual container failures; rolling deployment with instant rollback; auto-scaling via Railway service configuration. These mitigate container-level failures but not regional outages. |
+| **Fallback Behavior** | Container failure: automatic restart via health checks. Regional outage: restore to alternate region manually (RTO < 8h per RUNBOOK §8.6). Rollback via `railway up` with previous container image or Railway dashboard rollback. Phase 2+: multi-region DR with DNS failover (RTO < 4h). |
 
 ##### BullMQ (Job Queue) — Standard
 
@@ -1932,7 +1932,7 @@ async function validateSession(req: Request): Promise<User | null> {
 
 Full WebAuthn support deferred to Phase 2. Supabase Auth roadmap includes passkey support; evaluate when available.
 
-> **Secrets Management (Phase 1)**: Secrets are stored as encrypted environment variables on DigitalOcean App Platform (see RUNBOOK §4.3 for the full inventory). The BRD's reference to "HashiCorp Vault or equivalent" (BRD §8.1) describes the target architecture; Phase 1 uses DO App Platform's encrypted env var storage as an interim solution. Migration to a dedicated secrets manager is a Phase 2+ consideration triggered by: >20 secrets, need for dynamic secret rotation, or multi-cloud deployment.
+> **Secrets Management (Phase 1)**: Secrets are stored as encrypted environment variables on Railway (see RUNBOOK §4.3 for the full inventory). The BRD's reference to "HashiCorp Vault or equivalent" (BRD §8.1) describes the target architecture; Phase 1 uses Railway's encrypted env var storage as an interim solution. Migration to a dedicated secrets manager is a Phase 2+ consideration triggered by: >20 secrets, need for dynamic secret rotation, or multi-cloud deployment.
 
 ### 8.6 MFA Step-Up Flow
 
@@ -1976,15 +1976,15 @@ Full WebAuthn support deferred to Phase 2. Supabase Auth roadmap includes passke
 | Secret | Env Variable | Rotation Cadence | Procedure |
 |---|---|---|---|
 | Supabase JWT Secret | `SUPABASE_JWT_SECRET` | 90 days | Supabase Dashboard → Settings → JWT |
-| DO Spaces Access Key | `DO_SPACES_ACCESS_KEY`, `DO_SPACES_SECRET_KEY` | 180 days | DO Control Panel → API → Spaces Keys |
+| S3 Storage Access Key | `S3_ACCESS_KEY`, `S3_SECRET_KEY` | 180 days | Railway Dashboard → Variables |
 | Novu API Key | `NOVU_API_KEY` | 180 days | Novu Dashboard → Settings → API Keys |
 | Inngest Signing Key | `INNGEST_SIGNING_KEY` | 180 days | Inngest Dashboard → Manage → Signing Key |
 | Inngest Event Key | `INNGEST_EVENT_KEY` | 180 days | Inngest Dashboard → Manage → Event Key |
 | HITL Signing Secret | `HITL_SECRET` | 180 days | Generate new HS256 key, deploy, invalidate old tokens |
 | Webhook HMAC Secrets | `WEBHOOK_SECRET_*` | 180 days | Regenerate per-source, notify webhook providers |
 | LLM Provider API Keys | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, etc. | 90 days | Provider dashboard → API Keys |
-| Database URL | `DATABASE_URL` | On compromise only | DO Managed DB → Connection Pool → Reset |
-| Redis URL | `REDIS_URL` | On compromise only | DO Managed Redis → Reset Password |
+| Database URL | `DATABASE_URL` | On compromise only | Railway Dashboard → PostgreSQL → Reset |
+| Redis URL | `REDIS_URL` | On compromise only | Upstash Dashboard → Reset Password |
 
 > **SSOT**: This table is the authoritative source for rotation cadences. The Runbook §4.3 contains step-by-step rotation procedures and rollback steps for each secret. See also `docs/04-specs/configuration.md` §4 for the complete environment variable inventory.
 
@@ -1997,7 +1997,7 @@ Full WebAuthn support deferred to Phase 2. Supabase Auth roadmap includes passke
 | `SUPABASE_JWT_SECRET` | API Server | Env var (process.env) | JWT verification |
 | `DATABASE_URL` | API Server, Workflow Worker | Env var (process.env) | Connection string with credentials |
 | `REDIS_URL` | API Server, Workflow Worker | Env var (process.env) | Connection string with credentials |
-| `DO_SPACES_ACCESS_KEY/SECRET_KEY` | API Server | Env var (process.env) | File storage access |
+| `S3_ACCESS_KEY/SECRET_KEY` | API Server | Env var (process.env) | File storage access |
 | `NOVU_API_KEY` | API Server | Env var (process.env) | Notification delivery |
 | `INNGEST_SIGNING_KEY` | API Server | Env var (process.env) | Inngest webhook verification |
 | `INNGEST_EVENT_KEY` | API Server, Workflow Worker | Env var (process.env) | Inngest event sending |
@@ -2005,7 +2005,7 @@ Full WebAuthn support deferred to Phase 2. Supabase Auth roadmap includes passke
 | `WEBHOOK_SECRET_*` | API Server | Env var (process.env) | Per-source webhook HMAC |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` | API Server (LLM Gateway) | Env var (process.env) | LLM provider access |
 
-> **Phase 1 Limitation**: All env vars are accessible to all processes on the same container. No per-component secret scoping exists. Phase 2: Consider DO App Platform component-level env var scoping or a secrets manager with per-service access policies.
+> **Phase 1 Limitation**: All env vars are accessible to all processes on the same container. No per-component secret scoping exists. Phase 2: Consider Railway per-service variable scoping or a secrets manager with per-service access policies.
 
 ### 8.10 Auth Context in Durable Execution (AB-1)
 
@@ -2762,7 +2762,7 @@ async function logFileAccess(userId: string, fileId: string, action: 'view' | 'd
 
 > **Verified (2026-02-26)**: ClamAV provides official Docker images ([docs.clamav.net/manual/Installing/Docker.html](https://docs.clamav.net/manual/Installing/Docker.html)). For REST API access, use [clamav-rest-api](https://github.com/benzino77/clamav-rest-api) or [ajilach/clamav-rest](https://github.com/ajilach/clamav-rest) which bundles ClamAV daemon + REST API + auto signature updates in a single container.
 
-**Deployment Model**: Separate container service (not sidecar -- incompatible with DO App Platform)
+**Deployment Model**: Separate container service (not sidecar -- incompatible with Railway container model)
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
@@ -2773,7 +2773,7 @@ async function logFileAccess(userId: string, fileId: string, action: 'view' | 'd
 | ClamAV port | 3310 (TCP) | Direct `clamd` connection (internal only) |
 | Timeout | 30s per file (configurable) | Large files may need longer |
 | Phase 1 deployment | Docker Compose service | Runs alongside API container |
-| Production deployment | DO App Platform worker or external service | Evaluate cost vs. managed alternatives |
+| Production deployment | Railway worker service or external service | Evaluate cost vs. managed alternatives |
 
 ```typescript
 // malware scan integration point
@@ -2832,7 +2832,7 @@ async function generateDownloadUrl(fileId: string, userId: string): Promise<Resu
 
 ### 9.9 Access Log PII Policy
 
-- **Platform access logs** (DigitalOcean App Platform load balancer) contain: client IP addresses, request URLs (may contain UUIDs/IDs), User-Agent strings, and response codes.
+- **Platform access logs** (Railway load balancer) contain: client IP addresses, request URLs (may contain UUIDs/IDs), User-Agent strings, and response codes.
 - **PII fields in access logs**:
 
   | Field | PII Risk | Mitigation |
@@ -2889,7 +2889,7 @@ When a data subject requests erasure (§9.4.2), deletions must cascade across al
 |---|---|---|---|
 | PostgreSQL (`public`) | `users` (email, name) | Anonymize: email → hash, name → '[deleted]' | Query returns anonymized data |
 | PostgreSQL (domain) | `candidates`, `contracts` | Anonymize or delete per domain policy | Domain-specific verification |
-| DO Spaces (S3) | Uploaded files (resumes, docs) | `DeleteObject` API call | HEAD returns 404 |
+| S3 Storage (Railway Volumes) | Uploaded files (resumes, docs) | `DeleteObject` API call | HEAD returns 404 |
 | Redis | Session cache, user preferences | `DEL` with pattern `user:{id}:*` | Key scan returns empty |
 | Novu | Subscriber profile | Novu subscriber delete API | Subscriber lookup returns 404 |
 | Inngest | Workflow metadata referencing user | No direct deletion — data ephemeral in execution context | Event data auto-expires per Inngest retention |
@@ -2903,10 +2903,10 @@ When a data subject requests erasure (§9.4.2), deletions must cascade across al
 
 | Resource | Provider | Phase 1 Budget Cap | Free Tier Included | Exceed Behavior |
 |---|---|---|---|---|
-| Compute (App Platform) | DigitalOcean | $50/mo | $0 (pay-as-you-go) | Auto-scale stopped at 3 containers; alert at 80% |
-| PostgreSQL (Managed DB) | DigitalOcean | $15/mo | $0 (smallest plan) | No auto-upgrade; manual plan change required |
-| Redis (Managed) | DigitalOcean | $15/mo | $0 (smallest plan) | No auto-upgrade; eviction policy activates |
-| Object Storage (Spaces) | DigitalOcean | $5/mo | 250 GiB included | $0.02/GiB overage |
+| Compute (Railway) | Railway | $50/mo | $5 free trial credit | Auto-scale stopped at 3 containers; alert at 80% |
+| PostgreSQL (Railway) | Railway | $15/mo | Usage-based | No auto-upgrade; manual plan change required |
+| Redis (Upstash) | Upstash | $10/mo | Free tier 10K cmds/day | Per-request pricing scales with usage |
+| Object Storage (Railway Volumes) | Railway | $5/mo | Usage-based | Usage-based pricing |
 | LLM API calls | OpenAI, Anthropic, Google | $50/day, $1,000/mo per domain | Varies by provider | Budget enforcement blocks requests (§7.2) |
 | Notifications (Novu) | Novu Cloud | $0/mo | 10K events/mo | See §9.15 |
 | Workflow execution (Inngest) | Inngest Cloud | $0/mo | 50K steps/mo | See §9.15 |
@@ -2949,8 +2949,8 @@ When a data subject requests erasure (§9.4.2), deletions must cascade across al
 | Environment | Purpose | Infrastructure |
 |-------------|---------|----------------|
 | Development | Local dev | Docker Compose |
-| Staging | Integration testing | DigitalOcean (preview) |
-| Production | Live system | DigitalOcean (production) |
+| Staging | Integration testing | Railway (staging environment) |
+| Production | Live system | Railway (production environment) |
 
 ### 10.2 Container Structure
 
@@ -2983,7 +2983,8 @@ services:
 
 ### 10.3 Infrastructure Selection Rationale
 
-> **Multi-Model Consensus (2026-02-03)**: DigitalOcean App Platform over Kubernetes. Unanimous decision by Claude Opus 4.5, OpenAI Codex, Gemini 3 Pro.
+> **Multi-Model Consensus (2026-02-03)**: PaaS over Kubernetes. Unanimous decision by Claude Opus 4.5, OpenAI Codex, Gemini 3 Pro.
+> **Vendor Migration (2026-03-18)**: Migrated from DigitalOcean App Platform to Railway via multi-model consensus after DO account lock. Railway provides equivalent PaaS capabilities with container-based deployment, usage-based pricing, and native PostgreSQL support with Patroni HA.
 
 **BRD Constraints Driving Selection**:
 
@@ -3006,8 +3007,8 @@ services:
 | Team growth with K8s expertise | 5+ engineers | Currently 3 |
 
 **Decision Record**:
-- **Date**: 2026-02-03
-- **Decision**: Use DigitalOcean App Platform
+- **Date**: 2026-03-18
+- **Decision**: Use Railway (migrated from DigitalOcean App Platform)
 - **Status**: Active
 - **Review Trigger**: Any K8s upgrade trigger met, or quarterly review
 
@@ -3026,7 +3027,7 @@ services:
 
 #### 10.4.3 PostgreSQL SPOF — Error Budget Allowance
 
-> **Accepted Risk — PostgreSQL Single Point of Failure**: PostgreSQL is a single shared instance in Phase 1 (§2.3.2). This is a known SPOF that can cause total platform outage. This risk is accepted within the error budget because: (1) BRD SLO targets >99% monthly uptime (~7.3h allowed downtime/month). DigitalOcean Managed Database SLA provides 99.95% uptime, which is within budget. (2) RPO <24h is met by automated daily backups. (3) RTO <8h is documented in RUNBOOK §8.5 (database recovery; updated from <4h per SA-1 re-evaluation). (4) Phase 2 mitigation: upgrade to HA-tier managed database ($30/mo → $60/mo) for automatic failover, reducing SPOF to a multi-region failure scenario. The error budget allows this tradeoff because Phase 1 is pre-production/early production with low user volume.
+> **Accepted Risk — PostgreSQL Single Point of Failure**: PostgreSQL is a single shared instance in Phase 1 (§2.3.2). This is a known SPOF that can cause total platform outage. This risk is accepted within the error budget because: (1) BRD SLO targets >99% monthly uptime (~7.3h allowed downtime/month). Railway Managed PostgreSQL provides 99.95% uptime, which is within budget. (2) RPO <24h is met by automated daily backups. (3) RTO <8h is documented in RUNBOOK §8.5 (database recovery; updated from <4h per SA-1 re-evaluation). (4) Phase 2 mitigation: upgrade to HA-tier managed database ($30/mo → $60/mo) for automatic failover, reducing SPOF to a multi-region failure scenario. The error budget allows this tradeoff because Phase 1 is pre-production/early production with low user volume.
 
 #### 10.4.4 Novu Single-Path Acceptance
 
@@ -3036,7 +3037,7 @@ services:
 
 | Parameter | Value | Notes |
 |---|---|---|
-| DO Managed DB max connections | 25 (db-s-1vcpu-1gb plan) | Plan-determined limit |
+| Railway PostgreSQL max connections | 25 (starter plan) | Plan-determined limit |
 | Reserved for superuser/maintenance | 3 | DO reserves for replication and monitoring |
 | Available for application | 22 | 25 - 3 |
 | API server pool size | 10 | Per container |
@@ -3073,9 +3074,9 @@ services:
 | HTTP request queue depth | >50 pending requests | <10 pending requests | 3 min |
 | Response latency (P95) | >2s sustained for 5 min | <500ms sustained for 15 min | 5 min |
 
-- **Scale range**: 1–3 API server containers (DO App Platform limit for basic plan).
+- **Scale range**: 1–3 API server containers (Railway service scaling).
 - **Worker scaling**: Workflow worker does NOT auto-scale in Phase 1 (single instance). Phase 2: Add Inngest-based scaling signals.
-- **Configuration**: DO App Platform auto-scaling is configured in the App Spec YAML (`instance_count`, `instance_size_slug`, `autoscaling`).
+- **Configuration**: Railway auto-scaling is configured via `railway.json` and Railway dashboard service settings.
 
 #### 10.4.8 SLO-Alert Mapping
 
@@ -3900,7 +3901,7 @@ const redactPaths = [
 **Third-Party Export Filtering**:
 - OTLP export pipeline (Grafana Cloud/Honeycomb): Application-level Pino redaction applies before log emission. No raw PII reaches the OTLP collector.
 - Sentry: `sanitizeForLogging()` function strips PII fields (email, name, phone, address) from error context before `captureException()`. Sentry SDK `beforeSend` hook provides secondary redaction.
-- Access logs (DO App Platform LB): IP addresses in infrastructure access logs are outside application control. Phase 2: evaluate DO log forwarding with IP anonymization.
+- Access logs (Railway LB): IP addresses in infrastructure access logs are outside application control. Phase 2: evaluate Railway log forwarding with IP anonymization.
 
 > **Residual Risk**: Unstructured PII in free-text error messages cannot be caught by field-level redaction. Developers must follow Observability guideline §11.1 (PII should "Never" be logged). Phase 2: add regex-based PII scanning in the OTLP pipeline.
 

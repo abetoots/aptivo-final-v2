@@ -1,8 +1,8 @@
 name: Deploy to Production
 
-# Production deployment workflow
-# Strategy: Deploy promoted version-tagged images
-# Philosophy: Only release-tagged artifacts reach production
+# production deployment workflow
+# strategy: deploy promoted version-tagged images
+# philosophy: only release-tagged artifacts reach production
 
 on:
   push:
@@ -29,6 +29,9 @@ jobs:
       contents: read
       packages: read
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Set lowercase image prefix
         id: image-prefix
         run: echo "PREFIX=${{ env.REGISTRY }}/${GITHUB_REPOSITORY_OWNER,,}/aptivo-final-v2" >> $GITHUB_OUTPUT
@@ -42,7 +45,7 @@ jobs:
             VERSION="${GITHUB_REF#refs/tags/}"
           fi
 
-          # Check for pre-release
+          # check for pre-release
           if [[ $VERSION =~ ^v[0-9]+\.[0-9]+\.[0-9]+-.+ ]]; then
             echo "⚠️  Warning: Deploying pre-release version $VERSION to production"
           fi
@@ -63,14 +66,14 @@ jobs:
           docker manifest inspect ${{ steps.image-prefix.outputs.PREFIX }}:$VERSION
           echo "✅ Image verified: $VERSION"
 
-      - name: Deploy to Production (DigitalOcean)
-        uses: digitalocean/app_action/deploy@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-          app_name: aptivo-final-v2-Production
-          print_deploy_logs: true
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
+
+      - name: Deploy to Production (Railway)
         env:
-          IMAGE_TAG_WEB_SERVICE: ${{ steps.version.outputs.version }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          railway up --environment production --detach
 
       - name: Summary
         run: |

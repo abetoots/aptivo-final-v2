@@ -485,17 +485,17 @@ export const getMcpWrapper = lazyAsync(async () => {
 // file storage adapter
 // ---------------------------------------------------------------------------
 
-// env-gated storage: s3 when DO_SPACES_BUCKET is set, in-memory fallback
+// env-gated storage: s3 when S3_BUCKET is set, in-memory fallback
 export const getStorageAdapter = lazy(() => {
-  const bucket = process.env.DO_SPACES_BUCKET;
+  const bucket = process.env.S3_BUCKET;
   if (bucket) {
     return createS3StorageAdapter({
       bucket,
-      region: process.env.DO_SPACES_REGION ?? 'us-east-1',
-      endpoint: process.env.DO_SPACES_ENDPOINT ?? `https://${process.env.DO_SPACES_REGION ?? 'nyc3'}.digitaloceanspaces.com`,
+      region: process.env.S3_REGION ?? 'us-east-1',
+      endpoint: process.env.S3_ENDPOINT ?? '',
       credentials: {
-        accessKeyId: process.env.DO_SPACES_KEY ?? '',
-        secretAccessKey: process.env.DO_SPACES_SECRET ?? '',
+        accessKeyId: process.env.S3_ACCESS_KEY ?? '',
+        secretAccessKey: process.env.S3_SECRET_KEY ?? '',
       },
     });
   }

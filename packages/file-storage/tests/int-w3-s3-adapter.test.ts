@@ -3,7 +3,7 @@
  * @task INT-W3
  * @frd FR-CORE-BLOB-001
  *
- * Tests the S3 storage adapter for DigitalOcean Spaces:
+ * Tests the S3 storage adapter (S3-compatible):
  * - Presigned upload generation
  * - Presigned download generation
  * - Object deletion
@@ -83,7 +83,7 @@ import type { S3AdapterConfig } from '../src/storage/s3-adapter.js';
 const TEST_CONFIG: S3AdapterConfig = {
   bucket: 'aptivo-files',
   region: 'nyc3',
-  endpoint: 'https://nyc3.digitaloceanspaces.com',
+  endpoint: 'https://storage.example.com',
   credentials: {
     accessKeyId: 'test-key',
     secretAccessKey: 'test-secret',
@@ -103,7 +103,7 @@ describe('INT-W3: S3 Storage Adapter', () => {
   describe('createPresignedUpload', () => {
     it('returns PresignUploadResult with URL, fileId, key, expiresAt', async () => {
       mockGetSignedUrl.mockResolvedValueOnce(
-        'https://aptivo-files.nyc3.digitaloceanspaces.com/uuid-0001/report.pdf?signed=abc',
+        'https://aptivo-files.storage.example.com/uuid-0001/report.pdf?signed=abc',
       );
 
       const adapter = createS3StorageAdapter(TEST_CONFIG);
@@ -162,7 +162,7 @@ describe('INT-W3: S3 Storage Adapter', () => {
   describe('createPresignedDownload', () => {
     it('returns PresignDownloadResult with URL and expiresAt', async () => {
       mockGetSignedUrl.mockResolvedValueOnce(
-        'https://aptivo-files.nyc3.digitaloceanspaces.com/uuid-001/data.csv?signed=xyz',
+        'https://aptivo-files.storage.example.com/uuid-001/data.csv?signed=xyz',
       );
 
       const adapter = createS3StorageAdapter(TEST_CONFIG);

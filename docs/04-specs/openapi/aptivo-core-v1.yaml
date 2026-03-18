@@ -80,7 +80,7 @@ paths:
     get:
       tags: [Health]
       summary: Liveness check
-      description: Returns basic health status. Used by load balancers and DO App Platform for liveness probes.
+      description: Returns basic health status. Used by load balancers and Railway for liveness probes.
       operationId: getHealthLive
       security: []
       responses:

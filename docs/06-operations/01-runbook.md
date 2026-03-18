@@ -62,12 +62,12 @@ The system uses a container-based deployment model with progressive delivery:
 
 | Component            | Strategy                                          | Rollback Time |
 | -------------------- | ------------------------------------------------- | ------------- |
-| Application Services | Rolling deploy with instant rollback (DO App Platform) | < 5 minutes   |
+| Application Services | Rolling deploy with instant rollback (Railway) | < 5 minutes   |
 | Database Migrations  | Forward-only with rollback scripts                | < 15 minutes  |
 | Feature Releases     | Compile-time feature flags with env var escape hatches | Per-deploy    |
 | Gradual Rollout      | Deployment-gated rollout via environment promotion | Per-deploy    |
 
-> **Note**: Phase 1 feature flags are compile-time constants toggled via environment variables and deployment-gated rollouts — NOT a runtime feature flag service. See Section 2.4 for details. Percentage-based canary traffic splitting requires Kubernetes + service mesh (not available on DO App Platform).
+> **Note**: Phase 1 feature flags are compile-time constants toggled via environment variables and deployment-gated rollouts — NOT a runtime feature flag service. See Section 2.4 for details. Percentage-based canary traffic splitting requires Kubernetes + service mesh (not available on Railway).
 
 ### 2.2 Environments (Trunk-Based Development)
 
@@ -118,7 +118,7 @@ PR → pr-validation.yml → Merge → build.yml → SHA-tagged image
 - [ ] Trigger "Deploy to Production" workflow in GitHub Actions
 - [ ] Monitor deployment progress via:
   - [ ] GitHub Actions logs
-  - [ ] DigitalOcean App Platform dashboard
+  - [ ] Railway dashboard
   - [ ] OpenTelemetry traces for deployment spans
 - [ ] Verify health check endpoints return healthy status:
   - [ ] `/health/live` - Liveness probe
@@ -129,7 +129,7 @@ PR → pr-validation.yml → Merge → build.yml → SHA-tagged image
 
 #### Post-Deployment Validation
 
-- [ ] Confirm all containers are running (DO App Platform dashboard)
+- [ ] Confirm all containers are running (Railway dashboard)
 - [ ] Verify no spike in error rates (Sentry, OpenTelemetry)
 - [ ] Check P95 response times remain < 500ms
 - [ ] Validate feature flags are functioning correctly
@@ -161,14 +161,15 @@ Defined in code → Env var override (optional) → Deploy to staging → Valida
 
 ```bash
 # enable a feature flag via environment variable (requires redeployment)
-doctl apps update <app-id> --spec .do/app.yaml
-# where app.yaml includes: FEATURE_USER_DASHBOARD_V2=true
+railway variables set FEATURE_USER_DASHBOARD_V2=true
+railway up
+# or update via Railway dashboard → Variables
 
 # disable a feature flag (requires redeployment)
-# set FEATURE_USER_DASHBOARD_V2=false in app spec and redeploy
+# set FEATURE_USER_DASHBOARD_V2=false and redeploy
 
 # emergency disable: set env var to false and trigger immediate redeploy
-doctl apps create-deployment <app-id> --force-rebuild
+railway variables set FEATURE_USER_DASHBOARD_V2=false && railway up
 ```
 
 > **Important**: Because flags require redeployment to change, "instant rollback" via flag toggle is not available in Phase 1. Emergency rollback uses application rollback (§9.1) or env var change + redeploy.
@@ -177,20 +178,21 @@ doctl apps create-deployment <app-id> --force-rebuild
 
 ## **3. Infrastructure Architecture**
 
-> **Multi-Model Consensus (2026-02-03)**: DigitalOcean App Platform selected over Kubernetes. K8s operational overhead is not justified for a 3-developer, self-funded team. See ADD Section 10.3 for rationale and upgrade triggers.
+> **Multi-Model Consensus (2026-02-03)**: PaaS selected over Kubernetes. K8s operational overhead is not justified for a 3-developer, self-funded team. See ADD Section 10.3 for rationale and upgrade triggers.
+> **Vendor Migration (2026-03-18)**: Migrated from DigitalOcean App Platform to Railway via multi-model consensus after DO account lock.
 
-### 3.1 Production Architecture (DigitalOcean App Platform)
+### 3.1 Production Architecture (Railway)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                   DigitalOcean App Platform                      │
+│                         Railway                                   │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                    Load Balancer (managed)                 │  │
 │  │                    TLS termination, routing                │  │
 │  └─────────────────────────┬─────────────────────────────────┘  │
 │                            │                                     │
 │  ┌─────────────────────────▼─────────────────────────────────┐  │
-│  │                    App Service                             │  │
+│  │                    Web Service                             │  │
 │  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │  │
 │  │  │ Container 1 │  │ Container 2 │  │ Container N │        │  │
 │  │  │ (auto-scale)│  │ (auto-scale)│  │ (auto-scale)│        │  │
@@ -202,8 +204,8 @@ doctl apps create-deployment <app-id> --force-rebuild
         ┌───────────────────┼───────────────────┐
         ▼                   ▼                   ▼
 ┌───────────────┐   ┌───────────────┐   ┌───────────────┐
-│  PostgreSQL   │   │    Redis      │   │ DigitalOcean  │
-│  (DO Managed) │   │  (DO Managed) │   │    Spaces     │
+│  PostgreSQL   │   │    Redis      │   │   Railway     │
+│  (Railway)    │   │  (Upstash)    │   │   Volumes     │
 │               │   │               │   │ (S3-compat)   │
 └───────────────┘   └───────────────┘   └───────────────┘
 ```
@@ -212,11 +214,11 @@ doctl apps create-deployment <app-id> --force-rebuild
 
 | Service            | Size          | Scaling           | Notes                                 |
 | ------------------ | ------------- | ----------------- | ------------------------------------- |
-| **App Service**    | Basic ($12/mo)| 1-3 containers    | CPU/memory auto-scale                 |
-| **PostgreSQL**     | Basic ($15/mo)| Vertical          | DO Managed Database                   |
-| **Redis**          | Basic ($15/mo)| Single node       | DO Managed Redis                      |
-| **Spaces**         | $5/mo + usage | N/A               | S3-compatible object storage          |
-| **ClamAV**         | ~$6/mo        | Single container  | Malware scanning (see ADD §9.8.2); runs as DO App Platform worker or external Docker service |
+| **Web Service**    | Usage-based   | 1-3 containers    | CPU/memory auto-scale                 |
+| **PostgreSQL**     | Usage-based   | Vertical          | Railway Managed PostgreSQL             |
+| **Redis**          | Usage-based   | Serverless        | Upstash (external)                     |
+| **Volumes**        | Usage-based   | N/A               | S3-compatible object storage          |
+| **ClamAV**         | ~$6/mo        | Single container  | Malware scanning (see ADD §9.8.2); runs as Railway worker service or external Docker service |
 
 **Cost Estimate**: ~$55-110/mo for staging + production (vs. $200-400/mo for managed K8s)
 
@@ -224,10 +226,10 @@ doctl apps create-deployment <app-id> --force-rebuild
 
 | Resource | Monthly Budget | Alert Threshold | Exceed Behavior | Cost Attribution |
 |----------|---------------|-----------------|-----------------|------------------|
-| **App Service (auto-scale)** | $50/mo | DigitalOcean billing alert at $40 (80%) | Max 3 containers (hard cap in app spec); alert on-call if sustained at max | Platform — shared infrastructure |
-| **PostgreSQL** | $25/mo | DO billing alert at $20 | Vertical scaling requires manual approval | Platform — shared infrastructure |
-| **Redis** | $20/mo | DO billing alert at $15 | Single node (no auto-scale); alert on memory > 80% | Platform — shared infrastructure |
-| **Spaces** | $15/mo | DO billing alert at $12 | Storage growth alert; review file retention policies | Platform — shared infrastructure |
+| **Web Service (auto-scale)** | $50/mo | Railway usage alert at $40 (80%) | Max 3 containers (hard cap in railway.json); alert on-call if sustained at max | Platform — shared infrastructure |
+| **PostgreSQL** | $25/mo | Railway usage alert at $20 | Vertical scaling requires manual approval | Platform — shared infrastructure |
+| **Redis** | $20/mo | Upstash dashboard alert at $15 | Serverless; scales with usage | Platform — shared infrastructure |
+| **Volumes** | $15/mo | Railway usage alert at $12 | Storage growth alert; review file retention policies | Platform — shared infrastructure |
 | **ClamAV** | $10/mo | N/A (fixed cost) | Fixed container | Platform — security |
 | **LLM API** | $500/mo (all domains) | Application-level at 90% (ADD §7.2) | Hard cap per domain (daily $50, monthly $500) | Per-domain attribution (ADD §7.2) |
 | **Novu** | Free tier (10K events/mo) | Application-level at 8K events | No fallback provider (accepted risk — ADD §10.4.4); alert ops; manual intervention | Platform — notifications |
@@ -236,53 +238,30 @@ doctl apps create-deployment <app-id> --force-rebuild
 | **Sentry** | Free tier | Error event volume monitoring | Rate-limit noisy errors; alert on quota usage | Platform — observability |
 | **Grafana Cloud** | Free tier | Telemetry volume monitoring | Reduce trace sampling rate; alert on quota usage | Platform — observability |
 
-**Spend Observability**: DigitalOcean billing alerts configured for all managed resources. Monthly cost review by platform team. LLM spend visible via application dashboard (ADD §7.2).
+**Spend Observability**: Railway usage alerts configured for all managed resources. Monthly cost review by platform team. LLM spend visible via application dashboard (ADD §7.2).
 
-### 3.3 App Platform Configuration
+### 3.3 Railway Configuration
 
-```yaml
-# .do/app.yaml
-name: aptivo
-region: nyc
-services:
-  - name: api
-    github:
-      repo: aptivo/aptivo-final-v2
-      branch: main
-      deploy_on_push: false  # manual promotion from staging
-    dockerfile_path: Dockerfile
-    instance_count: 2
-    instance_size_slug: basic-xxs
-    http_port: 8080
-    health_check:
-      http_path: /health/live
-      initial_delay_seconds: 10
-      period_seconds: 10
-    envs:
-      - key: NODE_ENV
-        value: production
-      - key: DATABASE_URL
-        scope: RUN_TIME
-        type: SECRET
-      - key: REDIS_URL
-        scope: RUN_TIME
-        type: SECRET
-
-databases:
-  - name: aptivo-db
-    engine: PG
-    version: "16"
-    size: db-s-1vcpu-1gb
-
-  - name: aptivo-redis
-    engine: REDIS
-    version: "7"
-    size: db-s-1vcpu-1gb
+```json
+// railway.json
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "pnpm start",
+    "healthcheckPath": "/health/live",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
 ```
+
+Environment variables are managed via Railway dashboard or `railway variables set`. Database and Redis are provisioned as separate Railway services / Upstash instances.
 
 ### 3.4 K8s Upgrade Triggers
 
-**Current Decision**: DigitalOcean App Platform (PaaS)
+**Current Decision**: Railway (PaaS)
 
 **When to Reconsider Kubernetes** (document these criteria explicitly):
 
@@ -340,34 +319,34 @@ export const env = createEnv({
 
 Priority order (highest to lowest):
 
-1. App Platform encrypted environment variables (for sensitive values)
-2. App Platform environment variables (for non-sensitive config)
+1. Railway encrypted environment variables (for sensitive values)
+2. Railway environment variables (for non-sensitive config)
 3. Environment variables in container spec
 4. `.env` file (development only)
 
 ### 4.3 Secrets Management
 
-All secrets managed via DigitalOcean App Platform encrypted environment variables:
+All secrets managed via Railway encrypted environment variables:
 
 | Secret Type          | Storage                            | Rotation              |
 | -------------------- | ---------------------------------- | --------------------- |
-| Database credentials | DO App Platform (encrypted)        | 90 days               |
-| API keys (S3, LLM providers) | DO App Platform (encrypted)  | 90 days               |
-| Novu API Key         | DO App Platform (encrypted)        | 180 days              |
+| Database credentials | Railway (encrypted)                | 90 days               |
+| API keys (S3, LLM providers) | Railway (encrypted)        | 90 days               |
+| Novu API Key         | Railway (encrypted)                | 180 days              |
 | Webhook HMAC secrets | PostgreSQL (encrypted column)      | 180 days              |
-| HITL_SIGNING_SECRET          | DO App Platform (encrypted)        | 180 days              |
-| INNGEST_SIGNING_KEY  | DO App Platform (encrypted)        | 180 days              |
-| INNGEST_EVENT_KEY    | DO App Platform (encrypted)        | 180 days              |
+| HITL_SIGNING_SECRET          | Railway (encrypted)        | 180 days              |
+| INNGEST_SIGNING_KEY  | Railway (encrypted)                | 180 days              |
+| INNGEST_EVENT_KEY    | Railway (encrypted)                | 180 days              |
 | JWT signing keys     | Supabase-managed                   | 90 days               |
-| TLS certificates     | DO Managed (auto-renewal)          | Automatic             |
+| TLS certificates     | Railway (auto-renewal)             | Automatic             |
 
 > **SSOT**: Canonical rotation cadences are defined in ADD §8.8 (Secret Rotation Cadences). This table mirrors those values. On conflict, ADD §8.8 takes precedence.
 
 ```bash
-# example: update secret via doctl CLI
-doctl apps update-env <app-id> --env DATABASE_URL=<new-value> --type SECRET
+# example: update secret via railway CLI
+railway variables set DATABASE_URL=<new-value>
 
-# or via GitHub Actions with DIGITALOCEAN_ACCESS_TOKEN
+# or via Railway dashboard → Variables
 # secrets are never stored in git
 ```
 
@@ -377,7 +356,7 @@ doctl apps update-env <app-id> --env DATABASE_URL=<new-value> --type SECRET
 
 ### 5.1 OpenTelemetry Architecture
 
-All services emit telemetry via OpenTelemetry SDK with direct OTLP export (App Platform compatible).
+All services emit telemetry via OpenTelemetry SDK with direct OTLP export (Railway compatible).
 
 ```
 ┌─────────────┐                         ┌─────────────┐
@@ -391,7 +370,7 @@ All services emit telemetry via OpenTelemetry SDK with direct OTLP export (App P
       └────────────────────────────────────────
 ```
 
-> **Note**: App Platform does not support sidecars. Services export directly to observability backend via OTLP/HTTP.
+> **Note**: Railway does not support sidecars. Services export directly to observability backend via OTLP/HTTP.
 
 ### 5.2 Key Metrics & Alerts
 
@@ -404,7 +383,7 @@ All services emit telemetry via OpenTelemetry SDK with direct OTLP export (App P
 | **Memory Utilization**       | Prometheus      | > 85% for 10 min   | PagerDuty P2      | On-Call SRE     |
 | **Database Connections**     | Prometheus      | > 80% of max       | PagerDuty P2      | On-Call SRE     |
 | **Database Replication Lag** | Prometheus      | > 30 seconds       | PagerDuty P1      | On-Call SRE (Phase 2+: HA-tier only) |
-| **Health Check Failures**    | App Platform    | Container unhealthy 3x | PagerDuty P1  | On-Call SRE     |
+| **Health Check Failures**    | Railway         | Container unhealthy 3x | PagerDuty P1  | On-Call SRE     |
 | **Application Errors**       | Sentry/OTel     | New error type     | Slack #ops-errors | On-Call Support |
 | **Feature Flag Misconfig**   | Startup logs    | Env var parse failure | Slack #ops-alerts | DevOps Team     |
 
@@ -608,7 +587,7 @@ graph LR
 | `pr-validation.yml` | PR to main | Lint, typecheck, unit tests, security scans |
 | `build.yml` | Push to main | Build SHA-tagged Docker image, container scan |
 | `publish-docker.yml` | Version tag | Retag SHA image with version, publish |
-| `deploy-production.yml` | After publish | Deploy to production via DO App Platform |
+| `deploy-production.yml` | After publish | Deploy to production via Railway |
 
 ### 6.2 Security Scan Requirements
 
@@ -753,13 +732,13 @@ Alert Received
 
 **Immediate Actions:**
 
-1. **Check managed service status** (DigitalOcean Managed Databases dashboard)
+1. **Check managed service status** (Railway Dashboard → PostgreSQL service)
 2. **Assess scope:** Primary failure vs connectivity issue
 3. **Page DBA** if not already notified
 
 **Phase 1 Recovery (Basic-tier, no replication):**
 
-- DO managed database provides automated daily backups
+- Railway managed database provides automated daily backups
 - Restore from latest backup if database is unrecoverable
 - Application reconnects automatically when database recovers
 
@@ -776,7 +755,7 @@ Alert Received
 
 ### 8.6 Playbook 3: Disaster Recovery
 
-> **Phase 1 Reality**: Production runs on DigitalOcean App Platform (single region, Basic-tier managed databases). Full multi-region DR with automatic failover is a Phase 2+ capability requiring HA-tier databases and multi-region infrastructure. Phase 1 relies on DO's managed database automated daily backups and App Platform's built-in container restart.
+> **Phase 1 Reality**: Production runs on Railway (single region, managed databases). Full multi-region DR with automatic failover is a Phase 2+ capability requiring HA-tier databases and multi-region infrastructure. Phase 1 relies on Railway's managed database automated daily backups and Railway's built-in container restart.
 
 **Trigger:** Complete regional outage or extended infrastructure failure
 
@@ -790,10 +769,10 @@ Alert Received
 **Recovery Steps:**
 
 1. **Declare incident** - Notify management, create incident channel
-2. **Assess DO status** - Check [status.digitalocean.com](https://status.digitalocean.com)
-3. **If transient** - Wait for DO platform recovery; App Platform auto-restarts containers
-4. **If extended outage** - Restore database from latest DO automated backup to new region
-5. **Redeploy app** - Create new App Platform app in alternate region using same app spec
+2. **Assess Railway status** - Check [status.railway.app](https://status.railway.app)
+3. **If transient** - Wait for Railway platform recovery; Railway auto-restarts containers
+4. **If extended outage** - Restore database from latest Railway automated backup to new region
+5. **Redeploy app** - Create new Railway project in alternate region using same railway.json config
 6. **Update DNS** - Point traffic to new deployment (via CloudFlare or registrar)
 7. **Verify services** - Run smoke tests
 8. **Communicate** - Update status page, notify stakeholders
@@ -802,9 +781,9 @@ Alert Received
 
 > **Context**: After restoring to an alternate region (steps 1–8 above), use this procedure to return to the primary region when the original outage is resolved.
 
-1. **Confirm primary region recovery** — Verify DO status page shows all services operational in original region for ≥ 1 hour
-2. **Provision primary region infrastructure** — Re-create App Platform app and managed databases in original region
-3. **Migrate data** — Export PostgreSQL from alternate region, import to primary; sync S3/Spaces objects
+1. **Confirm primary region recovery** — Verify Railway status page shows all services operational in original region for ≥ 1 hour
+2. **Provision primary region infrastructure** — Re-create Railway project and managed databases in original region
+3. **Migrate data** — Export PostgreSQL from alternate region, import to primary; sync S3/Volumes objects
 4. **Verify data integrity** — Compare row counts, audit log continuity, latest workflow execution timestamps
 5. **DNS cutover** — Update DNS to point back to primary region; set TTL low (60s) during cutover window
 6. **Smoke test** — Run full smoke test suite against primary region endpoints
@@ -815,8 +794,8 @@ Alert Received
 
 | Condition | Action |
 |-----------|--------|
-| DO status page shows ETA < 1 hour | Wait; reassess every 30 minutes |
-| DO status page shows ETA > 2 hours or no ETA | Begin DR procedure (steps 1–8 above) |
+| Railway status page shows ETA < 1 hour | Wait; reassess every 30 minutes |
+| Railway status page shows ETA > 2 hours or no ETA | Begin DR procedure (steps 1–8 above) |
 | DO status page shows ETA 1–2 hours | Wait 1 hour; if no improvement, begin DR |
 | Data corruption suspected (not just unavailability) | Begin DR immediately from last clean backup |
 
@@ -852,7 +831,7 @@ Alert Received
 
 **Immediate Actions (< 5 minutes):**
 
-1. **Check managed Redis status** (DigitalOcean Managed Redis dashboard or `redis-cli ping`)
+1. **Check managed Redis status** (Upstash dashboard or `redis-cli ping`)
 2. **Assess scope:** Complete failure vs connectivity issue vs OOM
 3. **Activate per-consumer degradation policies** (documented in ADD §2.3.2 Redis):
    - MCP idempotency: **fail-closed** — reject new tool calls to prevent duplicate financial operations
@@ -943,7 +922,7 @@ Alert Received
 
 1. If database lock contention: identify blocking query (`SELECT * FROM pg_stat_activity WHERE state = 'active'`), terminate if safe
 2. If Inngest event delivery failing: verify Inngest Cloud status, check event send logs
-3. Restart API container if HITL service is in a bad state: `doctl apps restart <app-id> --component api`
+3. Restart API container if HITL service is in a bad state: `railway service restart` (or Railway dashboard → service → Restart)
 4. After recovery: verify pending approvals can be processed by submitting a test approval
 
 **Escalation:** If not resolved within 30 minutes → SEV-1. Contact: Engineering Manager (always available per §8.2). For Inngest issues: [Inngest Status](https://status.inngest.com) and support channel.
@@ -967,10 +946,10 @@ Alert Received
 
 1. If table bloat: run `VACUUM ANALYZE audit_logs` (non-blocking in PostgreSQL)
 2. If index bloat: schedule `REINDEX CONCURRENTLY` during low-traffic window
-3. If disk pressure: check managed database disk usage via DigitalOcean console; consider archiving old audit records per retention policy (§9.4)
+3. If disk pressure: check managed database disk usage via Railway console; consider archiving old audit records per retention policy (§9.4)
 4. **Interim mitigation**: If writes consistently > 1s, consider adding application-level write timeout (500ms) with dead-letter queue for failed entries — prevents blocking critical paths while preserving compliance (no silent drops)
 
-**Escalation:** If HITL decisions are being blocked > 15 minutes → SEV-1. For database issues: DigitalOcean managed database support.
+**Escalation:** If HITL decisions are being blocked > 15 minutes → SEV-1. For database issues: Railway support.
 
 ### 8.11 Playbook 8: Database Connection Pool Exhaustion
 
@@ -990,13 +969,13 @@ Alert Received
 **Recovery:**
 
 1. If a single long-running query is consuming connections: terminate it (`SELECT pg_terminate_backend(<pid>)`) — this may cause the originating workflow step to retry
-2. If connection leak (connections not being returned to pool): restart API containers: `doctl apps restart <app-id>`
-3. If legitimate load spike: increase connection pool size in database configuration (DigitalOcean console) — note: managed database has a max based on plan tier
+2. If connection leak (connections not being returned to pool): restart API containers: `railway service restart` (or Railway dashboard)
+3. If legitimate load spike: increase connection pool size in database configuration (Railway console) — note: managed database has a max based on plan tier
 4. After recovery: verify connection count returns to normal; check application logs for the root cause (missing connection release, slow query, etc.)
 
 **Prevention:** Phase 1 pool size is 20 connections (managed database default). Monitor `db_connection_pool_usage` metric. Phase 2+: connection pool per schema/domain to prevent cross-domain exhaustion.
 
-**Escalation:** If not resolved within 15 minutes → contact DigitalOcean managed database support. Engineering Manager for SEV-1 incident management.
+**Escalation:** If not resolved within 15 minutes → contact Railway support. Engineering Manager for SEV-1 incident management.
 
 ### 8.12 Component Criticality & Recovery Priority
 
@@ -1004,7 +983,7 @@ During multi-component incidents, recover in this order:
 
 | Priority | Component | Rationale |
 |----------|-----------|-----------|
-| 1 | DigitalOcean App Platform | Infrastructure — nothing works without it |
+| 1 | Railway | Infrastructure — nothing works without it |
 | 2 | PostgreSQL Database | All components depend on it |
 | 3 | Identity Service (Supabase Auth) | Gates all authenticated operations |
 | 4 | Redis Cache | Idempotency and rate limiting (data integrity) |
@@ -1061,18 +1040,18 @@ During multi-component incidents, recover in this order:
 ### 8.15 Playbook 11: File Storage / ClamAV Failure
 
 **Severity**: SEV-3
-**Symptoms**: File uploads returning 500 errors; `scan_pending` files accumulating; ClamAV health check failing; S3/Spaces connection errors.
+**Symptoms**: File uploads returning 500 errors; `scan_pending` files accumulating; ClamAV health check failing; S3 storage connection errors.
 
 **Triage**:
-1. Check DO Spaces status: [status.digitalocean.com](https://status.digitalocean.com)
-2. Check ClamAV container health: `doctl apps list-deployments` → check clamav component status
-3. Check ClamAV logs: `doctl apps logs <app-id> --component clamav`
-4. Check if issue is Spaces or ClamAV or both
+1. Check Railway Volumes status: [status.railway.app](https://status.railway.app)
+2. Check ClamAV container health: Railway dashboard → clamav service status
+3. Check ClamAV logs: Railway dashboard → clamav service → Logs (or `railway logs --service clamav`)
+4. Check if issue is storage or ClamAV or both
 
-**Resolution — Spaces Down**:
-1. Verify DO Spaces status page
+**Resolution — Storage Down**:
+1. Verify Railway status page
 2. File uploads will fail; existing file metadata remains in PostgreSQL
-3. No action needed — file operations retry when Spaces recovers
+3. No action needed — file operations retry when storage recovers
 4. If prolonged: Notify users that file operations are temporarily unavailable
 
 **Resolution — ClamAV Down**:
@@ -1082,7 +1061,7 @@ During multi-component incidents, recover in this order:
 4. Files will queue as `scan_pending` and be scanned when ClamAV recovers
 5. `scan_pending` files cannot be downloaded (quarantine policy)
 
-**Escalation**: DO support for Spaces issues. ClamAV community for scanner issues.
+**Escalation**: Railway support for storage issues. ClamAV community for scanner issues.
 
 ### 8.16 Playbook 12: BullMQ Job Queue Stall
 
@@ -1135,16 +1114,16 @@ During multi-component incidents, recover in this order:
 
 **When**: Deployment introduces bugs, performance regression, or unexpected behavior.
 
-**Procedure (DO App Platform)**:
-1. List recent deployments: `doctl apps list-deployments <app-id>`
-2. Identify the last known-good deployment ID
-3. Rollback: `doctl apps create-deployment <app-id> --force-rebuild` (with previous commit SHA)
+**Procedure (Railway)**:
+1. List recent deployments: Railway dashboard → Deployments tab
+2. Identify the last known-good deployment
+3. Rollback: Click "Rollback" on the target deployment (or `railway up` with previous commit SHA)
 4. Alternative: Revert the git commit and push to trigger new deployment
 5. Verify: Check health endpoint `GET /health/ready` returns 200
 
-**Manual Fallback** (if doctl fails):
-1. Go to DO App Platform dashboard → App → Deployments
-2. Click the last successful deployment → "Rollback to this deployment"
+**Manual Fallback** (if Railway CLI fails):
+1. Go to Railway dashboard → Project → Deployments
+2. Click the last successful deployment → "Rollback"
 3. Monitor deployment progress
 
 **Notes**:
@@ -1169,7 +1148,7 @@ During multi-component incidents, recover in this order:
 
 **Data Recovery** (if data corrupted):
 1. Stop application: Scale API containers to 0
-2. Restore from backup: `doctl databases backups list <db-id>` → select backup → restore
+2. Restore from backup: Railway dashboard → PostgreSQL → Backups → select backup → restore
 3. Re-run migrations up to the last-known-good version
 4. Restart application
 
@@ -1184,7 +1163,7 @@ During multi-component incidents, recover in this order:
 **Procedure**:
 1. **Dual-key window**: During rotation, both old and new secrets should be valid. If the new secret is not working:
    a. Revert the environment variable to the old secret value
-   b. Redeploy: `doctl apps create-deployment <app-id>`
+   b. Redeploy: `railway up` (or Railway dashboard → redeploy)
    c. Verify functionality
 
 2. **Per-secret rollback**:
@@ -1192,7 +1171,7 @@ During multi-component incidents, recover in this order:
    | Secret | Rollback Method |
    |--------|----------------|
    | Supabase JWT Secret | Supabase Dashboard → Settings → JWT → revert |
-   | DO Spaces Key | DO Control Panel → regenerate or use backup key |
+   | S3 Storage Key | Railway Dashboard → Variables → regenerate or use backup key |
    | Novu API Key | Novu Dashboard → regenerate previous key |
    | Inngest Signing Key | Inngest Dashboard → revert signing key |
    | HITL_SIGNING_SECRET | Set env var to old value, redeploy. Old HITL tokens become valid again. |
@@ -1207,7 +1186,7 @@ During multi-component incidents, recover in this order:
 
 #### 9.3.1 Step-by-Step Secret Rotation
 
-**Prerequisites**: Access to environment variable management (DigitalOcean App Platform or `.env`).
+**Prerequisites**: Access to environment variable management (Railway dashboard or `.env`).
 
 **Procedure** (example: `HITL_SIGNING_SECRET`):
 
@@ -1217,7 +1196,7 @@ During multi-component incidents, recover in this order:
    ```
 2. Set previous secret:
    ```bash
-   doctl apps update $APP_ID --spec <(yq '.envs += [{"key": "HITL_SIGNING_SECRET_PREVIOUS", "value": "'$CURRENT_SECRET'"}]' .do/app.yaml)
+   railway variables set HITL_SIGNING_SECRET_PREVIOUS=$CURRENT_SECRET
    ```
 3. Update current secret to new value
 4. Deploy and verify no 5xx errors in logs
@@ -1233,23 +1212,23 @@ During multi-component incidents, recover in this order:
 
 ### 9.4 Infrastructure Rollback
 
-**When**: Infrastructure change (App Spec, networking, scaling config) causes issues.
+**When**: Infrastructure change (railway.json, networking, scaling config) causes issues.
 
-**Procedure (DO App Platform App Spec)**:
-1. App Spec is version-controlled in the repository (`.do/app.yaml` or equivalent)
-2. Revert the App Spec change in git
+**Procedure (Railway)**:
+1. Config is version-controlled in the repository (`railway.json`)
+2. Revert the config change in git
 3. Push to trigger redeployment: `git push`
-4. Or apply previous spec directly: `doctl apps update <app-id> --spec .do/app.yaml`
+4. Or redeploy directly: `railway up`
 
 **Compute/Networking Changes**:
-- Instance size change: Update App Spec `instance_size_slug`, redeploy
-- Scaling config: Update `instance_count` in App Spec
-- Environment variables: `doctl apps update <app-id> --spec` with previous values
+- Instance size change: Update Railway service settings via dashboard, redeploy
+- Scaling config: Update service scaling via Railway dashboard
+- Environment variables: `railway variables set` with previous values
 - Database plan change: Cannot downgrade in-place. Restore from backup to smaller plan if needed.
 
 **Notes**:
-- DO App Platform does not have native "undo" for App Spec changes
-- Treat App Spec as infrastructure-as-code: always commit changes to git first
+- Railway supports instant rollback via the dashboard deployments list
+- Treat railway.json as infrastructure-as-code: always commit changes to git first
 
 ### 9.5 Inngest Workflow Rollback
 
@@ -1286,7 +1265,7 @@ When multiple components need rollback simultaneously, follow this priority orde
 | 2 | API Server | Serves user traffic; health checks validate database compatibility | §9.1 |
 | 3 | Workflow Worker | Depends on correct DB schema and API availability | §9.1 |
 | 4 | Secrets/Environment | Only if authentication/integration is broken | §9.3 |
-| 5 | Infrastructure (App Spec) | Lowest risk; config changes rarely cause data issues | §9.4 |
+| 5 | Infrastructure (railway.json) | Lowest risk; config changes rarely cause data issues | §9.4 |
 | 6 (Last) | Inngest Workflows | In-flight workflows are isolated; new invocations affected by app rollback | §9.5 |
 
 **Critical Rule**: ALWAYS rollback database migrations BEFORE rolling back application code. The application may depend on the old schema, and running new application code against a rolled-back schema (or vice versa) can cause data corruption.
@@ -1295,21 +1274,18 @@ When multiple components need rollback simultaneously, follow this priority orde
 
 ## **10. Infrastructure as Code**
 
-### 10.1 App Spec Workflow
+### 10.1 Railway Config Workflow
 
-Infrastructure changes follow App Spec-based GitOps:
+Infrastructure changes follow config-based GitOps:
 
 ```
-Developer PR (.do/app.yaml) → Review → Merge → GitHub Actions → doctl apps update
+Developer PR (railway.json) → Review → Merge → GitHub Actions → railway up
 ```
 
 ### 10.2 Infrastructure Repository Structure
 
 ```
-.do/
-├── app.yaml              # Main app specification
-├── app.staging.yaml      # Staging overrides (optional)
-└── README.md             # Infrastructure documentation
+railway.json              # Main Railway configuration
 
 .github/workflows/
 ├── pr-validation.yml     # PR checks
@@ -1321,41 +1297,39 @@ Developer PR (.do/app.yaml) → Review → Merge → GitHub Actions → doctl ap
 
 ### 10.3 Configuration Management
 
-App Platform configuration is version-controlled in `.do/app.yaml`:
+Railway configuration is version-controlled in `railway.json`:
 
 ```bash
-# validate app spec
-doctl apps spec validate .do/app.yaml
+# validate railway config
+railway status
 
 # apply changes (via GitHub Actions, not manual)
-doctl apps update <app-id> --spec .do/app.yaml
+railway up
 
 # view current deployment
-doctl apps list-deployments <app-id>
+railway status
 ```
 
 Changes to infrastructure trigger PR review process before deployment.
 
 ### 10.4 Component-to-IaC Ownership Matrix
 
-> **Added (Tier 3 re-evaluation IC-1/IC-4, 2026-03-13)**: Documents which production components are managed by IaC (App Spec) vs DigitalOcean console (ClickOps).
+> **Added (Tier 3 re-evaluation IC-1/IC-4, 2026-03-13)**: Documents which production components are managed by IaC (`railway.json`) vs Railway console.
 
-| Component | IaC (`.do/app.yaml`) | Console (ClickOps) | Notes |
+| Component | IaC (`railway.json`) | Console | Notes |
 |-----------|---------------------|-------------------|-------|
-| API server instance size | Yes | — | `instance_size_slug` in app spec |
-| API server instance count | Yes | — | `instance_count` + `autoscaling` in app spec |
-| PostgreSQL version | Yes (initial) | Upgrades via console | App spec sets version at creation; major upgrades require console |
-| PostgreSQL plan/size | Yes (initial) | Scaling via console | Vertical scaling requires manual approval to prevent cost overruns |
-| PostgreSQL backups | — | Automated daily (DO managed) | Retention per DO plan; no IaC control over schedule |
-| PostgreSQL maintenance windows | — | DO scheduled, operator approves | No IaC for patching schedule |
-| Redis version | Yes (initial) | Upgrades via console | Same pattern as PostgreSQL |
-| Redis plan/size | Yes (initial) | Scaling via console | Single-node; scaled vertically via console |
-| Spaces (S3) bucket | — | Console | Bucket creation and lifecycle not in app spec |
-| ClamAV container | Yes | — | Defined in app spec as worker component |
-| Environment variables (non-secret) | Yes | — | `envs` section in app spec |
-| Secrets (API keys, signing keys) | — | Console / `doctl` | Encrypted at rest by DO; 90-day rotation cadence (§9.3) |
-| DNS / routing | — | External (registrar) | Not managed by DO App Platform |
-| TLS certificates | — | DO auto-renewed | Managed automatically by App Platform |
+| Web service config | Yes | — | Build and deploy settings in railway.json |
+| Service scaling | — | Railway dashboard | Scaling configured via dashboard |
+| PostgreSQL version | — | Railway dashboard | Provisioned via Railway PostgreSQL plugin |
+| PostgreSQL plan/size | — | Railway dashboard | Vertical scaling requires manual approval to prevent cost overruns |
+| PostgreSQL backups | — | Automated daily (Railway managed) | Retention per Railway plan; no IaC control over schedule |
+| Redis | — | Upstash dashboard | External service; managed via Upstash |
+| Storage (S3) | — | Railway dashboard | Bucket creation and lifecycle via Railway Volumes |
+| ClamAV container | Yes | — | Defined as separate Railway service |
+| Environment variables (non-secret) | — | Railway dashboard | `railway variables set` or dashboard |
+| Secrets (API keys, signing keys) | — | Railway dashboard / CLI | Encrypted at rest by Railway; 90-day rotation cadence (§9.3) |
+| DNS / routing | — | External (registrar) | Not managed by Railway |
+| TLS certificates | — | Railway auto-renewed | Managed automatically by Railway |
 
 ### 10.5 Drift Detection Process (Automated)
 
@@ -1363,13 +1337,13 @@ Changes to infrastructure trigger PR review process before deployment.
 
 **Automated Pipeline**: `.github/workflows/drift-detection.yml`
 - Runs weekly (Monday 08:00 UTC) + on-demand via `workflow_dispatch`
-- Exports live spec via `doctl apps spec get`
-- Compares against committed `.do/app.yaml`
+- Exports live config via Railway API
+- Compares against committed `railway.json`
 - Creates GitHub issue with diff if drift detected
 
 **Manual Fallback** (if CI unavailable):
-1. Export live spec: `doctl apps spec get $APP_ID > /tmp/live.yaml`
-2. Compare: `scripts/drift-check.sh .do/app.yaml /tmp/live.yaml`
+1. Export live config: `railway status --json > /tmp/live.json`
+2. Compare: `scripts/drift-check.sh railway.json /tmp/live.json`
 3. Document drift and remediate per §10.6
 
 ### 10.6 Console-Managed Component Migration Plan
@@ -1378,11 +1352,11 @@ Changes to infrastructure trigger PR review process before deployment.
 
 | Component | Current State | Migration Path | Target Phase |
 |-----------|--------------|----------------|-------------|
-| DB plan scaling | Console approval | Terraform DO provider or `doctl` scripts in CI | Phase 2 (Epic 6) |
-| DB maintenance windows | Console approval | DO API automation when available | Phase 3+ |
-| Redis plan scaling | Console approval | Same as DB scaling | Phase 2 (Epic 6) |
-| Spaces bucket lifecycle | Console | Terraform or `doctl` for bucket creation | Phase 2 |
-| Secrets rotation | Manual `doctl`/console | Dedicated secrets manager (Vault/AWS SM) | Phase 2 (Epic 6) |
+| DB plan scaling | Railway dashboard | Railway API automation in CI | Phase 2 (Epic 6) |
+| DB maintenance windows | Railway dashboard | Railway API automation when available | Phase 3+ |
+| Redis plan scaling | Upstash dashboard | Upstash API automation | Phase 2 (Epic 6) |
+| Storage bucket lifecycle | Railway dashboard | Railway API for bucket creation | Phase 2 |
+| Secrets rotation | Railway dashboard / CLI | Dedicated secrets manager (Vault/AWS SM) | Phase 2 (Epic 6) |
 
 ### 10.7 Worker Scaling Procedures
 
@@ -1390,12 +1364,12 @@ Changes to infrastructure trigger PR review process before deployment.
 
 #### Auto-Scaling Configuration
 
-The `inngest-worker` component in `.do/app.yaml` is configured with CPU-based auto-scaling:
+The `inngest-worker` service in Railway is configured with CPU-based auto-scaling:
 
 | Parameter | Value | Rationale |
 |-----------|-------|-----------|
 | Min instances | 1 | Cost optimization — single worker sufficient for baseline load |
-| Max instances | 4 | Cap scaling to control costs; increase via `doctl` if needed |
+| Max instances | 4 | Cap scaling to control costs; increase via Railway dashboard if needed |
 | Scale-up trigger | CPU > 70% for > 2 minutes | Standard threshold for compute-bound workers |
 | Scale-down trigger | CPU < 30% for > 5 minutes | Conservative to prevent flapping |
 | Cooldown period | 5 minutes | Prevents scale oscillation |
@@ -1403,21 +1377,18 @@ The `inngest-worker` component in `.do/app.yaml` is configured with CPU-based au
 #### Manual Scaling Override
 
 ```bash
-# temporarily scale to specific count (e.g. 6 instances)
-doctl apps update $APP_ID --spec <(doctl apps spec get $APP_ID | yq '.workers[0].instance_count = 6')
+# temporarily scale to specific count via Railway dashboard
+# Railway dashboard → inngest-worker service → Settings → Scaling
 
-# restore auto-scaling (reset min to 1)
-doctl apps update $APP_ID --spec <(doctl apps spec get $APP_ID | yq '.workers[0].autoscaling.min_instance_count = 1')
-
-# check current worker instance count
-doctl apps list-deployments $APP_ID --format ID,Phase,Progress --no-header | head -1
+# check current deployment status
+railway status
 ```
 
 #### Monitoring Scaling Events
 
-1. **DigitalOcean dashboard**: App Platform → Activity tab shows scale-up/down events
-2. **Alerts**: Configure DO billing alert at 80% of worker budget to detect runaway scaling
-3. **Inngest dashboard**: Monitor queue depth — if growing despite max instances, consider increasing `max_instance_count` or upgrading `instance_size_slug`
+1. **Railway dashboard**: Project → inngest-worker service → Metrics tab shows resource usage
+2. **Alerts**: Configure Railway usage alert at 80% of worker budget to detect runaway scaling
+3. **Inngest dashboard**: Monitor queue depth — if growing despite max instances, consider increasing max instances or upgrading service resources
 
 #### Scaling Decision Tree
 
@@ -1425,7 +1396,7 @@ doctl apps list-deployments $APP_ID --format ID,Phase,Progress --no-header | hea
 Queue depth growing?
 ├── Yes → CPU < 70%? → Worker is I/O bound, not CPU bound → increase concurrency config, not instances
 ├── Yes → CPU > 70% and instances < max? → Auto-scaling should handle it; check cooldown timing
-├── Yes → CPU > 70% and instances = max? → Increase max_instance_count via doctl
+├── Yes → CPU > 70% and instances = max? → Increase max instances via Railway dashboard
 └── No  → System is healthy; no action needed
 ```
 
@@ -1459,7 +1430,7 @@ Queue depth growing?
 
 | Vendor | Service | Support Channel | SLA | Account Info |
 |--------|---------|----------------|-----|-------------|
-| **DigitalOcean** | App Platform, Managed DB, Spaces, Redis | [cloud.digitalocean.com/support](https://cloud.digitalocean.com/support) | Varies by plan (Basic: 24h, Premium: 1h) | Team account required |
+| **Railway** | Platform, Managed PostgreSQL, Volumes | [railway.app/help](https://railway.app/help) | Priority support on Pro plan | Team account required |
 | **Supabase** | Auth, Database (if used) | [supabase.com/dashboard/support](https://supabase.com/dashboard/support) | Free: community only; Pro: email support | Project dashboard |
 | **Novu** | Notification delivery | [docs.novu.co](https://docs.novu.co) / Discord community | Free: community only | Organization dashboard |
 | **Inngest** | Workflow execution | [inngest.com/discord](https://inngest.com/discord) / support@inngest.com | Free: community; Pro: email | Account dashboard |
@@ -1483,7 +1454,7 @@ Queue depth growing?
 
 ### 13.1 Pre-Drill Checklist
 - [ ] Notify team members of scheduled drill
-- [ ] Ensure recent backup exists (check `doctl databases backups list`)
+- [ ] Ensure recent backup exists (check Railway dashboard → PostgreSQL → Backups)
 - [ ] Document current application version and deployment ID
 - [ ] Prepare alternate region deployment configuration
 
@@ -1497,8 +1468,8 @@ Queue depth growing?
 7. **Document results**: Record RPO achieved, RTO achieved, issues encountered
 
 ### 13.3 Drill Procedure — Simulated Regional Failure
-1. **Simulate**: Deploy application to alternate DO region (use staging App Spec)
-2. **Configure**: Point to new database, Redis, Spaces in alternate region
+1. **Simulate**: Deploy application to alternate Railway region (use staging config)
+2. **Configure**: Point to new database, Redis, Volumes in alternate region
 3. **Validate**: Run smoke tests
 4. **Measure RTO**: Record total time from "region down" to "alternate region operational"
 5. **Document results**: Record issues, missing configurations, manual steps required
@@ -1522,31 +1493,31 @@ Queue depth growing?
 
 **Test Script**: `scripts/failover-test.sh`
 **Dry-Run Command**: `scripts/failover-test.sh --dry-run`
-**Full Test Command**: `DO_DB_CLUSTER_ID=<id> scripts/failover-test.sh`
+**Full Test Command**: `RAILWAY_DB_SERVICE_ID=<id> scripts/failover-test.sh`
 
-> Note: Full failover test requires DigitalOcean Managed Database cluster. Dry-run validates connectivity and recovery monitoring logic.
+> Note: Full failover test requires Railway Managed PostgreSQL with Patroni HA. Dry-run validates connectivity and recovery monitoring logic.
 
 ---
 
 ## **14. Regional SaaS Isolation Map**
 
-During a DigitalOcean regional failure, the following SaaS dependencies are affected:
+During a Railway regional failure, the following SaaS dependencies are affected:
 
-| SaaS Service | Hosted Region | Affected by DO Regional Failure? | Impact |
-|-------------|---------------|----------------------------------|--------|
-| **DO App Platform** | User-selected (e.g., NYC1) | **YES** — all containers down | Total platform outage |
-| **DO Managed PostgreSQL** | Same region as app | **YES** — database unavailable | No data access |
-| **DO Managed Redis** | Same region as app | **YES** — cache unavailable | No caching, no BullMQ |
-| **DO Spaces** | Region-specific | **YES** — file storage unavailable | File operations fail |
+| SaaS Service | Hosted Region | Affected by Railway Regional Failure? | Impact |
+|-------------|---------------|---------------------------------------|--------|
+| **Railway** | User-selected (e.g., us-west1) | **YES** — all containers down | Total platform outage |
+| **Railway PostgreSQL** | Same region as app | **YES** — database unavailable | No data access |
+| **Upstash Redis** | Upstash infrastructure | **NO** — independent infrastructure | Cache continues; BullMQ available |
+| **Railway Volumes** | Region-specific | **YES** — file storage unavailable | File operations fail |
 | **Supabase Auth** | Supabase Cloud (AWS) | **NO** — independent infrastructure | Auth continues if cached JWKS valid |
 | **Novu Cloud** | Novu infrastructure | **NO** — independent | Notifications can be sent (but no app to trigger them) |
 | **Inngest Cloud** | Inngest infrastructure | **NO** — independent | Events queued; workflows resume when app recovers |
 | **OpenAI/Anthropic/Google** | Provider clouds | **NO** — independent | LLM available but no app to call them |
 | **Sentry** | Sentry infrastructure | **NO** — independent | Error tracking continues for other apps |
 
-**Key Insight**: A DO regional failure takes down ALL DO-hosted services simultaneously (App Platform, PostgreSQL, Redis, Spaces). SaaS services hosted on other clouds (Supabase, Novu, Inngest, LLM providers) remain available but cannot be utilized because the application itself is down.
+**Key Insight**: A Railway regional failure takes down Railway-hosted services (platform, PostgreSQL, Volumes). However, Upstash Redis runs on independent infrastructure and is NOT affected. SaaS services hosted on other clouds (Supabase, Novu, Inngest, LLM providers) remain available but cannot be utilized because the application itself is down.
 
-**Recovery**: See §13 DR Test Procedure. Recovery requires deploying to an alternate DO region and restoring data from backups.
+**Recovery**: See §13 DR Test Procedure. Recovery requires deploying to an alternate Railway region and restoring data from backups.
 
 ---
 
@@ -1732,10 +1703,10 @@ OPENAI_API_KEY=<from OpenAI>
 ANTHROPIC_API_KEY=<from Anthropic>
 MCP_SERVER_URL=<if using MCP>
 MCP_SIGNING_KEY=<generate with: openssl rand -hex 16>
-DO_SPACES_BUCKET=<from DO Spaces>
-DO_SPACES_REGION=nyc3
-DO_SPACES_KEY=<from DO Spaces>
-DO_SPACES_SECRET=<from DO Spaces>
+S3_BUCKET=<from Railway Volumes>
+S3_REGION=us-west1
+S3_ACCESS_KEY=<from Railway>
+S3_SECRET_KEY=<from Railway>
 WEBAUTHN_RP_ID=yourdomain.com
 WEBAUTHN_RP_NAME=Aptivo
 WEBAUTHN_ORIGIN=https://yourdomain.com
@@ -1815,13 +1786,13 @@ curl -s https://<app-url>/health/ready | jq .
 ### 16.3 Step 3 — HA PostgreSQL Cluster (PR-03)
 
 **Human actions:**
-1. Go to DigitalOcean → Databases → Create Database Cluster
+1. Go to Railway Dashboard → New → PostgreSQL
    - Engine: PostgreSQL 16
-   - Plan: Production (includes standby node)
-   - Region: same as App Platform (e.g., nyc3)
+   - Enable Patroni HA (includes standby node)
+   - Region: same as web service (e.g., us-west1)
    - Name: `aptivo-db-ha`
 2. Note the connection string (connection pooler endpoint)
-3. Add the App Platform app as a trusted source
+3. Link the PostgreSQL service to the web service in Railway
 
 **Env vars to set:**
 ```
@@ -1834,7 +1805,7 @@ DATABASE_URL=postgresql://<user>:<pass>@<host>:25060/<db>?sslmode=require
 # 1. record timestamp
 date -u
 
-# 2. trigger failover (DO console → Database → Actions → Promote standby)
+# 2. trigger failover (Railway console → PostgreSQL → Actions → Promote standby)
 
 # 3. measure RTO — time from failover trigger to first successful query
 while true; do
@@ -1847,7 +1818,7 @@ done
 ```
 
 **Verification:**
-- [ ] HA cluster provisioned with primary + standby (screenshot from DO console)
+- [ ] HA cluster provisioned with primary + standby (screenshot from Railway console)
 - [ ] Application connects to HA cluster after deploy
 - [ ] Failover drill executed: RTO measured at _____ seconds (target <30s)
 - [ ] Application reconnects automatically after failover
@@ -2061,7 +2032,7 @@ curl -s https://<staging-url>/health/ready | jq .
 **Drill A — Database Failover (repeat of Step 3 drill, now with full app running):**
 ```
 1. Record start time: _____________
-2. Trigger failover: DO Console → Database → Promote Standby
+2. Trigger failover: Railway Console → PostgreSQL → Promote Standby
 3. Monitor app health:
    while true; do curl -s https://<app-url>/health/ready | jq .status; sleep 2; done
 4. Record reconnect time: _____________
@@ -2073,8 +2044,8 @@ curl -s https://<staging-url>/health/ready | jq .
 ```
 1. Record start time: _____________
 2. Deploy previous version:
-   doctl apps create-deployment <app-id> --wait
-   # or use App Platform UI → Deployments → Rollback
+   railway up
+   # or use Railway dashboard → Deployments → Rollback
 3. Monitor health:
    while true; do curl -s https://<app-url>/health/ready | jq .status; sleep 5; done
 4. Record health-check-pass time: _____________
@@ -2136,6 +2107,7 @@ Signed: _________________________ Date: ___________
 | v1.0.1  | 2025-06-04 | Abe Caymo             | Added Result-based error reporting section                                                                                                                                                             |
 | v2.0.0  | 2026-01-15 | Document Review Panel | Major rewrite: aligned with TSD v3.0.0, ADD v2.0.0; added OpenTelemetry, health checks, feature flags, container orchestration (K8s), RFC 7807 operations, severity model, RTO/RPO targets, GitOps/IaC |
 | v2.1.0  | 2026-02-03 | Multi-Model Consensus | Aligned with ADD: replaced K8s with DigitalOcean App Platform, TBD environments, Build Once Deploy Many pipeline, added security scan status |
+| v2.5.0  | 2026-03-18 | Platform Migration    | Migrated all infrastructure references from DigitalOcean App Platform to Railway. DO account locked; Railway chosen via multi-model consensus. Config-only migration (no infrastructure was provisioned). |
 | v2.2.0  | 2026-03-04 | Documentation Review  | Fixed feature flag §2.4 to reflect Phase 1 compile-time constants; added playbooks (MCP circuit breaker, LLM failure/budget, File Storage/ClamAV, BullMQ stall, ClamAV ops); added §9 Rollback Procedures (app, DB migration, secret rotation, infrastructure, Inngest workflow, multi-component order); added §12 Vendor Escalation Contacts; added §13 DR Test Procedure; added §14 Regional SaaS Isolation Map; renumbered sections 10–11 |
 | v2.3.0  | 2026-03-17 | Phase 2 Closure       | Added §15 Phase 2 Service Operations (notification failover, workflow CRUD, feature flags, consent, approval SLA, visual workflow builder) |
 | v2.4.0  | 2026-03-18 | Sprint 15 Deployment  | Added §16 Sprint 15 Production Deployment Checklist — 9-step human-actionable deployment gate with env vars, verification commands, and evidence requirements |

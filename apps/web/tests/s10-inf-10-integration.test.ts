@@ -278,11 +278,11 @@ describe('INF-10: Redis Split Backward Compatibility', () => {
 
 // @testtype doc-lint
 describe('INF-10: Infrastructure Config Validation', () => {
-  it('.do/app.yaml exists and contains autoscaling config', () => {
-    const source = readFileSync(resolve(__dirname, '../../..', '.do/app.yaml'), 'utf-8');
-    expect(source).toContain('autoscaling');
-    expect(source).toContain('min_instance_count');
-    expect(source).toContain('max_instance_count');
+  it('railway.json exists and contains deploy config', () => {
+    const source = readFileSync(resolve(__dirname, '../../..', 'railway.json'), 'utf-8');
+    expect(source).toContain('healthcheckPath');
+    expect(source).toContain('startCommand');
+    expect(source).toContain('restartPolicyType');
   });
 
   it('.github/workflows/drift-detection.yml exists', () => {

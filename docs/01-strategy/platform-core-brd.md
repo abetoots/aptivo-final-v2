@@ -350,7 +350,7 @@ The platform core provides these compliance capabilities to all domain applicati
 - **Data Encryption**: At rest (database) and in transit (TLS 1.3)
 - **Access Control**: RBAC with domain-specific role definitions
 - **Session Security**: Passwordless auth, configurable timeouts
-- **Secrets Management**: Centralized via platform secret store (Phase 1: DigitalOcean App Platform encrypted environment variables; Phase 2+: Vault or equivalent). **Phase 1 Implementation**: Secrets are stored as encrypted environment variables on DigitalOcean App Platform. See ADD S8.7 for session configuration and ADD S8.8 for rotation cadences. The Runbook S4.3 contains step-by-step rotation procedures. Migration to a dedicated secrets manager (Vault, AWS Secrets Manager, etc.) is a Phase 2+ consideration, triggered by: >20 secrets, need for dynamic secret rotation, or multi-cloud deployment.
+- **Secrets Management**: Centralized via platform secret store (Phase 1: Railway encrypted environment variables; Phase 2+: Vault or equivalent). **Phase 1 Implementation**: Secrets are stored as encrypted environment variables on Railway. See ADD S8.7 for session configuration and ADD S8.8 for rotation cadences. The Runbook S4.3 contains step-by-step rotation procedures. Migration to a dedicated secrets manager (Vault, AWS Secrets Manager, etc.) is a Phase 2+ consideration, triggered by: >20 secrets, need for dynamic secret rotation, or multi-cloud deployment.
 
 ### 8.2 Domain-Specific Compliance
 

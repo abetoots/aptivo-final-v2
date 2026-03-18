@@ -15,20 +15,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+      - name: Install Railway CLI
+        run: npm install -g @railway/cli
 
-      - name: Export live spec
+      - name: Export live config
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          doctl apps spec get ${{ secrets.DO_APP_ID }} > /tmp/live-spec.yaml
+          railway status --json > /tmp/live-config.json
 
       - name: Run drift check
         id: drift
         run: |
           chmod +x scripts/drift-check.sh
-          scripts/drift-check.sh .do/app.yaml /tmp/live-spec.yaml > /tmp/drift-report.txt 2>&1
+          scripts/drift-check.sh railway.json /tmp/live-config.json > /tmp/drift-report.txt 2>&1
           if [ -s /tmp/drift-report.txt ]; then
             echo "drift_detected=true" >> $GITHUB_OUTPUT
             echo "report<<EOF" >> $GITHUB_OUTPUT

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # failover-test.sh — validates HA database failover behavior
 # usage: failover-test.sh [--dry-run]
-# prerequisites: doctl, psql, jq
+# prerequisites: railway CLI, psql, jq
 #
 # phases:
 # 1. pre-flight: verify connectivity and note primary endpoint
@@ -47,14 +47,15 @@ echo "--- Phase 2: Simulate Failover ---"
 FAILOVER_START=$(date +%s)
 if [ "$DRY_RUN" = true ]; then
   echo "dry-run: skipping actual failover trigger"
-  echo "in production, would run: doctl databases failover \$DB_CLUSTER_ID"
+  echo "in production, would trigger failover via Railway PostgreSQL Patroni HA"
   sleep 2
 else
-  echo "triggering failover via DO API..."
-  if [ -n "${DO_DB_CLUSTER_ID:-}" ]; then
-    doctl databases failover "$DO_DB_CLUSTER_ID" --wait
+  echo "triggering failover via Railway PostgreSQL..."
+  if [ -n "${RAILWAY_DB_SERVICE_ID:-}" ]; then
+    # railway postgresql with patroni ha supports failover via the railway API
+    railway service restart --service "$RAILWAY_DB_SERVICE_ID"
   else
-    echo "WARNING: DO_DB_CLUSTER_ID not set, simulating with connection drop"
+    echo "WARNING: RAILWAY_DB_SERVICE_ID not set, simulating with connection drop"
     sleep 5
   fi
 fi

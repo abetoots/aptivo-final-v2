@@ -1,5 +1,5 @@
 /**
- * INT-W3: S3 Storage Adapter for DigitalOcean Spaces
+ * INT-W3: S3 Storage Adapter (S3-compatible)
  * @task INT-W3
  * @frd FR-CORE-BLOB-001
  */
@@ -32,7 +32,7 @@ import { DEFAULT_MAX_SIZE_BYTES } from './storage-types.js';
 export interface S3AdapterConfig {
   bucket: string;
   region: string;
-  endpoint: string; // e.g. https://nyc3.digitaloceanspaces.com
+  endpoint: string; // e.g. https://storage.railway.app or any s3-compatible endpoint
   credentials: { accessKeyId: string; secretAccessKey: string };
   presignExpiresIn?: number; // default 3600
 }
@@ -63,7 +63,7 @@ export function createS3StorageAdapter(config: S3AdapterConfig): StorageAdapter 
     region: config.region,
     endpoint: config.endpoint,
     credentials: config.credentials,
-    forcePathStyle: false, // DO Spaces uses virtual-hosted style
+    forcePathStyle: false, // s3-compatible storage uses virtual-hosted style
   });
 
   const defaultExpiry = config.presignExpiresIn ?? 3600;

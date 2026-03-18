@@ -145,7 +145,7 @@ docs/04-specs/
 |------------|-------------------------|---------|-------|
 | **Caching** | Redis | 7.x | Session, query cache |
 | **Object Storage** | MinIO (S3-compatible) | Latest | Document/media storage |
-| **API Gateway** | Traefik | 3.x | Local development routing; production uses DO App Platform managed LB |
+| **API Gateway** | Traefik | 3.x | Local development routing; production uses Railway managed LB |
 | **Containerization** | Podman/Docker | Latest | OCI-compliant |
 | **CI/CD** | GitHub Actions | - | Automated pipelines |
 

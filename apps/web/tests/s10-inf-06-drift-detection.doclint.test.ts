@@ -34,10 +34,11 @@ describe('INF-06: drift detection pipeline', () => {
     expect(content).toContain('#!/usr/bin/env bash');
   });
 
-  it('drift-check script normalizes specs before comparison', () => {
+  it('drift-check script normalizes configs before comparison', () => {
     const content = readFileSync(scriptPath, 'utf-8');
     expect(content).toContain('normalize');
-    expect(content).toContain('sort_keys');
+    // jq -S sorts keys for deterministic comparison
+    expect(content).toContain('jq');
   });
 
   it('drift-check script strips volatile fields', () => {

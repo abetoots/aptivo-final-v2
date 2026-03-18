@@ -104,34 +104,20 @@ This document defines the observability strategy for Aptivo. It establishes stan
 
 ### 2.3 Companion Worker Pattern
 
-> **Note**: The platform deploys on DO App Platform, not Kubernetes. References to K8s-specific concepts (sidecars, pods, namespaces) should be interpreted as their DO App Platform equivalents (separate services, containers, components).
+> **Note**: The platform deploys on Railway, not Kubernetes. References to K8s-specific concepts (sidecars, pods, namespaces) should be interpreted as their Railway equivalents (separate services, containers, components).
 
 Per **Deployment Operations v2.0.0**, each application service is paired with an OTel Collector companion worker:
 
 ```yaml
-# .do/app.yaml (excerpt)
-services:
-  - name: api
-    image:
-      registry_type: DOCR
-      repository: aptivo/app
-      tag: ${VERSION}
-    # ... app config
-
-  - name: otel-collector
-    image:
-      registry_type: DOCR
-      repository: otel/opentelemetry-collector-contrib
-      tag: "0.96.0"
-    internal_ports:
-      - 4317
-      - 4318
-      - 8889
+# railway project services (excerpt)
+# api service: aptivo/app:${VERSION}
+# otel-collector service: otel/opentelemetry-collector-contrib:0.96.0
+#   internal ports: 4317, 4318, 8889
 ```
 
 **Why Companion Workers?**
 
-- Lower network latency for telemetry (internal networking within DO App Platform)
+- Lower network latency for telemetry (internal networking within Railway)
 - Isolation: collector failure doesn't affect other containers
 - Simplified configuration per service
 - Better resource management
@@ -383,16 +369,16 @@ export async function withSpan<T, E extends { _tag: string }>(
 }
 ```
 
-### 4.4 DO App Platform HTTP Route Tracing
+### 4.4 Railway HTTP Route Tracing
 
-> **Note**: DO App Platform uses a managed HTTP router (not Traefik). Trace context propagation through the gateway relies on the platform's built-in support for forwarding `traceparent` and `tracestate` headers (W3C Trace Context — see §4.6). No gateway-level tracing configuration is required; traces are initiated by the application's OTel SDK on the first instrumented handler.
+> **Note**: Railway uses a managed HTTP router (not Traefik). Trace context propagation through the gateway relies on the platform's built-in support for forwarding `traceparent` and `tracestate` headers (W3C Trace Context — see §4.6). No gateway-level tracing configuration is required; traces are initiated by the application's OTel SDK on the first instrumented handler.
 
 ```yaml
 # Application-level gateway span (created by OTel HTTP instrumentation)
-# The DO managed router forwards these headers automatically:
+# The Railway managed router forwards these headers automatically:
 #   - traceparent (W3C Trace Context)
 #   - tracestate (W3C Trace Context)
-#   - X-Request-ID (DO-generated)
+#   - X-Request-ID (Railway-generated)
 #
 # SECURITY: Application instrumentation captures only safe headers.
 # Authorization headers are NEVER captured in traces.
@@ -528,11 +514,11 @@ All logs are JSON with consistent structure:
 
 ### 5.3 Log Collection with Fluent Bit
 
-Logs are collected from application stdout by the DO App Platform log pipeline and forwarded to Loki via Fluent Bit:
+Logs are collected from application stdout by the Railway log pipeline and forwarded to Loki via Fluent Bit:
 
 ```yaml
 # config/fluent-bit-config.yaml
-# DO App Platform captures stdout/stderr from each container automatically.
+# Railway captures stdout/stderr from each container automatically.
 # Fluent Bit processes the captured log stream for forwarding to Loki.
 [INPUT]
     Name              forward
@@ -1135,7 +1121,7 @@ export async function writeAuditEvent(
 **Checklist:**
 
 1. Verify trace headers propagate: `curl -v http://service/endpoint | grep traceparent`
-2. Check collector is receiving: `doctl apps logs <app-id> --component otel-collector`
+2. Check collector is receiving: `railway logs --service otel-collector`
 3. Ensure service names match in configuration
 4. Verify Inngest function spans propagate trace context
 
