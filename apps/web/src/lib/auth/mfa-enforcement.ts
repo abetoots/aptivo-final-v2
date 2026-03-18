@@ -115,9 +115,11 @@ export interface SupabaseMfaClient {
 
 /**
  * creates a stub mfa client for dev/test when supabase is not available.
+ * marked with _isStub: true so routes can detect and reject in production.
  */
-export function createMfaStubClient(): SupabaseMfaClient {
+export function createMfaStubClient(): SupabaseMfaClient & { _isStub: true } {
   return {
+    _isStub: true as const,
     async enroll(_params) {
       return Result.ok({
         factorId: 'stub-factor-id',

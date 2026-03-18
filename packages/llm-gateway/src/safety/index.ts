@@ -23,6 +23,10 @@ export { DEFAULT_DOMAIN_THRESHOLDS } from './safety-types.js';
 export { createContentFilter } from './content-filter.js';
 export type { ContentFilter, ContentFilterError } from './content-filter.js';
 
+// streaming content filter (LLM3-01)
+export { createStreamingContentFilter } from './streaming-content-filter.js';
+export type { StreamingFilterConfig, ChunkResult } from './streaming-content-filter.js';
+
 export { DEFAULT_CONTENT_PATTERNS } from './content-patterns.js';
 export type { ContentPattern } from './content-patterns.js';
 

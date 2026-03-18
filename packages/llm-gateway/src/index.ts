@@ -81,6 +81,10 @@ export type {
   ContentFilterConfig,
 } from './safety/index.js';
 
+// safety — streaming content filter (LLM3-01)
+export { createStreamingContentFilter } from './safety/index.js';
+export type { StreamingFilterConfig, ChunkResult } from './safety/index.js';
+
 // routing — multi-provider routing (LLM2-04)
 export { createProviderRouter, createHealthTracker } from './routing/index.js';
 export type {

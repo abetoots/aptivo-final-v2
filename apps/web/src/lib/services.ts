@@ -48,8 +48,10 @@ import { createWebAuthnService } from './auth/webauthn-service.js';
 // secrets provider (INF-04)
 import { createEnvSecretsProvider } from './auth/secrets-provider.js';
 
-// mfa client (INF-04)
+// mfa client (INF-04 / PR-01)
 import { createMfaStubClient } from './auth/mfa-enforcement.js';
+import { createSupabaseMfaClient } from './auth/supabase-mfa-client.js';
+import type { SupabaseAuthClient } from './auth/supabase-mfa-client.js';
 
 // observability
 import { createMetricService } from './observability/metric-service.js';
@@ -118,6 +120,9 @@ import { createDiscoveryService } from './mcp/discovery-service.js';
 // circuit breaker config service (FEAT-09)
 import { createCbConfigService, createInMemoryCbConfigStore } from './mcp/circuit-breaker-config-service.js';
 
+// smtp config validator (PR-06)
+import { validateSmtpEnvConfig } from './notifications/smtp-config-validator.js';
+
 // consent service (FEAT-04)
 import { createConsentService } from './consent/consent-service.js';
 
@@ -128,6 +133,7 @@ import type { WebhookStore, WebhookRegistration } from './webhooks/webhook-servi
 // feature flag service (FEAT-03)
 import { createFeatureFlagService } from './feature-flags/feature-flag-service.js';
 import { createLocalFlagProvider, DEFAULT_FLAGS } from './feature-flags/local-provider.js';
+import { createEnvFlagProvider } from './feature-flags/env-provider.js';
 
 // llm-gateway
 import {
@@ -695,7 +701,7 @@ export const getLlmUsageStore = lazy(() =>
 // ---------------------------------------------------------------------------
 
 // prefer session-specific redis, fall back to shared
-function buildSessionRedis(): RedisClient | null {
+export function buildSessionRedis(): RedisClient | null {
   const url = process.env.UPSTASH_REDIS_SESSION_URL ?? process.env.UPSTASH_REDIS_URL;
   const token = process.env.UPSTASH_REDIS_SESSION_TOKEN ?? process.env.UPSTASH_REDIS_TOKEN;
   if (!url) return null;
@@ -709,7 +715,28 @@ function buildSessionRedis(): RedisClient | null {
   }
 }
 
-const getSessionRedis = lazy(() => buildSessionRedis());
+export const getSessionRedis = lazy(() => buildSessionRedis());
+
+// ---------------------------------------------------------------------------
+// jobs redis (PR-05: split redis instances)
+// ---------------------------------------------------------------------------
+
+// prefer jobs-specific redis, fall back to shared
+export function buildJobsRedis(): RedisClient | null {
+  const url = process.env.UPSTASH_REDIS_JOBS_URL ?? process.env.UPSTASH_REDIS_URL;
+  const token = process.env.UPSTASH_REDIS_JOBS_TOKEN ?? process.env.UPSTASH_REDIS_TOKEN;
+  if (!url) return null;
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { Redis } = require('@upstash/redis') as { Redis: new (opts: { url: string; token: string }) => RedisClient };
+    return new Redis({ url, token: token ?? '' });
+  } catch {
+    console.warn('@upstash/redis not installed');
+    return null;
+  }
+}
+
+export const getJobsRedis = lazy(() => buildJobsRedis());
 
 // ---------------------------------------------------------------------------
 // token blacklist (ID2-06) — uses session redis (INF-03)
@@ -759,12 +786,31 @@ export const getSecretsProvider = lazy(() => createEnvSecretsProvider());
 // ---------------------------------------------------------------------------
 
 export const getMfaClient = lazy(() => {
-  // env-gated: real supabase mfa when configured, stub fallback
+  // env-gated: real supabase mfa when configured, stub fallback (PR-01)
+  // PR-02: production guard — refuse to start with stub in production
   if (process.env.NEXT_PUBLIC_SUPABASE_URL) {
-    // in production, would wire real supabase mfa client here
-    // for now, return stub (supabase mfa sdk integration is a deployment step)
-    console.warn('supabase mfa: using stub client (wire real sdk in deployment)');
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const { createClient } = require('@supabase/supabase-js') as {
+        createClient: (url: string, key: string) => { auth: SupabaseAuthClient };
+      };
+      const supabase = createClient(
+        process.env.NEXT_PUBLIC_SUPABASE_URL,
+        process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '',
+      );
+      return createSupabaseMfaClient(supabase.auth);
+    } catch {
+      console.warn('@supabase/supabase-js not installed, using stub mfa client');
+    }
   }
+
+  // PR-02: in production, missing supabase url is a fatal config error
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error(
+      'NEXT_PUBLIC_SUPABASE_URL is required in production — MFA stub is not allowed',
+    );
+  }
+
   return createMfaStubClient();
 });
 
@@ -932,9 +978,13 @@ export const getWebhookService = lazy(() => {
 // feature flag service (FEAT-03)
 // ---------------------------------------------------------------------------
 
-export const getFeatureFlagService = lazy(() =>
-  createFeatureFlagService({ provider: createLocalFlagProvider(DEFAULT_FLAGS) }),
-);
+// PR-07: env provider takes precedence when FEATURE_FLAGS is set
+export const getFeatureFlagService = lazy(() => {
+  const provider = process.env.FEATURE_FLAGS
+    ? createEnvFlagProvider(DEFAULT_FLAGS)
+    : createLocalFlagProvider(DEFAULT_FLAGS);
+  return createFeatureFlagService({ provider });
+});
 
 // ---------------------------------------------------------------------------
 // workflow builder service (FEAT-07)
@@ -978,6 +1028,14 @@ export const getDiscoveryService = lazy(() => {
     getHealth: () => null,
   });
 });
+
+// ---------------------------------------------------------------------------
+// smtp config validator (PR-06)
+// ---------------------------------------------------------------------------
+
+export const getSmtpConfigValidator = lazy(() => ({
+  validate: validateSmtpEnvConfig,
+}));
 
 // ---------------------------------------------------------------------------
 // circuit breaker config service (FEAT-09)

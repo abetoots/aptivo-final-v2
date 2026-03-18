@@ -56,4 +56,9 @@ export const DEFAULT_FLAGS: FeatureFlag[] = [
     variant: 'beta',
     description: 'workflow definition CRUD API',
   },
+  {
+    key: 'llm-streaming-filter',
+    enabled: false,
+    description: 'enable streaming content filter (deny-by-default)',
+  },
 ];

@@ -42,6 +42,15 @@ export async function GET(request: Request) {
 
   // resolve mfa client from composition root
   const client = await getMfaClientFromRoot();
+
+  // pr-02: reject stub client in production
+  if (process.env.NODE_ENV === 'production' && '_isStub' in client && client._isStub) {
+    return new Response(
+      JSON.stringify({ errorCode: 'mfa_unavailable', detail: 'MFA service not configured' }),
+      { status: 503, headers: { 'content-type': 'application/json' } },
+    );
+  }
+
   const result = await client.enroll({ factorType: 'totp', friendlyName: 'Authenticator App' });
 
   if (!result.ok) {
