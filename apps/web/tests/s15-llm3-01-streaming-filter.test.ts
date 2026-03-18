@@ -462,6 +462,7 @@ describe('LLM3-01: Barrel Exports', () => {
     expect(typeof llmGateway.createStreamingContentFilter).toBe('function');
   });
 
+  // @testtype doc-lint — verifies barrel export structure, not runtime behavior
   it('safety index re-exports streaming content filter', async () => {
     const fs = await import('node:fs');
     const source = fs.readFileSync(

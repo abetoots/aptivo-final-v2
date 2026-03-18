@@ -298,6 +298,7 @@ describe('PR-07: Risky flags deny-by-default', () => {
 // PR-07: admin endpoint source verification
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint — verifies route file structure, not runtime behavior
 describe('PR-07: Admin Feature Flags Endpoint', () => {
   it('route file exists and handles GET', async () => {
     const fs = await import('node:fs');

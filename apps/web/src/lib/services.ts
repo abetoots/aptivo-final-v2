@@ -813,7 +813,11 @@ export const getMfaClient = lazy(() => {
         process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '',
       );
       return createSupabaseMfaClient(supabase.auth);
-    } catch {
+    } catch (err) {
+      // in production, failing to load supabase SDK is fatal — don't fall through to stub
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error(`@supabase/supabase-js required in production but failed to load: ${err}`);
+      }
       console.warn('@supabase/supabase-js not installed, using stub mfa client');
     }
   }

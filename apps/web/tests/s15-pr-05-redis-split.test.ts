@@ -201,6 +201,7 @@ describe('PR-05: Redis instance isolation', () => {
 // PR-05: token blacklist uses session redis (not jobs)
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint — verifies source wiring, not runtime behavior
 describe('PR-05: Token blacklist uses session Redis', () => {
   it('services.ts creates token blacklist from session redis, not jobs', async () => {
     const fs = await import('node:fs');

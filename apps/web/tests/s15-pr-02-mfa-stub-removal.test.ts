@@ -252,6 +252,7 @@ describe('PR-02: MFA route guard stub detection', () => {
 // PR-02: composition root source verification
 // ---------------------------------------------------------------------------
 
+// @testtype doc-lint — verifies source structure, not runtime behavior
 describe('PR-02: Composition Root Production Guard', () => {
   it('mfa-client-resolver contains production guard logic', async () => {
     const fs = await import('node:fs');
