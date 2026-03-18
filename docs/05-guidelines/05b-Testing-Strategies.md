@@ -344,6 +344,22 @@ describe('Candidate API Routes', () => {
 - **Tools:** Playwright
 - **Responsibility:** QA Engineers (automation), with all team members participating in manual regression checks if needed.
 
+### 3.8 Test Taxonomy and Counting Rules
+
+Every test file must be tagged with one of the following categories:
+
+| Tag | Purpose | Counts for Quality Gate? |
+|-----|---------|--------------------------|
+| `behavioral` | Tests that import and exercise production code paths | Yes |
+| `contract` | Tests that validate interface contracts between modules | Yes |
+| `doc-lint` | Tests that read documentation or config files and assert on content | No — reported separately |
+
+**Counting rules:**
+- Only `behavioral` and `contract` tests count toward sprint quality gates (coverage targets, test totals, pass-rate KPIs).
+- `doc-lint` tests are tracked in a separate column on sprint review dashboards.
+- Test files containing **only** `doc-lint` assertions must use the `*.doclint.test.ts` suffix so CI can split reporting.
+- Mixed files (behavioral + doc-lint) are permitted but discouraged; prefer splitting into separate files.
+
 ---
 
 ## **4. Vitest Patterns & Best Practices**
@@ -624,6 +640,129 @@ describe('CandidateService composition', () => {
     expect(mockDeps.candidateRepo.save).not.toHaveBeenCalled();
     expect(mockDeps.eventPublisher.publish).not.toHaveBeenCalled();
   });
+});
+```
+
+### 4.6 Prohibited Pattern — Source-as-String Assertions
+
+Reading production source code with `fs.readFileSync` and asserting on substrings is **forbidden** for `behavioral` and `contract` tests.
+
+```typescript
+// ❌ BAD — source-as-string assertion (tests text, not behavior)
+const source = fs.readFileSync('src/lib/services.ts', 'utf-8');
+expect(source).toContain('createSupabaseMfaClient');
+
+// ✅ GOOD — import production code and assert runtime effects
+import { getMfaClient } from '../src/lib/services';
+const client = getMfaClient();
+expect(client._isStub).toBe(false);
+```
+
+**Rules:**
+- Source-as-string assertions are allowed **only** in `doc-lint` tagged tests.
+- Behavioral tests must import production code and assert on runtime effects, return values, or observable side effects.
+- If importing from the composition root (`services.ts`) pulls in too many transitive dependencies, extract the resolution logic into a pure, independently testable module (see §4.8).
+- CI may enforce this rule via a lint pass that flags `readFileSync` usage in non-`doclint` test files.
+
+### 4.7 Prohibited Pattern — Inline Replica Functions
+
+Re-implementing production logic inside test files is **forbidden**. Tests must import and exercise the actual production code.
+
+```typescript
+// ❌ BAD — inline replica of production logic
+function buildMfaClientLogic(env: Record<string, string | undefined>) {
+  if (env.NEXT_PUBLIC_SUPABASE_URL) return { _isStub: false };
+  if (env.NODE_ENV === 'production') throw new Error('URL required');
+  return { _isStub: true };
+}
+// tests exercise the replica, not the real code — tautological
+
+// ✅ GOOD — import the real resolver
+import { resolveMfaClient } from '../src/lib/auth/mfa-client-resolver';
+const client = resolveMfaClient({ NEXT_PUBLIC_SUPABASE_URL: 'https://x.supabase.co' });
+expect(client._isStub).toBe(false);
+```
+
+**Rules:**
+- Tests must always import the function under test from its production module.
+- If an inline replica is unavoidable due to infrastructure constraints, the test must include a `@debt-inline-replica` JSDoc tag with a linked issue ID tracking the remediation.
+- In-memory store stubs that implement a **store interface** (e.g., `InMemoryHitlStore`) are not replicas — they are test doubles and are permitted.
+
+### 4.8 Composition Root Testability Standard
+
+The composition root (`services.ts`) often has heavy transitive dependencies that make direct import impractical in unit tests. The solution is to extract pure resolution logic into independently testable modules.
+
+**Pattern:**
+```
+services.ts  →  calls resolveMfaClient() from mfa-client-resolver.ts
+                 calls resolveRedisConfig() from redis-config-resolver.ts
+```
+
+**Rules:**
+- Extract env-gating, fallback, and wiring logic from `services.ts` into pure resolver modules (e.g., `mfa-client-resolver.ts`, `redis-config-resolver.ts`).
+- Resolver modules must be side-effect-free: they accept env/config as parameters and return the resolved value.
+- Unit tests import resolvers directly — no `readFileSync` on `services.ts`.
+- Zero source-string assertions are permitted for behavioral criteria.
+
+```typescript
+// src/lib/auth/mfa-client-resolver.ts
+export function resolveMfaClient(env: Record<string, string | undefined>): MfaClient {
+  if (env.NEXT_PUBLIC_SUPABASE_URL) {
+    return createSupabaseMfaClient(env);
+  }
+  if (env.NODE_ENV === 'production') {
+    throw new Error('NEXT_PUBLIC_SUPABASE_URL is required in production');
+  }
+  return createMfaStubClient();
+}
+
+// tests/mfa-client-resolver.test.ts
+import { resolveMfaClient } from '../src/lib/auth/mfa-client-resolver';
+
+it('returns real client when supabase URL is set', () => {
+  const client = resolveMfaClient({ NEXT_PUBLIC_SUPABASE_URL: 'https://x.supabase.co' });
+  expect(client._isStub).toBe(false);
+});
+```
+
+### 4.9 PostgreSQL Test Strategy
+
+Database tests must run against a real PostgreSQL-compatible engine. Mocking Drizzle query results does not validate SQL semantics, schema compatibility, or migration correctness.
+
+**Two-tier approach:**
+
+| Tier | Engine | Use Case | Speed |
+|------|--------|----------|-------|
+| Fast path | `pglite` or `pg-mem` | Query semantics, store adapter logic, constraint validation | ~50ms/test |
+| CI path | Containerized PostgreSQL | Migration compatibility, full-fidelity integration | ~2s/suite |
+
+**Rules:**
+- All Drizzle store adapter tests must run queries against a PostgreSQL engine (pglite for speed, containerized PG in CI).
+- Mocking `db.select()` / `db.insert()` return values is prohibited for store adapter tests — the query must execute.
+- At least one migration smoke test per schema-touching package must verify that `drizzle-kit push` or `drizzle-kit migrate` completes without errors against a real database.
+- Test fixtures should use transactions with rollback for isolation (no shared mutable state between tests).
+
+```typescript
+// example: pglite-based store adapter test
+import { PGlite } from '@electric-sql/pglite';
+import { drizzle } from 'drizzle-orm/pglite';
+import * as schema from '@aptivo/database/schema';
+
+const pg = new PGlite();
+const db = drizzle(pg, { schema });
+
+beforeAll(async () => {
+  await migrate(db, { migrationsFolder: './drizzle' });
+});
+
+it('creates and retrieves a workflow', async () => {
+  const store = createDrizzleWorkflowStore(db);
+  const created = await store.create({ name: 'test-wf', domainId: 'platform' });
+  expect(created.ok).toBe(true);
+
+  const found = await store.findById(created.value.id);
+  expect(found.ok).toBe(true);
+  expect(found.value.name).toBe('test-wf');
 });
 ```
 
