@@ -33,22 +33,39 @@ This document defines **HOW** the Aptivo Agentic Core is architected to meet the
 ### 1.2 Key Architectural Decisions
 
 > **Multi-Model Consensus (2026-02-02)**: Build unique differentiators, buy commodity infrastructure.
+> **Vendor Ratification (2026-03-18)**: All vendor decisions reviewed by Claude + Gemini + Codex, ratified by human partner. See decision records below.
 
-| Decision | Selection | Rationale |
-|----------|-----------|-----------|
-| Workflow Engine | **Inngest** (Buy) | AgentKit for MCP consumption, step.waitForEvent for HITL |
-| AI Reasoning | **LangGraph.js** (inside Inngest) | Runs as activity within workflow steps |
-| Identity | **Supabase Auth** (Buy) | 50K MAU free, magic links, saves 2+ months |
-| Notifications | **Novu** (Buy) | Multi-channel, templates, quiet hours, saves 3 weeks |
-| Runtime | Node.js 24 LTS + TypeScript | Async I/O, strong typing, LangGraph.js compatibility |
-| Database | PostgreSQL 16 | ACID compliance, JSONB, full-text search |
-| Cache | Redis 7 | Sub-ms latency, pub/sub, rate limiting |
-| Audit | Append-only SQL | Phase 1 simplified; hash-chaining deferred to Phase 3+ |
+| Decision | Selection | Rationale | Alternatives Considered | Exit Strategy | Participants |
+|----------|-----------|-----------|------------------------|---------------|-------------|
+| Workflow Engine | **Inngest** (Buy) | AgentKit for MCP, step.waitForEvent for HITL, durable execution | Temporal (heavier ops), Bull+Redis (no durable state) | Standard event-driven; workflows are Inngest functions | Multi-model consensus (S0), ratified by human (S15) |
+| AI Reasoning | **LangGraph.js** (inside Inngest) | Runs as activity within Inngest workflow steps | LangChain (heavier), custom agent loop | Graph-based; portable to any JS agent framework | Multi-model consensus (S0), ratified by human (S15) |
+| Identity | **Supabase Auth Pro** ($25/mo) | OIDC SSO + SAML + MFA for enterprise. Free tier lacks SSO. | Auth0 (free OIDC but 7K MAU, no free SAML), Keycloak (free but self-hosted ops) | Standard OIDC/JWT; exit to Keycloak documented in Auth TSD §1.2 | Claude (S9), ratified by human (S15). SAML review: when first customer requests it |
+| Notifications | **Novu** (Buy) | Multi-channel, templates, quiet hours, saves 3 weeks | Knock (newer), custom build (3+ weeks) | Template-based; adapter interface enables swap | Multi-model consensus (S0), ratified by human (S15) |
+| Runtime | Node.js 24 LTS + TypeScript | Async I/O, strong typing, LangGraph.js compatibility | Deno (less ecosystem), Go (no LangGraph) | Standard Node.js; no vendor lock-in | Multi-model consensus (S0), ratified by human (S15) |
+| Database | **PostgreSQL 16** (DO Managed HA) | ACID, JSONB, full-text search. HA cluster for <30s failover. | CockroachDB (distributed but complex), PlanetScale (MySQL-based) | Standard SQL; Drizzle adapters are thin wrappers | Multi-model consensus (S0), ratified by human (S15) |
+| Cache / Redis Hosting | **Upstash** (serverless Redis 7) | Per-request pricing ($0-10/mo), DO region compat, REST API for edge | AWS ElastiCache ($15+/mo base), self-hosted Redis (ops burden) | Standard Redis protocol; swap URL + token | Claude (S10), ratified by human (S15) |
+| File Storage | **DigitalOcean Spaces** (S3-compat) | Integrated with DO App Platform, $5/mo flat, CDN included | AWS S3 (cross-cloud networking), Cloudflare R2 (zero egress), MinIO (self-hosted) | S3 API; swap endpoint + credentials | Claude (S6), ratified by human (S15) |
+| ORM | **Drizzle** | Type-safe SQL, zero runtime overhead, lightweight | Prisma (heavier Rust runtime, slower cold starts), Kysely (smaller ecosystem) | Standard SQL; adapters are thin wrappers over queries | Claude (S0), ratified by human (S15) |
+| LLM Provider (Primary) | **OpenAI** (GPT-4o) | Best reasoning quality, widest model range, well-documented API | Anthropic Claude, Google Gemini | Provider interface abstraction in `@aptivo/llm-gateway` | Claude (S1), ratified by human (S15) |
+| LLM Provider (Secondary) | **Anthropic** (Claude) | Fallback + cost optimization for structured tasks | Google Gemini, single-provider (simpler but no fallback) | Same provider interface as primary | Claude (S1), ratified by human (S15) |
+| Email Transport | **SMTP provider** (TBD at deployment) | Generic SMTP fallback for Novu. Vendor chosen at deploy time. | SendGrid (free 100/day), AWS SES ($0.10/1K), Postmark ($15/mo best reputation) | Standard SMTP; swap host + credentials | Claude (S13), deferred to deployment by human (S15) |
+| Audit | Append-only SQL | Phase 1 simplified; hash-chaining deferred to Phase 3+ | Event sourcing (complex), separate audit DB (ops overhead) | Standard SQL append-only pattern | Multi-model consensus (S0), ratified by human (S15) |
 
 **Build (unique differentiators)**:
 - MCP Integration Layer
 - HITL Gateway
 - LLM Gateway (BRD-mandated cost tracking)
+
+> **Decision Record: Supabase Free → Pro Upgrade**
+> - **Trigger**: FR-CORE-ID-001 requires enterprise SSO (OIDC/SAML) — free tier doesn't support OIDC providers
+> - **Options evaluated**:
+>   1. Supabase Pro ($25/mo) — adds OIDC providers, SAML, advanced MFA. Minimal migration from existing free tier.
+>   2. Keycloak self-hosted (free) — full OIDC/SAML, but requires container hosting, config management, security patching. Significant ops burden for a small team.
+>   3. Auth0 free tier — OIDC included up to 7K MAU, but no SAML on free tier, and pricing escalates past free.
+> - **Decision**: Supabase Pro — minimal migration (already using Supabase), OIDC + SAML in managed service, $25/mo acceptable for enterprise feature
+> - **Trade-off**: Vendor lock-in deepens (Pro features not portable). Exit strategy: Keycloak migration documented in Auth TSD §1.2.
+> - **SAML status**: Contract-only stub (`SamlNotConfigured`). Review when first customer requests SAML — if no demand by Phase 3 end, re-evaluate Pro justification.
+> - **Participants**: Claude (Sprint 9 planning), Gemini + Codex (Sprint 15 multi-model review), ratified by human partner (Sprint 15)
 
 ---
 
