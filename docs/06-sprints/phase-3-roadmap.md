@@ -2,10 +2,12 @@
 
 **Timeline**: 10 weeks (5 sprints x 2 weeks, Sprints 15-19)
 **Team**: 3 developers (1 Senior, 2 Web Devs)
-**Goal**: Production deployment, domain module delivery, advanced AI safety, buy integrations
+**Goal**: Production deployment, domain module delivery, advanced AI safety, buy integrations — **backend/API scope only**
 **Derived from**: [Phase 2 Delivery Review](./phase-2-delivery-review.md), [Modules Analysis](./phase-2-modules-analysis.md), Sprint 12-14 deferred items
 **Phase 2 baseline**: 172 SP delivered, 1,580 tests, all 8 Phase 2 epics complete, 0 open warnings
 **Multi-Model Review**: [PHASE_3_ROADMAP_MULTI_REVIEW.md](./PHASE_3_ROADMAP_MULTI_REVIEW.md)
+
+> **UI/UX descope decision (2026-04-20)**: All UI work — design system, domain screens, visual workflow builder canvas, consent withdrawal UI, MFA enrollment UX, operator console UX, analytics, accessibility, i18n — is **deferred to Phase 3.5** and tracked as a first-class roadmap item at [`phase-3.5-ui-roadmap.md`](./phase-3.5-ui-roadmap.md). Phase 3 ships APIs, workflows, ML safety pipelines, integrations, and production infrastructure; Phase 3.5 turns the API-complete platform into a usable product. This separation is intentional — do not re-collapse UI into Phase 3 sprint scope under schedule pressure.
 
 ---
 
@@ -13,32 +15,40 @@
 
 All items deferred from Phase 2 sprints, consolidated into Phase 3 scope:
 
-| Item | SP | Source | Epic |
-|------|-----|--------|------|
-| Production deployment (real HA, MFA, Redis) | 8 | S10/S12/S14 deployment gates | 1 |
-| Production E2E with real infrastructure | 3 | S14 delivery review | 1 |
-| ML injection classifier | 5 | S12 deferred | 2 |
-| LLM streaming content filter | 3 | S12/S13 deferred | 2 |
-| Active anomaly blocking | 2 | S14 preview | 2 |
-| Full visual workflow builder (drag-drop) | 8 | S14 FEAT-07 foundation → full | 3 |
-| WebSocket implementation | 5 | S14 websocket-lifecycle.md spec | 3 |
-| Case tracking CT-1 (Ticket CRUD) | 5 | MOD-01 build | 4 |
-| Case tracking CT-2 (SLA Tracking) | 3 | MOD-01 build | 4 |
-| Case tracking CT-3 (Escalation) | 3 | MOD-01 build | 4 |
-| Case tracking CT-4 (Reporting) | 3 | MOD-01 build | 4 |
-| Crypto live-trading workflow | 5 | S12/S13 deferred | 5 |
-| HR onboarding workflow | 4 | S12/S13 deferred | 5 |
-| MOD-02 interface contract validation | 3 | S14 deferred | 5 |
-| Stripe Billing integration (FA-1) | 3 | MOD-01 buy | 6 |
-| HubSpot CRM integration (CRM-1..4) | 5 | MOD-01 buy | 6 |
-| Asana PM integration (PM-1) | 2 | MOD-01 buy | 6 |
-| Toggl time tracking (PM-2) | 1 | MOD-01 buy | 6 |
-| Consent withdrawal UI | 3 | S14 preview | 7 |
-| Push notifications / FCM | 3 | Phase 2 Epic 5 deferred | 7 |
-| SMS channel | 2 | Phase 2 Epic 5 deferred | 7 |
-| FA-4 Budgeting (build) | 5 | MOD-01 build | 8 |
+| Item | SP | Source | Epic | Scope |
+|------|-----|--------|------|-------|
+| Production deployment (real HA, MFA, Redis) | 8 | S10/S12/S14 deployment gates | 1 | backend/infra |
+| Production E2E with real infrastructure | 3 | S14 delivery review | 1 | backend |
+| ML injection classifier | 5 | S12 deferred | 2 | backend |
+| LLM streaming content filter | 3 | S12/S13 deferred | 2 | backend |
+| Active anomaly blocking | 2 | S14 preview | 2 | backend |
+| ~~Full visual workflow builder (drag-drop)~~ | ~~8~~ | S14 FEAT-07 | 3 | **→ Phase 3.5 UI-E** |
+| Graph validation API (cycle/unreachable detection) | 3 | S14 FEAT-07 foundation | 3 | backend |
+| WebSocket server + protocol (spec in `websocket-lifecycle.md`) | 3 | S14 websocket-lifecycle.md spec | 3 | backend |
+| ~~WebSocket real-time UI surfaces~~ | ~~2~~ | — | 3 | **→ Phase 3.5 UI-F** |
+| Case tracking CT-1 API (Ticket CRUD) | 3 | MOD-01 build | 4 | backend |
+| ~~Case tracking CT-1 UI (Ticket screens)~~ | ~~2~~ | MOD-01 build | 4 | **→ Phase 3.5 UI-D** |
+| Case tracking CT-2 SLA tracking engine | 2 | MOD-01 build | 4 | backend |
+| ~~Case tracking CT-2 SLA dashboard UI~~ | ~~1~~ | MOD-01 build | 4 | **→ Phase 3.5 UI-D** |
+| Case tracking CT-3 (Escalation) | 3 | MOD-01 build | 4 | backend logic |
+| Case tracking CT-4 reporting queries | 2 | MOD-01 build | 4 | backend |
+| ~~Case tracking CT-4 reporting UI~~ | ~~1~~ | MOD-01 build | 4 | **→ Phase 3.5 UI-D** |
+| Crypto live-trading workflow | 5 | S12/S13 deferred | 5 | backend |
+| HR onboarding workflow | 4 | S12/S13 deferred | 5 | backend |
+| MOD-02 interface contract validation | 3 | S14 deferred | 5 | backend |
+| Stripe Billing integration (FA-1) | 3 | MOD-01 buy | 6 | backend |
+| HubSpot CRM integration (CRM-1..4) | 5 | MOD-01 buy | 6 | backend |
+| Asana PM integration (PM-1) | 2 | MOD-01 buy | 6 | backend |
+| Toggl time tracking (PM-2) | 1 | MOD-01 buy | 6 | backend |
+| ~~Consent withdrawal UI (React component)~~ | ~~3~~ | S14 preview | 7 | **→ Phase 3.5 UI-H** |
+| Consent withdrawal API hardening | 1 | S14 preview | 7 | backend |
+| Push notifications / FCM backend + delivery | 2 | Phase 2 Epic 5 deferred | 7 | backend |
+| ~~Push notifications UX (in-app preferences)~~ | ~~1~~ | Phase 2 Epic 5 | 7 | **→ Phase 3.5 UI-H** |
+| SMS channel backend | 2 | Phase 2 Epic 5 deferred | 7 | backend |
+| FA-4 Budgeting (build) | 5 | MOD-01 build | 8 | backend |
 
-**Total**: ~127 SP
+**Phase 3 total (backend-only)**: ~75 SP
+**Moved to Phase 3.5**: ~18 SP of UI items (see [phase-3.5-ui-roadmap.md](./phase-3.5-ui-roadmap.md) for the full 137-SP UI track including foundation work)
 
 ---
 
@@ -68,22 +78,25 @@ Source: S10/S12/S14 deployment gates, S14 delivery review release gates
 
 Source: S12 deferrals, S14 Phase 3 recommendations
 
-### Epic 3: Workflow Experience Expansion (13 SP)
+### Epic 3: Workflow Experience — Backend Only (6 SP)
 
-- Full visual workflow builder (drag-and-drop canvas, node graph editor)
-- Graph validation (cycle detection, unreachable step detection)
-- WebSocket real-time collaboration/status updates (from S14 spec)
+- Graph validation API (cycle detection, unreachable step detection) — 3 SP
+- WebSocket server implementation + protocol (per `websocket-lifecycle.md` spec) — 3 SP
 
-Source: FEAT-07 foundation → full implementation, websocket-lifecycle.md
+> **Descoped to Phase 3.5**: Full visual workflow builder canvas (drag-drop, node editor), WebSocket UI surfaces (live status, collaboration cursors). See Phase 3.5 UI-E (Visual Builder) and UI-F (Real-Time UI) — 21 SP combined in the UI roadmap.
 
-### Epic 4: Case Tracking Build (14 SP)
+Source: FEAT-07 backend foundation, websocket-lifecycle.md. Epic 3 backend unblocks Phase 3.5 UI-E and UI-F.
 
-- CT-1: Ticket CRUD (5 SP) — leverages workflow definition API
-- CT-2: SLA tracking (3 SP) — leverages burn-rate alerting infra
-- CT-3: Escalation (3 SP) — leverages HITL sequential chains
-- CT-4: Reporting (3 SP) — leverages metric service
+### Epic 4: Case Tracking — Backend Only (10 SP)
 
-Source: MOD-01 build recommendations. **Highest-value build track** — reuses existing platform infrastructure.
+- CT-1: Ticket CRUD **API** (3 SP) — leverages workflow definition API. UI descoped.
+- CT-2: SLA tracking **engine** (2 SP) — leverages burn-rate alerting infra. Dashboard descoped.
+- CT-3: Escalation logic (3 SP) — leverages HITL sequential chains. Pure backend.
+- CT-4: Reporting **queries** (2 SP) — leverages metric service. Report UI descoped.
+
+> **Descoped to Phase 3.5**: all ticket list/detail/edit screens, SLA dashboard UI, escalation viewer, reporting charts. See Phase 3.5 UI-D (Case Tracking UI, 12 SP).
+
+Source: MOD-01 build recommendations. **Highest-value build track** — reuses existing platform infrastructure. Phase 3 ships the API layer; Phase 3.5 makes it operable by humans.
 
 ### Epic 5: Domain Workflow Enablement (12 SP)
 
@@ -102,13 +115,15 @@ Source: S12/S13 deferrals, MOD-01 interface contracts
 
 Source: MOD-01 buy recommendations. Follows Epic 5 interface contracts.
 
-### Epic 7: Compliance & Communications (8 SP)
+### Epic 7: Compliance & Communications — Backend Only (5 SP)
 
-- Consent withdrawal UI (full React component) — 3 SP
-- Push notifications / FCM — 3 SP
-- SMS channel — 2 SP
+- Consent withdrawal API hardening (1 SP) — idempotency, audit, cascading data operations. **UI descoped.**
+- Push notifications / FCM backend + delivery adapter (2 SP) — Firebase integration, device registration API, retry policy. **Preference UX descoped.**
+- SMS channel backend (2 SP) — Twilio adapter, HITL-only route, rate-limit.
 
-Source: Phase 2 Epic 5 deferrals, FEAT-04 API foundation
+> **Descoped to Phase 3.5**: Consent withdrawal UI React component, notification preference center, privacy dashboard, communications opt-in/opt-out flows. See Phase 3.5 UI-H (Compliance & Comms UX, 5 SP).
+
+Source: Phase 2 Epic 5 deferrals, FEAT-04 API foundation.
 
 ### Epic 8: Platform Maturity (5 SP)
 
@@ -122,12 +137,15 @@ Source: MOD-01 build recommendation
 
 | Sprint | Weeks | SP | Epics | Theme |
 |--------|-------|-----|-------|-------|
-| 15 | 1-2 | 25 | Epic 1 + Epic 2 start | "Go live" — production deployment + ML safety |
-| 16 | 3-4 | 26 | Epic 2 finish + Epic 3 | "Build the builder" — visual workflow + WebSocket |
-| 17 | 5-6 | 25 | Epic 4 | "Track the work" — case tracking modules |
-| 18 | 7-8 | 26 | Epic 5 + Epic 6 start | "Domain delivery" — crypto/HR workflows + integrations |
-| 19 | 9-10 | 25 | Epic 6 finish + Epic 7 + Epic 8 | "Close Phase 3" — integrations + compliance + maturity |
-| **Total** | **10 weeks** | **~127 SP** | **All 8** | |
+| 15 ✅ | 1-2 | 26 | Epic 1 + Epic 2 start | "Go live" — production deployment + streaming content filter MVP (DELIVERED 2026-03-18) |
+| 16 | 3-4 | 15 | Epic 2 finish + Epic 3 backend | "Safety + protocol" — ML classifier + graph validation + WebSocket server |
+| 17 | 5-6 | 10 | Epic 4 | "Track the work (APIs)" — case tracking APIs + SLA engine + escalation logic + reporting queries |
+| 18 | 7-8 | 17 | Epic 5 + Epic 6 start | "Domain delivery" — crypto live trading + HR onboarding + MOD-02 contracts + first integrations |
+| 19 | 9-10 | 17 | Epic 6 finish + Epic 7 + Epic 8 | "Close Phase 3 backend" — remaining integrations + compliance APIs + FA-4 budgeting |
+| **Total (backend)** | **10 weeks** | **~85 SP** | **All 8 (API surfaces)** | |
+| Phase 3.5 follows | 12 weeks | **137 SP** | UI track | [phase-3.5-ui-roadmap.md](./phase-3.5-ui-roadmap.md) |
+
+> SP totals shifted from 127 → ~85 after UI descope. Sprint 15 delivered on original scope (before descope) so its 26 SP reflects actual Sprint 15 output including streaming filter MVP. Sprints 16-19 are lighter than originally planned; remaining capacity can be used for technical debt reduction, additional deferred items, or compressing Phase 3 to 4 sprints.
 
 ---
 
@@ -232,3 +250,17 @@ Epic 8 (Budgeting) ─────────→ independent (reuses existing b
 - FR-CRYPTO-SMT-* (smart money tracking — requires real MCP servers)
 - FR-CRYPTO-NS-* (narrative scouting — requires social data sources)
 - FR-HR-COMP-003/004/005 (BIR tax, retention, export — requires legal review)
+
+## 10. Phase 3.5 Hand-Off
+
+Phase 3 exit = API-complete platform. The deliverables Phase 3.5 inherits:
+
+- **OpenAPI v1.2.0+** covering all admin, domain, and case-tracking endpoints with admin schema additions (required arrays, Sunset headers) and the two endpoints currently pending (approval-sla, feature-flags)
+- **WebSocket spec + server** from Epic 3 (protocol + connection lifecycle per `websocket-lifecycle.md`)
+- **Event schemas** for real-time UI subscriptions
+- **Production infrastructure** (Epic 1) — OIDC/SSO, MFA, HA DB, Redis split, SMTP, feature flags
+- **ML safety classifiers** (Epic 2) — inform UX copy for blocked prompts/denied actions
+- **Domain APIs** for all personas: HR (4 personas), Crypto (3 personas), platform admin (3 personas), case tracking (new)
+- **Integration adapters** (Epic 6) — Stripe, HubSpot, Asana, Toggl — ready to surface in UI preference/settings screens
+
+Phase 3.5 scope is [phase-3.5-ui-roadmap.md](./phase-3.5-ui-roadmap.md). Designer engagement (F-1) should begin contracting during Sprint 17 so the designer is active by Sprint 20 (start of Phase 3.5). UX discovery (F-2) can start in parallel with Phase 3 Sprint 19 if the designer is onboarded early.
