@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { Result } from '@aptivo/types';
 import type { WorkflowStep } from '@aptivo/database';
+import { validateGraph, type GraphValidationError } from './graph-validation';
 
 // ---------------------------------------------------------------------------
 // validation schemas
@@ -43,6 +44,7 @@ export const UpdateWorkflowInput = z.object({
 
 export type WorkflowDefinitionError =
   | { readonly _tag: 'ValidationError'; readonly message: string }
+  | { readonly _tag: 'GraphInvalid'; readonly graphError: GraphValidationError }
   | { readonly _tag: 'NotFoundError'; readonly id: string }
   | { readonly _tag: 'PersistenceError'; readonly message: string; readonly cause: unknown };
 
@@ -96,6 +98,13 @@ export function createWorkflowDefinitionService(deps: WorkflowDefinitionServiceD
         return Result.err({ _tag: 'ValidationError', message: parsed.error.message });
       }
 
+      // structural graph validation runs *after* shape validation so the
+      // caller can trust steps are well-formed before topological checks
+      const graphResult = validateGraph(parsed.data.steps);
+      if (!graphResult.ok) {
+        return Result.err({ _tag: 'GraphInvalid', graphError: graphResult.error });
+      }
+
       try {
         const record = await deps.store.create({
           ...parsed.data,
@@ -131,6 +140,19 @@ export function createWorkflowDefinitionService(deps: WorkflowDefinitionServiceD
       // verify existence before update
       const existing = await deps.store.findById(id);
       if (!existing) return Result.err({ _tag: 'NotFoundError', id });
+
+      // graph validation policy: validate only when the resulting workflow
+      // will be in 'active' status. Drafts may legitimately be incomplete
+      // (the workflow-builder-service composes them step-by-step); only
+      // promotion to active must produce a sound graph.
+      const finalStatus = parsed.data.status ?? existing.status;
+      const finalSteps = parsed.data.steps ?? existing.steps;
+      if (finalStatus === 'active') {
+        const graphResult = validateGraph(finalSteps);
+        if (!graphResult.ok) {
+          return Result.err({ _tag: 'GraphInvalid', graphError: graphResult.error });
+        }
+      }
 
       try {
         // auto-increment version on update (server-controlled)

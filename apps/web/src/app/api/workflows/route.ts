@@ -32,13 +32,44 @@ async function handlePost(request: NextRequest, body: unknown) {
         { status: 400 },
       );
     }
+    if (result.error._tag === 'GraphInvalid') {
+      const typeUri = `https://aptivo.dev/errors/workflow-${graphTagToSlug(result.error.graphError._tag)}`;
+      return NextResponse.json(
+        {
+          type: typeUri,
+          title: 'Workflow Graph Invalid',
+          status: 400,
+          // nested graphError mirrors the validate-endpoint shape so clients
+          // can share a single schema across linter + gateway responses
+          graphError: { ...result.error.graphError, type: typeUri },
+        },
+        { status: 400, headers: { 'content-type': 'application/problem+json' } },
+      );
+    }
     return NextResponse.json(
-      { type: 'https://aptivo.dev/errors/internal', title: 'Internal Error', status: 500, detail: result.error.message },
+      { type: 'https://aptivo.dev/errors/internal', title: 'Internal Error', status: 500, detail: errorDetail(result.error) },
       { status: 500 },
     );
   }
 
   return NextResponse.json({ data: result.value }, { status: 201 });
+}
+
+// extracts a human-readable detail string from any WorkflowDefinitionError
+// variant — some have `message`, others only `_tag`
+function errorDetail(err: { readonly _tag: string; readonly message?: string }): string {
+  return err.message ?? err._tag;
+}
+
+function graphTagToSlug(tag: string): string {
+  switch (tag) {
+    case 'NoEntryStep': return 'no-entry-step';
+    case 'DuplicateStepId': return 'duplicate-step-id';
+    case 'DanglingReference': return 'dangling-reference';
+    case 'CycleDetected': return 'cycle';
+    case 'UnreachableSteps': return 'unreachable-steps';
+    default: return 'invalid';
+  }
 }
 
 export const POST = withBodyLimits(handlePost);
@@ -56,7 +87,7 @@ export async function GET(request: Request) {
 
   if (!result.ok) {
     return NextResponse.json(
-      { type: 'https://aptivo.dev/errors/internal', title: 'Internal Error', status: 500, detail: result.error.message },
+      { type: 'https://aptivo.dev/errors/internal', title: 'Internal Error', status: 500, detail: errorDetail(result.error) },
       { status: 500 },
     );
   }

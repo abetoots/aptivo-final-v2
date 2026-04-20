@@ -766,7 +766,7 @@ describe('workflow CRUD + builder', () => {
   });
 
   it('create -> add steps -> activate -> archive lifecycle', async () => {
-    // create workflow
+    // create workflow with a single, valid step (no nextSteps needed yet)
     const createResult = await defService.create({
       name: 'e2e-wf', domain: 'hr',
       steps: [{ id: 'step-1', type: 'action', name: 'init', config: {} }],
@@ -776,7 +776,7 @@ describe('workflow CRUD + builder', () => {
     const wfId = createResult.value.id;
     expect(createResult.value.status).toBe('draft');
 
-    // add a step via builder
+    // add a step via builder (draft edit — incomplete graph intermediately OK)
     const addResult = await builderService.addStep(wfId, {
       id: 'step-2', type: 'notification', name: 'notify', config: {},
     });
@@ -784,7 +784,18 @@ describe('workflow CRUD + builder', () => {
     if (!addResult.ok) return;
     expect(addResult.value.steps).toHaveLength(2);
 
-    // activate
+    // wire step-1 → step-2 before activating so the graph is reachable.
+    // WFE3-01 graph validation runs on draft→active transition; an unreachable
+    // step would otherwise reject activation.
+    const wireResult = await defService.update(wfId, {
+      steps: [
+        { id: 'step-1', type: 'action', name: 'init', config: {}, nextSteps: ['step-2'] },
+        { id: 'step-2', type: 'notification', name: 'notify', config: {} },
+      ],
+    });
+    expect(wireResult.ok).toBe(true);
+
+    // activate — WFE3-01 graph validation runs on draft→active transition
     const activateResult = await builderService.activate(wfId);
     expect(activateResult.ok).toBe(true);
     if (!activateResult.ok) return;

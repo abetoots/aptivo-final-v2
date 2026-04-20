@@ -1,0 +1,257 @@
+openapi: 3.0.3
+info:
+  title: Aptivo API
+  version: 1.2.0
+  description: |
+    Aptivo platform API. Bootstrapped in Sprint 16 as the canonical contract
+    for Phase 3.5 UI consumption. Only endpoints added or touched in Sprint 16+
+    are currently documented here; pre-S16 endpoints are still to be captured.
+
+    Per cross-sprint DoD (Sprint 16+), every PR that adds or modifies an API
+    route must update this file in the same commit.
+servers:
+  - url: https://aptivo.dev
+    description: production
+  - url: http://localhost:3000
+    description: local dev
+
+paths:
+  /api/workflows:
+    post:
+      summary: Create a workflow definition (draft)
+      description: |
+        WFE3-01 (Sprint 16) added graph validation: cyclic, dangling, duplicate-id,
+        no-entry-step, and unreachable-step bodies are rejected with 400. Create always
+        validates the initial graph, regardless of status.
+      tags: [workflows]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, domain, steps]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 200 }
+                domain: { type: string, minLength: 1, maxLength: 50 }
+                description: { type: string, maxLength: 1000 }
+                steps:
+                  type: array
+                  minItems: 1
+                  items:
+                    $ref: '#/components/schemas/WorkflowStep'
+      responses:
+        '201':
+          description: Workflow created
+        '400':
+          description: Graph validation or shape validation failed
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/WorkflowGraphInvalidResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/workflows/{id}:
+    put:
+      summary: Update a workflow definition
+      description: |
+        WFE3-01 policy (Sprint 16): graph validation runs only when the resulting
+        workflow will be `status: 'active'`. Draft updates may intermediate be
+        incomplete (builder pattern). Transitioning to active validates the final
+        graph (merged existing + payload) and rejects with 400 on any graph error.
+      tags: [workflows]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Workflow updated
+        '400':
+          description: Graph validation failed during activation
+          content:
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/WorkflowGraphInvalidResponse'
+        '404':
+          description: Workflow not found
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /api/workflows/validate:
+    post:
+      summary: Validate a draft workflow body (shape + graph) without persisting
+      description: |
+        Accepts a draft workflow body and returns a structured validation
+        report. This endpoint is a linter, not a gateway — invalid drafts
+        return HTTP 200 with `valid: false` so clients can render inline
+        feedback without treating validation failure as a request failure.
+
+        Added in Sprint 16 (WFE3-01). Requires `platform/workflow.view`
+        (read-only permission) — this is a linter, not a persistence op.
+      tags: [workflows]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [steps]
+              properties:
+                steps:
+                  type: array
+                  items:
+                    $ref: '#/components/schemas/WorkflowStep'
+      responses:
+        '200':
+          description: Validation report (valid or invalid — HTTP status is 200 either way)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowValidationReport'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    WorkflowStep:
+      type: object
+      required: [id, type, name, config]
+      properties:
+        id:
+          type: string
+          minLength: 1
+        type:
+          type: string
+          enum: [action, decision, hitl, notification, wait]
+        name:
+          type: string
+          minLength: 1
+        config:
+          type: object
+          additionalProperties: true
+        nextSteps:
+          type: array
+          items:
+            type: string
+
+    WorkflowValidationReport:
+      type: object
+      required: [valid, errors]
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            oneOf:
+              - $ref: '#/components/schemas/GraphValidationError'
+              - $ref: '#/components/schemas/ShapeInvalidError'
+
+    GraphValidationError:
+      oneOf:
+        - type: object
+          required: [_tag, type]
+          properties:
+            _tag: { type: string, enum: [NoEntryStep] }
+            type: { type: string }
+        - type: object
+          required: [_tag, type, stepId]
+          properties:
+            _tag: { type: string, enum: [DuplicateStepId] }
+            type: { type: string }
+            stepId: { type: string }
+        - type: object
+          required: [_tag, type, stepId, missingRef]
+          properties:
+            _tag: { type: string, enum: [DanglingReference] }
+            type: { type: string }
+            stepId: { type: string }
+            missingRef: { type: string }
+        - type: object
+          required: [_tag, type, cycle]
+          properties:
+            _tag: { type: string, enum: [CycleDetected] }
+            type: { type: string }
+            cycle:
+              type: array
+              items: { type: string }
+        - type: object
+          required: [_tag, type, stepIds]
+          properties:
+            _tag: { type: string, enum: [UnreachableSteps] }
+            type: { type: string }
+            stepIds:
+              type: array
+              items: { type: string }
+
+    WorkflowGraphInvalidResponse:
+      description: |
+        RFC 7807 Problem Detail emitted by `POST /api/workflows` and
+        `PUT /api/workflows/{id}` when the request body would persist (or
+        activate) a graph-invalid workflow. Nested `graphError` carries the
+        same shape as the linter endpoint's per-error entries — consumers can
+        share a single schema across linter + gateway responses.
+      type: object
+      required: [type, title, status, graphError]
+      properties:
+        type: { type: string, format: uri }
+        title: { type: string }
+        status: { type: integer, enum: [400] }
+        graphError:
+          $ref: '#/components/schemas/GraphValidationError'
+
+    ShapeInvalidError:
+      type: object
+      required: [_tag, type, detail]
+      properties:
+        _tag: { type: string, enum: [ShapeInvalid] }
+        type: { type: string }
+        detail: { type: string }
+
+    ProblemDetail:
+      description: RFC 7807 Problem Details response
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          format: uri
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid bearer token
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }
+    Forbidden:
+      description: Caller lacks required permission
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetail' }

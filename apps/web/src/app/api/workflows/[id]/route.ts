@@ -27,7 +27,7 @@ export async function GET(request: Request, context: RouteParams) {
       );
     }
     return NextResponse.json(
-      { type: 'https://aptivo.dev/errors/internal', title: 'Internal Error', status: 500, detail: result.error.message },
+      { type: 'https://aptivo.dev/errors/internal', title: 'Internal Error', status: 500, detail: errorDetail(result.error) },
       { status: 500 },
     );
   }
@@ -58,8 +58,20 @@ async function handlePut(request: NextRequest, body: unknown, context?: unknown)
         { status: 400 },
       );
     }
+    if (result.error._tag === 'GraphInvalid') {
+      const typeUri = `https://aptivo.dev/errors/workflow-${graphTagToSlug(result.error.graphError._tag)}`;
+      return NextResponse.json(
+        {
+          type: typeUri,
+          title: 'Workflow Graph Invalid',
+          status: 400,
+          graphError: { ...result.error.graphError, type: typeUri },
+        },
+        { status: 400, headers: { 'content-type': 'application/problem+json' } },
+      );
+    }
     return NextResponse.json(
-      { type: 'https://aptivo.dev/errors/internal', title: 'Internal Error', status: 500, detail: result.error.message },
+      { type: 'https://aptivo.dev/errors/internal', title: 'Internal Error', status: 500, detail: errorDetail(result.error) },
       { status: 500 },
     );
   }
@@ -68,6 +80,23 @@ async function handlePut(request: NextRequest, body: unknown, context?: unknown)
 }
 
 export const PUT = withBodyLimits(handlePut);
+
+function graphTagToSlug(tag: string): string {
+  switch (tag) {
+    case 'NoEntryStep': return 'no-entry-step';
+    case 'DuplicateStepId': return 'duplicate-step-id';
+    case 'DanglingReference': return 'dangling-reference';
+    case 'CycleDetected': return 'cycle';
+    case 'UnreachableSteps': return 'unreachable-steps';
+    default: return 'invalid';
+  }
+}
+
+// extracts a human-readable detail string from any WorkflowDefinitionError
+// variant — some have `message`, others only `_tag`
+function errorDetail(err: { readonly _tag: string; readonly message?: string }): string {
+  return err.message ?? err._tag;
+}
 
 // DELETE — remove by id
 export async function DELETE(request: Request, context: RouteParams) {
@@ -86,7 +115,7 @@ export async function DELETE(request: Request, context: RouteParams) {
       );
     }
     return NextResponse.json(
-      { type: 'https://aptivo.dev/errors/internal', title: 'Internal Error', status: 500, detail: result.error.message },
+      { type: 'https://aptivo.dev/errors/internal', title: 'Internal Error', status: 500, detail: errorDetail(result.error) },
       { status: 500 },
     );
   }
