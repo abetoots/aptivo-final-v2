@@ -28,7 +28,9 @@ parent: ../03-architecture/platform-core-add.md
 
 The platform has both synchronous REST endpoints AND asynchronous event-driven interfaces (Inngest workflows, webhooks, NATS messaging).
 
-> **v1.2.0 Update (Phase 1 Complete)**: The OpenAPI 3.1 spec (`openapi/aptivo-core-v1.yaml`) is drafted and covers all platform-core endpoints including Sprint 7 admin dashboard routes. Domain-specific API specs (crypto, HR) are Phase 2 scope. The 5 admin endpoints (`/api/admin/*`) are now specified with full request/response schemas.
+> **v1.2.0 Update (Phase 1 Complete)**: The OpenAPI 3.1 spec (`openapi/aptivo-core-v1.yaml`) is drafted and covers platform-core endpoints including Sprint 7 admin dashboard routes. Domain-specific API specs (crypto, HR) are Phase 2 scope.
+>
+> **v1.2.0 coverage of admin endpoints**: 5 of 7 documented — `overview`, `audit`, `hitl`, `llm-usage`, `llm-usage/budget`. Two routes added in code are pending OpenAPI schema additions: `/api/admin/approval-sla` (OPS-01) and `/api/admin/feature-flags` (PR-07). See ADD §15.2 for the canonical admin endpoint table; OpenAPI update is queued as a pre-Phase-2 mechanical task.
 
 ---
 
@@ -228,7 +230,7 @@ interface PaginatedResponse<T> {
 
 | # | Topic | Decision | Rationale |
 |---|-------|----------|-----------|
-| 9 | **Health Check** | `/api/health` (liveness) + `/api/ready` (readiness) | Standard for containerized deployments |
+| 9 | **Health Check** | `/health/live` (liveness) + `/health/ready` (readiness) | Standard for containerized deployments. **Paths intentionally unversioned** — health probes are an explicit exception to the `/api/v1/` mandate (ADD §13.8). Earlier drafts used `/api/health` and `/api/ready`; OpenAPI v1.2.0 (SSOT) ships `/health/live` and `/health/ready`. |
 | 10 | **Rate Limit Headers** | `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset` | ADD §5.4 rate limiting; enterprise-ready |
 | 11 | **Idempotency Header** | Required for critical POSTs (HITL, trades, money) | ADD §13 idempotency strategy |
 | 12 | **Domain Role Management** | `POST/GET/PUT/DELETE /api/v1/domains/{domain}/roles` | FRD domain role requirements |
@@ -238,7 +240,7 @@ interface PaginatedResponse<T> {
 
 **Health Check Schemas**:
 ```typescript
-// GET /api/health (liveness)
+// GET /health/live (liveness)
 interface HealthResponse {
   status: "ok";
   version: string;
@@ -246,7 +248,7 @@ interface HealthResponse {
   uptime: number;
 }
 
-// GET /api/ready (readiness)
+// GET /health/ready (readiness)
 interface ReadinessResponse {
   status: "ok" | "degraded" | "down";
   checks: Array<{
@@ -297,7 +299,7 @@ OpenAPI 3.1:
 ├── File Storage endpoints (/api/v1/files/*)
 ├── Webhook Configuration CRUD (/api/v1/webhooks/*)
 ├── Domain Role Management (/api/v1/domains/{domain}/roles/*)
-├── Health Check endpoints (/api/health, /api/ready)
+├── Health Check endpoints (/health/live, /health/ready)
 └── Identity endpoints (/api/v1/auth/*, /api/v1/users/*)
 
 AsyncAPI 3.0:
@@ -345,7 +347,7 @@ AsyncAPI 3.0:
 
 ### Medium Priority (All Resolved)
 
-- [x] **Health Check**: `/api/health` (liveness) + `/api/ready` (readiness)
+- [x] **Health Check**: `/health/live` (liveness) + `/health/ready` (readiness)
 - [x] **Rate Limits**: `X-RateLimit-*` headers on rate-limited endpoints
 - [x] **Idempotency**: Required for critical POSTs only (HITL, trades, money movement)
 

@@ -6,10 +6,22 @@ documents:
   required:
     - role: brd
       path: docs/01-strategy/platform-core-brd.md
+    - role: brd
+      path: docs/01-strategy/crypto-domain-addendum.md
+    - role: brd
+      path: docs/01-strategy/hr-domain-addendum.md
     - role: frd
       path: docs/02-requirements/platform-core-frd.md
+    - role: frd
+      path: docs/02-requirements/crypto-domain-frd.md
+    - role: frd
+      path: docs/02-requirements/hr-domain-frd.md
     - role: add
       path: docs/03-architecture/platform-core-add.md
+    - role: add
+      path: docs/03-architecture/crypto-domain-add.md
+    - role: add
+      path: docs/03-architecture/hr-domain-add.md
   optional:
     - role: runbook
       path: docs/06-operations/01-runbook.md
@@ -22,6 +34,7 @@ documents:
 
 signals:
   declared:
+    - acceptance-criteria
     - ai-provider
     - alerting
     - api-keys
@@ -57,11 +70,13 @@ signals:
     - file-upload
     - gdpr
     - human-in-loop
+    - iac
     - inbound-events
     - integration
     - jwt
     - kubernetes
     - limits
+    - load-balancing
     - logging
     - long-running
     - message-queue
@@ -72,9 +87,11 @@ signals:
     - oauth
     - observability
     - orchestration
+    - payments
     - performance
     - pii
     - privacy
+    - quotas
     - rate-limiting
     - rbac
     - requirements-tracing
@@ -82,14 +99,19 @@ signals:
     - resilience-triad
     - rest-api
     - retry-policy
+    - saga
     - scalability
+    - schema-evolution
     - secrets
     - security
     - sla
     - sso
     - testing
     - third-party
+    - uptime
     - user-data
+    - user-input
     - validation
     - webhooks
+    - websocket
     - workflow-approval

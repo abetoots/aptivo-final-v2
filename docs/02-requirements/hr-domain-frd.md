@@ -344,8 +344,12 @@ This domain requires specific MCP Servers registered with the Core MCP Layer.
 
 | Metric | Target |
 |--------|--------|
-| System uptime | 99.9% |
-| Maintenance window | Sundays 02:00-06:00 PHT |
+| System uptime | **99% monthly, excluding scheduled maintenance** (updated 2026-04-20) |
+| Maintenance window | Sundays 02:00-06:00 PHT (excluded from uptime calculation) |
+| RTO (Recovery Time Objective) | < 4 hours |
+| RPO (Recovery Point Objective) | < 24 hours |
+
+> **2026-04-20 reconciliation**: The prior 99.9% target (~43 min/mo downtime) was not supportable by Phase 1 architecture (single-region, single-SPOF PostgreSQL, manual DR with 4h RTO). The reconciled 99% target (~7.3 h/mo budget) aligns with BRD platform §5.1 and the deployment architecture in Platform ADD §10.4.3. The 99.9% goal moves to Phase 2+ when HA PostgreSQL tier, HA Redis, and cross-region replica are provisioned — see Phase 2 roadmap.
 
 ---
 

@@ -31,7 +31,7 @@ The HR domain owns all recruitment, interview scheduling, and contract managemen
 | Database tables | `candidates`, `applications`, `interviews`, `interview_feedback`, `consent_records`, `positions`, `contracts` |
 | Store adapters | `CandidateStore`, `ApplicationStore`, `InterviewStore`, `ContractStore`, `PositionStore` |
 | Workflows | `hr-candidate-flow`, `hr-interview-scheduling`, `hr-contract-approval` |
-| RBAC | `recruiter`, `hiring-manager`, `interviewer`, `client-user` roles; 18 HR permissions |
+| RBAC | `recruiter`, `recruiting-coordinator`, `hiring-manager`, `interviewer`, `client-user` roles; 20 HR permissions |
 | Notification templates | `hr-interview-scheduled`, `hr-offer-approval`, `hr-consent-request`, `hr-new-application` |
 | Inngest events | `hr/application.received`, `hr/interview.scheduling.requested`, `hr/contract.approval.requested` + 6 more |
 
@@ -412,6 +412,19 @@ hr/contract.approval.requested
     [emit-contract-approved] ---> SIGNED
 ```
 
+### 4.4 Performance SLO Architecture (2026-04-20)
+
+Supports the four Phase 1 performance targets in HR FRD §9.1. Each SLO has a documented latency budget and measurement point.
+
+| FRD target | Architecture support | Measurement point | Notes |
+|-----------|---------------------|-------------------|-------|
+| Application acknowledgment <5 min | Inngest `hr/application.received` → `notify-recruiter` step (fire-and-forget Novu). The acknowledgment email to the candidate is sent via `consent-check` step earlier. | `notification_deliveries.sent_at - applications.created_at` P95 | Novu Cloud P99 delivery latency <1 min; Inngest step latency <30s. Well inside 5-min budget. |
+| Resume parsing <30s | LLM Gateway GPT-4o call (step 1 of §4.1). Gateway-level timeout is 30s (platform ADD §7.4); workflow step timeout set to **25s** to leave room for the store write. | `parse-resume` step duration in workflow trace | Falls back to `gpt-4o-mini` if primary exceeds 20s — see Platform ADD §7.1.1. |
+| Dashboard load <2s | Server-rendered Next.js route with parallel aggregation queries. No N+1 queries permitted. **Dashboard query budget**: total <500ms per `pg_stat_statements`. Client hydration <1.5s over p95 network. | `getServerSideProps` completion time + client TTI | Admin dashboard (§15) reuses this budget. |
+| Search <1s for 10,000 candidates | PostgreSQL GIN index on `candidates.search_vector` (tsvector over `full_name`, `email`, `skills[]`). Query plan verified against seed dataset of 10K rows. | SQL query duration in `pg_stat_statements` P95 | Phase 2: add Meilisearch or Typesense if dataset exceeds 100K rows. |
+
+**Observability**: SLO measurement points are documented but not yet wired to a centralized metrics pipeline. Current Phase 1.5 state: structured logs via the `safe-logger.ts` stub (PII-sanitized) — Pino + Sentry installation is tracked as **CR-2-FOLLOWUP** (see Platform ADD §14.10). Once Pino/Sentry are wired, the four HR SLOs will be tracked via structured logging + Sentry performance and breach-rate metrics will be added to `MetricService` (Platform ADD §16.1) as **OBS-02**. Until then these targets are measurable ad-hoc via DB `pg_stat_statements` and per-step Inngest traces but do not fire automated alerts.
+
 ---
 
 ## 5. RBAC Model
@@ -421,25 +434,30 @@ hr/contract.approval.requested
 | Role | Scope | Description |
 |------|-------|-------------|
 | `recruiter` | Full recruitment | Create/edit candidates, schedule interviews, draft contracts |
+| `recruiting-coordinator` | Scheduling + view | View candidates, schedule interviews. **No** contract/offer authority. Separates scheduling from hiring decisions per HR FRD §6.1. |
 | `hiring-manager` | Approval authority | View candidates, approve offers + contracts |
 | `interviewer` | Interview participation | View assigned candidates, submit feedback |
 | `client-user` | External visibility | View assigned candidates + reports (read-only) |
 
 ### 5.2 Permissions Matrix
 
-| Permission | recruiter | hiring-manager | interviewer | client-user |
-|------------|-----------|----------------|-------------|-------------|
-| `hr/candidate.create` | x | | | |
-| `hr/candidate.view` | x | x | x | x |
-| `hr/candidate.update` | x | | | |
-| `hr/application.view` | x | x | | x |
-| `hr/application.update` | x | | | |
-| `hr/interview.create` | x | | | |
-| `hr/interview.view` | x | x | x | |
-| `hr/offer.create` | x | | | |
-| `hr/offer.approve` | | x | | |
-| `hr/offer.view` | | x | | |
-| `hr/feedback.submit` | | | x | |
+| Permission | recruiter | recruiting-coordinator | hiring-manager | interviewer | client-user |
+|------------|-----------|------------------------|----------------|-------------|-------------|
+| `hr/candidate.create` | x | | | | |
+| `hr/candidate.view` | x | x | x | x | x |
+| `hr/candidate.update` | x | | | | |
+| `hr/application.view` | x | x | x | | x |
+| `hr/application.update` | x | | | | |
+| `hr/interview.create` | x | x | | | |
+| `hr/interview.view` | x | x | x | x | |
+| `hr/interview.update` | x | x | | | |
+| `hr/offer.create` | x | | | | |
+| `hr/offer.approve` | | | x | | |
+| `hr/offer.view` | | | x | | |
+| `hr/contract.view` | | | x | | |
+| `hr/feedback.submit` | | | | x | |
+
+> **Recruiting Coordinator (added 2026-04-20)**: Implements HR FRD §6.1's separation-of-duty requirement — coordinators can schedule interviews and view candidates but cannot create or approve offers/contracts. Seed role slug: `recruiting-coordinator`. Tracked under PR-07 follow-up for seed-data migration.
 
 **Enforcement**: `checkPermission(permission)` middleware from platform-core RBAC — see [ADD §14.10](platform-core-add.md).
 

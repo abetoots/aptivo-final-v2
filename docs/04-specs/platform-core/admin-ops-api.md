@@ -38,11 +38,11 @@ The Admin Operations API provides 5 read-only endpoints for platform monitoring.
 
 ## 2. RBAC Enforcement
 
-All 5 endpoints use `checkPermission('platform/admin.view')` middleware:
+All 7 endpoints (5 documented here + `approval-sla`, `feature-flags` pending OpenAPI addition) use `checkPermissionWithBlacklist('platform/admin.view')` middleware:
 
 ```typescript
 export async function GET(request: Request) {
-  const denied = await checkPermission('platform/admin.view')(request);
+  const denied = await checkPermissionWithBlacklist('platform/admin.view')(request);
   if (denied) return denied;
   // ... handler logic
 }

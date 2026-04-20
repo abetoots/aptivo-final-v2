@@ -231,7 +231,7 @@ railway variables set FEATURE_USER_DASHBOARD_V2=false && railway up
 | **Redis** | $20/mo | Upstash dashboard alert at $15 | Serverless; scales with usage | Platform — shared infrastructure |
 | **Volumes** | $15/mo | Railway usage alert at $12 | Storage growth alert; review file retention policies | Platform — shared infrastructure |
 | **ClamAV** | $10/mo | N/A (fixed cost) | Fixed container | Platform — security |
-| **LLM API** | $500/mo (all domains) | Application-level at 90% (ADD §7.2) | Hard cap per domain (daily $50, monthly $500) | Per-domain attribution (ADD §7.2) |
+| **LLM API** | $1,000/mo per domain (P1.5 as-built) | Application-level at 90% (ADD §7.2); Railway billing alert at $1,500/mo per domain | Hard cap per domain (daily $50, monthly $1,000 — see ADD §7.2.2) | Per-domain attribution (ADD §7.2) |
 | **Novu** | Free tier (10K events/mo) | Application-level at 8K events | No fallback provider (accepted risk — ADD §10.4.4); alert ops; manual intervention | Platform — notifications |
 | **Inngest** | Free tier (Phase 1) | Monitor function run count monthly | Review pricing tiers; alert if approaching limit | Platform — workflows |
 | **Supabase Auth** | Free tier (50K MAU) | Monitor MAU monthly | N/A for Phase 1 (< 100 users) | Platform — identity |
@@ -973,7 +973,7 @@ Alert Received
 3. If legitimate load spike: increase connection pool size in database configuration (Railway console) — note: managed database has a max based on plan tier
 4. After recovery: verify connection count returns to normal; check application logs for the root cause (missing connection release, slow query, etc.)
 
-**Prevention:** Phase 1 pool size is 20 connections (managed database default). Monitor `db_connection_pool_usage` metric. Phase 2+: connection pool per schema/domain to prevent cross-domain exhaustion.
+**Prevention:** Phase 1 pool size is **5 per container** (canonical per ADD §10.4.5). At max scale (3 API + 1 Worker), total is 20 connections ≤ 22 available on db-s-1vcpu-1gb. Monitor `db_connection_pool_usage` metric. Phase 2+: add PgBouncer to multiplex if per-container pools need to grow.
 
 **Escalation:** If not resolved within 15 minutes → contact Railway support. Engineering Manager for SEV-1 incident management.
 
@@ -1021,7 +1021,7 @@ During multi-component incidents, recover in this order:
 
 **Triage**:
 1. Check provider status pages: [status.openai.com](https://status.openai.com), [status.anthropic.com](https://status.anthropic.com)
-2. Check budget status: `GET /api/v1/admin/llm/budget` or query `SELECT SUM(cost_usd) FROM llm_usage_logs WHERE timestamp >= date_trunc('day', NOW())`
+2. Check budget status: `GET /api/admin/llm-usage/budget` or query `SELECT SUM(cost_usd) FROM llm_usage_logs WHERE timestamp >= date_trunc('day', NOW())`
 3. Check if fallback provider is active
 
 **Resolution — Provider Down**:
@@ -1848,7 +1848,7 @@ psql "$DATABASE_URL_HA" -c "SELECT count(*) FROM pg_stat_activity WHERE datname 
 
 **Verification:**
 - [ ] Total connection count stays within expected limits under load
-- [ ] `pool-config.ts` domain defaults reviewed: crypto=10, hr=10, platform=20
+- [ ] `pool-config.ts` per-container pool size ≤ 5 (canonical per ADD §10.4.5; prior crypto=10, hr=10, platform=20 values exceed the 22-connection budget at max scale)
 - [ ] Connection exhaustion produces error, not hang
 
 **Evidence artifact**: `evidence/pr-04-pool-config.md` — connection count output, code review confirmation

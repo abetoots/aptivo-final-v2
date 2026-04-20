@@ -210,10 +210,10 @@ Per platform-core-frd.md Section 9 (Identity Service):
 |------|-------------|-----------------|
 | `system_admin` | Full system access | All permissions |
 | `recruiter` | Primary candidate management | Create/edit candidates, schedule interviews, generate contracts |
-| `recruiting_coordinator` | Support operations | View candidates, schedule interviews |
+| `recruiting-coordinator` | Support operations | View candidates, schedule interviews |
 | `interviewer` | Interview feedback | View assigned candidates, submit feedback |
-| `hiring_manager` | Approval authority | Approve offers, approve contracts |
-| `client_user` | External client access | View assigned candidates, view reports |
+| `hiring-manager` | Approval authority | Approve offers, approve contracts |
+| `client-user` | External client access | View assigned candidates, view reports |
 
 ### 4.2 Permission Mapping
 
@@ -235,7 +235,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     'workflow:trigger',
   ],
 
-  recruiting_coordinator: [
+  'recruiting-coordinator': [
     'candidate:read',
     'interview:create',
     'interview:read',
@@ -248,7 +248,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     'interview:feedback:submit',
   ],
 
-  hiring_manager: [
+  'hiring-manager': [
     'candidate:read',
     'interview:read',
     'contract:read',
@@ -256,7 +256,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     'offer:approve',
   ],
 
-  client_user: [
+  'client-user': [
     'candidate:read:client',
     'report:read:client',
   ],

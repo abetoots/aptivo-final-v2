@@ -49,7 +49,7 @@ This document defines **HOW** the Aptivo Agentic Core is architected to meet the
 | LLM Provider (Primary) | **OpenAI** (GPT-4o) | Best reasoning quality, widest model range, well-documented API | Anthropic Claude, Google Gemini | Provider interface abstraction in `@aptivo/llm-gateway` | Claude (S1), ratified by human (S15) |
 | LLM Provider (Secondary) | **Anthropic** (Claude) | Fallback + cost optimization for structured tasks | Google Gemini, single-provider (simpler but no fallback) | Same provider interface as primary | Claude (S1), ratified by human (S15) |
 | Email Transport | **SMTP provider** (TBD at deployment) | Generic SMTP fallback for Novu. Vendor chosen at deploy time. | SendGrid (free 100/day), AWS SES ($0.10/1K), Postmark ($15/mo best reputation) | Standard SMTP; swap host + credentials | Claude (S13), deferred to deployment by human (S15) |
-| Audit | Append-only SQL | Phase 1 simplified; hash-chaining deferred to Phase 3+ | Event sourcing (complex), separate audit DB (ops overhead) | Standard SQL append-only pattern | Multi-model consensus (S0), ratified by human (S15) |
+| Audit | Append-only SQL + hash-chain (P1.5) | Phase 1.5 delivered hash-chaining ahead of plan — see §9.3 and TSD `platform-core/audit.md` | Event sourcing (complex), separate audit DB (ops overhead) | Standard SQL append-only with per-scope chain heads | Multi-model consensus (S0); hash-chain brought forward in P1.5 |
 
 **Build (unique differentiators)**:
 - MCP Integration Layer
@@ -1873,7 +1873,7 @@ Supabase handles authentication; RBAC is managed in application layer:
 ```typescript
 // roles stored in app database, linked to supabase user id
 type CoreRole = 'admin' | 'user' | 'viewer';
-type HRRole = CoreRole | 'recruiter' | 'interviewer' | 'hiring_manager' | 'client';
+type HRRole = CoreRole | 'recruiter' | 'recruiting-coordinator' | 'interviewer' | 'hiring-manager' | 'client-user';
 type CryptoRole = CoreRole | 'trader';
 
 // permission check (app layer)
@@ -1975,7 +1975,8 @@ Full WebAuthn support deferred to Phase 2. Supabase Auth roadmap includes passke
 
 | Secret | Env Variable | Rotation Cadence | Procedure |
 |---|---|---|---|
-| Supabase JWT Secret | `SUPABASE_JWT_SECRET` | 90 days | Supabase Dashboard → Settings → JWT |
+| Supabase JWT Signing Keys | _Managed by Supabase_ (JWKS endpoint) | 90 days | Supabase Dashboard → Settings → JWT. **No local secret** — the API server verifies tokens via `supabase.auth.getUser()` which uses the Supabase JWKS endpoint. |
+| Supabase Service Role Key | `SUPABASE_SERVICE_ROLE_KEY` | 90 days on any suspected exposure, 180 days default | Supabase Dashboard → Settings → API. Admin-level key — rotate immediately if leaked. |
 | S3 Storage Access Key | `S3_ACCESS_KEY`, `S3_SECRET_KEY` | 180 days | Railway Dashboard → Variables |
 | Novu API Key | `NOVU_API_KEY` | 180 days | Novu Dashboard → Settings → API Keys |
 | Inngest Signing Key | `INNGEST_SIGNING_KEY` | 180 days | Inngest Dashboard → Manage → Signing Key |
@@ -1994,7 +1995,7 @@ Full WebAuthn support deferred to Phase 2. Supabase Auth roadmap includes passke
 |---|---|---|---|
 | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | API Server | Env var (process.env) | Public key — safe to expose to client |
 | `SUPABASE_SERVICE_ROLE_KEY` | API Server | Env var (process.env) | Admin access — NEVER expose to client |
-| `SUPABASE_JWT_SECRET` | API Server | Env var (process.env) | JWT verification |
+| _(no local JWT secret)_ | API Server | Supabase JWKS (remote) | JWT verification delegated to `supabase.auth.getUser()`. Do not set `SUPABASE_JWT_SECRET`. |
 | `DATABASE_URL` | API Server, Workflow Worker | Env var (process.env) | Connection string with credentials |
 | `REDIS_URL` | API Server, Workflow Worker | Env var (process.env) | Connection string with credentials |
 | `S3_ACCESS_KEY/SECRET_KEY` | API Server | Env var (process.env) | File storage access |
@@ -2230,9 +2231,11 @@ CREATE INDEX idx_audit_logs_resource ON audit_logs (resource_type, resource_id);
 
 **FRD Reference**: FR-CORE-AUD-001
 
-> **Multi-Model Consensus (2026-02-02)**: Simplify to append-only SQL for Phase 1. Cryptographic hash-chaining adds complexity (concurrency edge cases, schema migration issues) without immediate regulatory requirement. Defer to Phase 3+ when compliance demands it.
+> **Original Decision (2026-02-02)**: Multi-model consensus recommended deferring cryptographic hash-chaining to Phase 3+ to avoid concurrency/migration complexity.
+>
+> **As-Built Update (Phase 1.5)**: Hash-chaining was implemented earlier than planned — see TSD `platform-core/audit.md` (v1.0.0). The chain uses `computeAuditHash()` (`packages/audit/src/hashing.ts`) with per-scope chain heads (`auditChainHeads` table) locked via transactional `lockChainHead()` to avoid concurrency issues. Full integrity verification and export are active in Phase 1.
 
-#### Phase 1: Append-Only SQL with Idempotent Inserts
+#### Phase 1: Append-Only SQL with Idempotent Inserts + Hash-Chain
 
 **Idempotency Guarantee**: Each audit event is recorded exactly once.
 
@@ -2350,19 +2353,24 @@ async function auditFromWorkflow(
 }
 ```
 
-#### Phase 3+: Cryptographic Hash-Chaining (Deferred)
+#### Phase 1.5: Cryptographic Hash-Chaining (As-Built)
 
-When regulatory compliance requires cryptographic proof of integrity:
+Hash-chaining is active in Phase 1.5. Each audit row references the previous row's hash within its scope, forming a tamper-evident chain.
 
 ```typescript
-// future: tamper-evident chain
 interface AuditLogWithChain extends AuditLog {
-  previousHash: string | null;
-  currentHash: string;
+  seq: number;                    // chain position within scope
+  previousHash: string | null;    // null at genesis
+  currentHash: string;            // SHA-256 of (previousHash || eventData)
 }
-
-// implementation deferred to Phase 3+
 ```
+
+- **Chain scope**: `(domain, resourceType)` pair — independent chains per scope.
+- **Chain head**: `auditChainHeads` table stores `(scope, lastSeq, lastHash)` per scope; locked transactionally during insert.
+- **Verification**: Full chain replay on demand via audit export service (§9.5).
+- **Genesis**: First event in each scope uses `GENESIS_HASH` constant.
+
+See TSD `platform-core/audit.md` v1.0.0 for full schema and failure-handling contract.
 
 ### 9.4 Audit Retention Policies
 
@@ -2901,18 +2909,20 @@ When a data subject requests erasure (§9.4.2), deletions must cascade across al
 
 ### 9.14 Infrastructure Budget Caps
 
-| Resource | Provider | Phase 1 Budget Cap | Free Tier Included | Exceed Behavior |
-|---|---|---|---|---|
-| Compute (Railway) | Railway | $50/mo | $5 free trial credit | Auto-scale stopped at 3 containers; alert at 80% |
-| PostgreSQL (Railway) | Railway | $15/mo | Usage-based | No auto-upgrade; manual plan change required |
-| Redis (Upstash) | Upstash | $10/mo | Free tier 10K cmds/day | Per-request pricing scales with usage |
-| Object Storage (Railway Volumes) | Railway | $5/mo | Usage-based | Usage-based pricing |
-| LLM API calls | OpenAI, Anthropic, Google | $50/day, $1,000/mo per domain | Varies by provider | Budget enforcement blocks requests (§7.2) |
-| Notifications (Novu) | Novu Cloud | $0/mo | 10K events/mo | See §9.15 |
-| Workflow execution (Inngest) | Inngest Cloud | $0/mo | 50K steps/mo | See §9.15 |
-| Error tracking (Sentry) | Sentry | $0/mo | 5K errors/mo | Events dropped after quota |
+| Resource | Provider | Expected Monthly | Billing Alert Threshold | Free Tier Included | Exceed Behavior |
+|---|---|---|---|---|---|
+| Compute (Railway) | Railway | ~$48-144 (autoscale 1-3) | **$200/mo** | $5 free trial credit | Auto-scale stopped at 3 containers; alert at 80% |
+| PostgreSQL (Railway) | Railway | $15 | $30/mo | Usage-based | No auto-upgrade; manual plan change required |
+| Redis (Upstash) | Upstash | $10 | $20/mo | Free tier 10K cmds/day | Per-request pricing scales with usage |
+| Object Storage (Railway Volumes) | Railway | ~$5 | **$10/mo** | Usage-based | Usage-based pricing; alert forces retention review |
+| LLM API calls | OpenAI, Anthropic, Google | up to $50/day × domains | $1,500/mo per domain (150% of cap) | Varies by provider | Application-level budget blocks at $1,000/mo (§7.2) |
+| Notifications (Novu) | Novu Cloud | $0 | — | 10K events/mo | See §9.15 |
+| Workflow execution (Inngest) | Inngest Cloud | $0 | — | 50K steps/mo | See §9.15 |
+| Error tracking (Sentry) | Sentry | $0 | — | 5K errors/mo | Events dropped after quota |
 
-> **Total Phase 1 infrastructure budget target**: ~$85-100/mo (excluding LLM API costs). LLM costs are domain-budgeted separately.
+> **Billing alerts** (decided 2026-04-20): Railway billing alerts MUST be configured at the thresholds above. Compute is set tight at $200/mo to catch runaway autoscale or DDoS; Object Storage is set tight at $10/mo to force early retention discipline on HR resumes/contracts. On alert, on-call investigates before the threshold becomes a hard cap. These are **operational safety nets**, not hard caps — the underlying plans auto-scale beyond unless stopped manually.
+>
+> **Total Phase 1 infrastructure budget target**: ~$85-165/mo (depends on autoscale). LLM costs are domain-budgeted separately.
 
 ### 9.15 SaaS Free-Tier Exceed Behavior
 
@@ -3023,7 +3033,7 @@ services:
 
 #### 10.4.2 Audit Integrity — Phase 1 Scope
 
-> **Audit Integrity (Phase 1)**: The Phase 1 audit system guarantees **completeness** (every auditable action produces an audit entry), NOT **tamper-proofness** (cryptographic proof that entries have not been modified). Completeness is enforced by: deterministic audit IDs preventing missed entries on retry (§9.3), `REVOKE UPDATE, DELETE` on `audit_logs` table preventing application-level modification, and append-only insert pattern. Tamper-proofness (hash-chaining, external anchoring) is deferred to Phase 3+ when regulatory compliance demands it (§9.3 "Phase 3+: Cryptographic Hash-Chaining"). The `audit_integrity > 99.9%` SLO in BRD §5 measures completeness: ratio of expected audit events (derived from auditable actions) to actual audit entries.
+> **Audit Integrity (Phase 1.5 as-built)**: The audit system guarantees both **completeness** (every auditable action produces an audit entry) AND **tamper-evidence** (cryptographic hash-chain proves entries have not been modified or reordered). Completeness is enforced by deterministic audit IDs preventing missed entries on retry (§9.3), `REVOKE UPDATE, DELETE` on `audit_logs` preventing application-level modification, and append-only insert pattern. Tamper-evidence is provided by per-scope hash-chain (§9.3 "Phase 1.5: Cryptographic Hash-Chaining"), with `audit_write_dlq` retrying failed inserts. External anchoring (blockchain/notary) is still deferred to Phase 3+. The `audit_integrity > 99.9%` SLO in BRD §5 measures completeness: ratio of expected audit events (derived from auditable actions) to actual audit entries.
 
 #### 10.4.3 PostgreSQL SPOF — Error Budget Allowance
 
@@ -3040,13 +3050,13 @@ services:
 | Railway PostgreSQL max connections | 25 (starter plan) | Plan-determined limit |
 | Reserved for superuser/maintenance | 3 | DO reserves for replication and monitoring |
 | Available for application | 22 | 25 - 3 |
-| API server pool size | 10 | Per container |
+| API server pool size | 5 | Per container (canonical — P1.5 reconciled) |
 | Workflow worker pool size | 5 | Per container |
 | API server containers (max) | 3 | Auto-scale limit |
 | Workflow worker containers | 1 | Single worker Phase 1 |
-| **Maximum application connections** | **3 × 10 + 1 × 5 = 35** | **Exceeds available (22)** |
+| **Maximum application connections** | **3 × 5 + 1 × 5 = 20** | **Within available (22)** ✅ |
 
-> **CRITICAL**: Maximum scaled connections (35) exceed available connections (22). Mitigation: (1) API pool size should be set to `Math.floor(22 / (maxContainers + workers))` = `Math.floor(22/4)` = 5 per container. (2) Or use a connection pooler (PgBouncer on DO) to multiplex. (3) Phase 1 with 1 API + 1 worker = 15 connections, which is within budget. **Action**: Set pool size to 5 per container to stay safe at max scale.
+> **Resolution (2026-04-20)**: Pool size is **5 per container** across API and Worker to stay safe at max scale (3 × 5 + 1 × 5 = 20 ≤ 22 available). This replaces the earlier `pool-config.ts` default of 20. Runbook §8.11 "Phase 1 pool size is 20" was misleading — align to 5. If a connection pooler (PgBouncer) is added in Phase 2, per-container pool sizes can grow because the pooler multiplexes. Drizzle client config should set `poolConfig: { max: 5 }` in composition root.
 
 #### 10.4.6 Redis Memory Budget
 
@@ -3123,8 +3133,10 @@ interface ProblemDetails {
 
 ### 11.2 Observability
 
+**Current state (Phase 1.5)**: Structured logging is provided by the `safe-logger.ts` PII-sanitizing console stub (§14.10). Pino + Sentry installation is tracked as **CR-2-FOLLOWUP** and not yet wired in `apps/web/package.json`. OpenTelemetry auto-instrumentation is likewise pending — trace context propagation is currently manual via the W3C `traceparent` utilities in `apps/web/src/lib/tracing/context-propagation.ts` (see §16.5). Snippets below show the **target state once CR-2-FOLLOWUP lands**; async boundaries (Inngest step handoffs, BullMQ jobs, SLO cron, audit DLQ replay) must inject and extract `traceparent` explicitly — the OTel SDK alone does not propagate through those queues.
+
 ```typescript
-// structured logging (Pino)
+// TARGET STATE: structured logging (Pino, pending CR-2-FOLLOWUP)
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
   formatters: {
@@ -3132,8 +3144,9 @@ const logger = pino({
   },
 });
 
-// OpenTelemetry tracing
+// TARGET STATE: OpenTelemetry tracing — auto-propagates over HTTP only
 import { trace } from '@opentelemetry/api';
+import { injectTraceparent, extractTraceparent } from './tracing/context-propagation.js';
 
 const tracer = trace.getTracer('aptivo-core');
 
@@ -3141,6 +3154,12 @@ async function processWorkflow(ctx: Context) {
   return tracer.startActiveSpan('workflow.process', async (span) => {
     span.setAttribute('workflow.id', ctx.workflowId);
     span.setAttribute('domain', ctx.domain);
+
+    // manual propagation across Inngest/BullMQ queue boundary
+    const childEventPayload = {
+      ...payload,
+      traceparent: injectTraceparent(span.spanContext()),
+    };
     // ... workflow logic
     span.end();
   });
@@ -3774,19 +3793,24 @@ Example: client 3x × LB 2x × workflow 3x = 18x potential executions.
 
 ### 13.8 API Deprecation and Sunset Policy
 
-- **Current version**: `v1` (all endpoints under `/api/v1/`).
-- **v1 support commitment**: v1 will be supported for a minimum of **12 months** after v2 general availability. During the overlap period, both v1 and v2 endpoints are operational.
-- **Sunset signaling**: When v2 is released, v1 responses include `Sunset` header (RFC 8594) with the EOL date, and `Deprecation` header (RFC 9745) with the deprecation date.
-- **Breaking change definition**: See §13.9.
+> **Phase 1 Reconciliation (CR-6, 2026-04-13)**: The design target was `/api/v1/*` prefix for all endpoints. As-built, Phase 1 ships unversioned routes under `/api/{admin,auth,workflows,...}` without `Sunset`/`Deprecation` headers. Versioning infrastructure (prefix routing, header middleware) is deferred to the **v2 introduction window**, at which point v1 will be retroactively implied for the pre-v2 surface and clients migrating to v2 will receive the headers per RFC 8594/9745. This trade-off was accepted to keep Phase 1 route handlers simple while no external consumers rely on a formal v1 contract.
+
+- **Current version (as-built)**: implicit `v1` — endpoints live at `/api/{admin,auth,workflows,hitl,mcp,inngest,consent}` without an explicit version prefix. OpenAPI (`docs/04-specs/openapi/aptivo-core-v1.yaml`) documents them as the v1 surface.
+- **Admin endpoints** (`/api/admin/*`): seven routes as of P1.5 — `overview`, `audit`, `hitl`, `llm-usage`, `llm-usage/budget`, `approval-sla` (OPS-01), `feature-flags` (PR-07). See §15.2 for full table. These follow the same implicit-v1 convention as the rest of the API.
+- **Permanent exceptions** (never versioned): `/health/live`, `/health/ready`, `/api/inngest` (vendor SDK webhook endpoint). These are operational/platform integration surfaces, not consumer-facing APIs, and are excluded from the v1/v2 lifecycle.
+- **Versioning introduction trigger**: when a breaking change is required (§13.9), the new surface ships at `/api/v2/*` AND the existing unversioned routes are simultaneously aliased under `/api/v1/*` with `Sunset` + `Deprecation` headers. Until that moment, no versioned prefix is required.
+- **v1 support commitment**: once `/api/v2/*` is released, the aliased `/api/v1/*` surface will be supported for a minimum of **12 months** with active `Sunset`/`Deprecation` signaling.
+- **Sunset signaling**: at v2 release, v1 responses will include `Sunset` header (RFC 8594) with the EOL date and `Deprecation` header (RFC 9745) with the deprecation date. Implementation is a versioning middleware applied at `/api/v1/*` route group creation time.
+- **Breaking change definition**: See §13.9. A breaking change is the trigger for introducing v2 and formalizing v1.
 - **Migration support**: v1 → v2 migration guide published at v2 GA. Automated migration tooling provided where feasible.
 - **Timeline** (projected):
 
-  | Phase | API Version | Status |
+  | Phase | API Layout | Status |
   |---|---|---|
-  | Phase 1 | v1 | Active (current) |
-  | Phase 2 | v1 | Active |
-  | Phase 3 | v1 + v2 | v1 deprecated, v2 active |
-  | Phase 3 + 12mo | v2 | v1 sunset |
+  | Phase 1 (current) | unversioned `/api/*` (implicit v1) | Active |
+  | Phase 2 | unversioned `/api/*` (implicit v1) | Active |
+  | First breaking change | `/api/v1/*` aliases added + `/api/v2/*` released | v1 deprecated, v2 active |
+  | v2 + 12mo | `/api/v2/*` (and beyond) | v1 sunset |
 
 ### 13.9 Backward Compatibility Rules
 
@@ -3894,7 +3918,7 @@ const redactPaths = [
 ```
 
 **Audit Log PII Handling**:
-- `ip_address`: Stored with last octet zeroed for anonymization (e.g., `192.168.1.0/24`). Full IP retained only for the first 24 hours in a separate `ip_address_full` column for abuse detection, then automatically nulled by a scheduled job.
+- `ip_address`: Stored with last octet zeroed for anonymization (e.g., `192.168.1.0/24`). Abuse-detection short-retention of the full IP is **deferred** — the `ip_address_full` column and 24h anonymization cron are not implemented in Phase 1. If abuse-detection with full IP becomes necessary, add a separate column with a scheduled nulling job; track as CR-2-FOLLOWUP (`apps/web/src/lib/logging/safe-logger.ts`).
 - `user_agent`: Truncated to browser family and major version (e.g., `Chrome/120`) — no full fingerprint stored.
 - `metadata` (JSONB): PII fields within metadata are automatically masked before storage using the same redaction allowlist. FRD FR-CORE-AUD-001: "Sensitive PII in metadata is automatically masked or hashed based on configuration."
 
@@ -4057,7 +4081,7 @@ The following middleware components are implemented in `apps/web/src/lib/securit
 | **SSRF Validator** | `ssrf-validator.ts` | `validateWebhookUrl(url)` | Blocks private IPs (10.x, 172.16-31.x, 192.168.x), localhost, link-local (169.254.x), metadata endpoints (169.254.169.254). Returns `Result<URL, SecurityError>`. |
 | **Safe Fetch** | `safe-fetch.ts` | `safeFetch(url, init?)` | Wraps `fetch()` with `validateWebhookUrl()` pre-check. Returns `Result<Response, SafeFetchError>`. Wire on first outbound webhook path (RR-7). |
 | **Body Limits** | `body-limits.ts` | `withBodyLimits(handler)` | HOF wrapper. Webhook body: 256KB. API JSON: 1MB. JSON nesting: max 10 levels. Returns `413` or `400` on violation. |
-| **Logging Sanitization** | `sanitize-logging.ts` | `sanitizeForLogging(obj)`, `hashQueryParam(param)` | Redacts PII fields (email, name, phone, address, SSN) before logging. Hashes URL query params in access logs. Used in Sentry `beforeSend` hook. |
+| **Logging Sanitization** | `sanitize-logging.ts` | `sanitizeForLogging(obj)`, `hashQueryParam(param)` | Redacts PII fields (email, name, phone, address, SSN) before logging. Hashes URL query params in access logs. Currently wired through the stub `safe-logger.ts` (console + sanitization) — Pino + Sentry ingestion is tracked as **CR-2-FOLLOWUP**, not yet installed in `apps/web/package.json`. |
 
 **Request flow**: RBAC middleware runs first (route-level), body limits run at middleware level (for POST/PUT routes), SSRF validation runs before outbound HTTP calls, logging sanitization runs before all log output.
 
@@ -4070,13 +4094,13 @@ The following middleware components are implemented in `apps/web/src/lib/securit
 
 | STRIDE | Threat | Mitigation | Residual Risk |
 |--------|--------|------------|---------------|
-| **S** | Spoofed admin identity via stolen JWT | Supabase JWT signature verification; `checkPermission('platform/admin.view')` on every endpoint (§14.10) | XSS leading to token exfiltration |
+| **S** | Spoofed admin identity via stolen JWT | Supabase JWT signature verification; `checkPermissionWithBlacklist('platform/admin.view')` on every endpoint (§14.10) | XSS leading to token exfiltration |
 | **T** | Audit log tampering via admin API | Admin endpoints are read-only (GET); audit table has `REVOKE UPDATE, DELETE` (§9.3) | Database superuser bypass |
 | **R** | Admin access without audit trail | Admin API requests logged via structured Pino logging (§14.10); Supabase auth events tracked | Log retention policy gaps |
 | **I** | Sensitive metric leakage (LLM costs, HITL details) | RBAC gates all endpoints; aggregation queries hide row-level PII; parameterized Drizzle queries (§15.6) | Authorized admin with broad visibility — no field-level redaction on cost data |
 | **I** | IDOR on audit log filters | `resource` and `actor` filters use parameterized queries; no user-supplied IDs in path | Filter values could enumerate valid resource/actor names |
 | **D** | Expensive aggregation query flooding | Pagination clamped to 200 (§15.6); range clamped to 365 days; PostgreSQL connection pool limits (§2.3.2) | No per-user rate limiting on admin endpoints — sustained queries could degrade shared pool |
-| **E** | Non-admin accessing admin endpoints | `checkPermission('platform/admin.view')` enforced on all routes; RBAC resolver JOINs `user_roles` + `role_permissions` WHERE `revokedAt IS NULL` (§14.10) | Role assignment compromise in `user_roles` table |
+| **E** | Non-admin accessing admin endpoints | `checkPermissionWithBlacklist('platform/admin.view')` enforced on all routes; RBAC resolver JOINs `user_roles` + `role_permissions` WHERE `revokedAt IS NULL` (§14.10) | Role assignment compromise in `user_roles` table |
 
 > **Accepted Design**: All admin endpoints return global platform metrics with no domain-scoped isolation. This is intentional for a single-tenant Phase 1 deployment. Phase 2: add domain-scoped admin roles if multi-tenant deployment requires metric segregation.
 
@@ -4110,7 +4134,7 @@ The following middleware components are implemented in `apps/web/src/lib/securit
 
 ### 15.1 Overview
 
-The admin dashboard provides platform operators with visibility into system health, HITL request status, audit trails, and LLM cost tracking. All endpoints enforce RBAC via `checkPermission('platform/admin.view')` middleware (§14.10) and return RFC 7807 error responses on failure.
+The admin dashboard provides platform operators with visibility into system health, HITL request status, audit trails, and LLM cost tracking. All endpoints enforce RBAC via `checkPermissionWithBlacklist('platform/admin.view')` middleware (§14.10) and return RFC 7807 error responses on failure.
 
 **Store adapters**:
 - `createDrizzleAdminStore(db)` — aggregation queries for overview, audit logs, HITL requests
@@ -4125,6 +4149,10 @@ The admin dashboard provides platform operators with visibility into system heal
 | `/api/admin/hitl` | GET | HITL request listing | `status`, `limit` (max 200) |
 | `/api/admin/llm-usage` | GET | LLM cost & usage analytics | `range` (e.g., `7d`, `30d`; clamped 1-365) |
 | `/api/admin/llm-usage/budget` | GET | Budget status & burn rate | — |
+| `/api/admin/approval-sla` | GET | Approval SLA dashboard (OPS-01) | `from`, `to` (ISO date range) |
+| `/api/admin/feature-flags` | GET | Feature flag inventory with source annotation (PR-07) | — |
+
+> All seven endpoints enforce `platform/admin.view` via `checkPermissionWithBlacklist()`. The earlier five are documented in OpenAPI v1.2.0; `approval-sla` and `feature-flags` were added in Sprint 7/8 and need to be added to the OpenAPI spec alongside their request/response schemas.
 
 ### 15.3 Overview Endpoint
 
@@ -4140,7 +4168,7 @@ Returns four key metrics in parallel:
     mcpSuccessRate: number;          // success / total (1.0 if no calls)
     hitlLatencyP95Ms: number;        // P95 approval delivery latency
     auditDlqPending: number;         // dead letter queue backlog
-    status: 'healthy' | 'degraded';  // healthy when: workflow >= 99%, mcp >= 99.5%, dlq <= 100
+    status: 'healthy' | 'degraded';  // healthy when: workflow >= 99%, mcp >= 99.5%, audit_write_dlq pending == 0 (zero-loss; matches §16.3 auditIntegrityAlert)
   };
 }
 ```
@@ -4165,11 +4193,11 @@ SLO health is computed from `MetricService` queries (§16) — the same data tha
 All admin endpoints use the same pattern:
 
 ```typescript
-const forbidden = await checkPermission('platform/admin.view')(request);
+const forbidden = await checkPermissionWithBlacklist('platform/admin.view')(request);
 if (forbidden) return forbidden;
 ```
 
-The `checkPermission()` factory (§14.10) returns a `(Request) => Promise<Response | null>` function. In production, it extracts the Supabase JWT, resolves user permissions from the DB, and caches them per-request via `WeakMap<Request, Set<string>>`. Returns `null` (permitted) or RFC 7807 `401`/`403` response.
+The `checkPermissionWithBlacklist()` factory (§14.10) composes token-blacklist → MFA → federation → permission check and returns a `(Request) => Promise<Response | null>` function. In production it extracts the Supabase JWT, resolves user permissions from the DB, and caches them per-request via `WeakMap<Request, Set<string>>`. Returns `null` (permitted) or RFC 7807 `401`/`403` response. The simpler `checkPermission()` is the inner factory — admin routes should always use the `WithBlacklist` wrapper.
 
 ### 15.6 Input Validation
 
@@ -4219,10 +4247,12 @@ Four threshold-based alerts defined in `apps/web/src/lib/observability/slo-alert
 
 | Evaluator | SLO Target | Alert Condition | Source Metric |
 |-----------|-----------|-----------------|---------------|
-| `workflowSuccessAlert` | ≥ 99% success rate | < 99% over 5-min window | `getWorkflowCounts()` |
-| `hitlDeliveryAlert` | P95 < 10s | P95 > 10,000ms | `getHitlLatencyP95()` |
-| `mcpSuccessAlert` | ≥ 99.5% success rate | < 99.5% | `getMcpCallCounts()` |
-| `auditIntegrityAlert` | DLQ count ≤ threshold | count > 100 | `getAuditDlqPendingCount()` |
+| `workflowSuccessAlert` | ≥ 99% success rate (BRD §5.1) | < 99% over 5-min window | `getWorkflowCounts()` |
+| `hitlDeliveryAlert` | P95 < 10s (BRD §5.1) | P95 > 10,000ms | `getHitlLatencyP95()` |
+| `mcpSuccessAlert` | ≥ 99.5% success rate (stricter than BRD ≥ 99% — see §10.4.8 note) | < 99.5% | `getMcpCallCounts()` |
+| `auditIntegrityAlert` | Zero-loss (BRD §5.1 99.9% audit completeness) | `audit_write_dlq` pending count > 0 | `getAuditDlqPendingCount()` |
+
+> **Audit integrity threshold (P2-DOC-05 reconcile)**: Alert fires on any pending DLQ entry to align with the "zero data loss" mandate and the SLO-Alert mapping in §10.4.8 (`audit_missing_events > 0`). Operators drain the DLQ within the on-call SLA rather than tolerating backlog.
 
 **Deferred**: S5-W17 burn-rate alerting — multi-window burn-rate analysis requires historical metric storage not yet implemented. See [Phase 2 Roadmap](../06-sprints/phase-2-roadmap.md) Epic 4.
 
