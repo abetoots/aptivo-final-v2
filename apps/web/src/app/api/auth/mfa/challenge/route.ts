@@ -7,7 +7,9 @@
  * the returned challenge id is used with the verify endpoint.
  */
 
+import { type NextRequest } from 'next/server';
 import { extractUser } from '@/lib/security/rbac-resolver.js';
+import { withBodyLimits } from '@/lib/security/route-guard.js';
 import type { SupabaseMfaClient } from '@/lib/auth/mfa-enforcement.js';
 
 // resolve mfa client from composition root, fallback for test mode
@@ -24,7 +26,7 @@ async function getMfaClientFromRoot(): Promise<SupabaseMfaClient> {
   }
 }
 
-export async function POST(request: Request) {
+async function handlePost(request: NextRequest, parsedBody: unknown) {
   // verify the user is authenticated before allowing mfa challenge
   const user = await extractUser(request);
   if (!user) {
@@ -39,20 +41,7 @@ export async function POST(request: Request) {
     );
   }
 
-  let body: { factorId?: string };
-  try {
-    body = await request.json();
-  } catch {
-    return new Response(
-      JSON.stringify({
-        type: 'https://aptivo.dev/errors/validation',
-        title: 'Invalid Request Body',
-        status: 400,
-        detail: 'Request body must be valid JSON with factorId',
-      }),
-      { status: 400, headers: { 'content-type': 'application/json' } },
-    );
-  }
+  const body = (parsedBody ?? {}) as { factorId?: string };
 
   if (!body.factorId) {
     return new Response(
@@ -96,3 +85,5 @@ export async function POST(request: Request) {
     headers: { 'content-type': 'application/json' },
   });
 }
+
+export const POST = withBodyLimits(handlePost);

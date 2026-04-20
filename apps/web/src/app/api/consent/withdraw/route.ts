@@ -6,9 +6,11 @@
  * requires authentication via extractUser.
  */
 
+import { type NextRequest } from 'next/server';
 import { extractUser } from '@/lib/security/rbac-resolver.js';
+import { withBodyLimits } from '@/lib/security/route-guard.js';
 
-export async function POST(request: Request) {
+async function handlePost(request: NextRequest, body: unknown) {
   // authenticate
   const user = await extractUser(request);
   if (!user) {
@@ -20,22 +22,6 @@ export async function POST(request: Request) {
         detail: 'Authentication required',
       }),
       { status: 401, headers: { 'content-type': 'application/problem+json' } },
-    );
-  }
-
-  // parse body
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return new Response(
-      JSON.stringify({
-        type: 'https://aptivo.dev/errors/validation-error',
-        title: 'Validation Error',
-        status: 400,
-        detail: 'Invalid JSON body',
-      }),
-      { status: 400, headers: { 'content-type': 'application/problem+json' } },
     );
   }
 
@@ -76,3 +62,5 @@ export async function POST(request: Request) {
     );
   }
 }
+
+export const POST = withBodyLimits(handlePost);

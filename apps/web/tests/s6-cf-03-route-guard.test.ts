@@ -41,7 +41,8 @@ describe('S6-CF-03: Route Guard - withBodyLimits', () => {
 
     expect(response.status).toBe(413);
     const body = await response.json();
-    expect(body.error).toBe('Payload too large');
+    expect(body.title).toBe('Payload Too Large');
+    expect(body.detail).toContain('exceeds maximum allowed size');
     expect(echoHandler).not.toHaveBeenCalled();
   });
 
@@ -59,7 +60,8 @@ describe('S6-CF-03: Route Guard - withBodyLimits', () => {
 
     expect(response.status).toBe(400);
     const body = await response.json();
-    expect(body.error).toBe('JSON nesting depth exceeds limit');
+    expect(body.title).toBe('Invalid Request Body');
+    expect(body.detail).toContain('nesting depth');
   });
 
   // 3. passes valid request through to handler
@@ -110,7 +112,8 @@ describe('S6-CF-03: Route Guard - withBodyLimits', () => {
 
     expect(response.status).toBe(400);
     const body = await response.json();
-    expect(body.error).toBe('Invalid JSON');
+    expect(body.title).toBe('Invalid Request Body');
+    expect(body.detail).toContain('valid JSON');
   });
 
   // 7. valid body within custom depth limit passes
@@ -186,7 +189,8 @@ describe('S6-CF-03: Route Guard - withBodyLimits', () => {
 
     expect(response.status).toBe(400);
     const body = await response.json();
-    expect(body.error).toBe('JSON nesting depth exceeds limit');
+    expect(body.title).toBe('Invalid Request Body');
+    expect(body.detail).toContain('nesting depth');
   });
 
   // 12. body that starts with [ is treated as json

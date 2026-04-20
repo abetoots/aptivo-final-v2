@@ -94,7 +94,8 @@ describe('LlmGateway', () => {
     it('blocks when monthly budget exceeded', async () => {
       const budgetStore = createMockBudgetStore();
       vi.mocked(budgetStore.getDailySpend).mockResolvedValue(0);
-      vi.mocked(budgetStore.getMonthlySpend).mockResolvedValue(500);
+      // monthly limit is $1000 per ADD §7.2.2 (Phase 1.5 reconciliation)
+      vi.mocked(budgetStore.getMonthlySpend).mockResolvedValue(1000);
       deps = createTestDeps({
         budgetService: new BudgetService(budgetStore),
       });

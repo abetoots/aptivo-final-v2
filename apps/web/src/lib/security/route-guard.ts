@@ -68,18 +68,17 @@ export function withBodyLimits(
     try {
       rawBody = await request.text();
     } catch {
-      return NextResponse.json(
-        { error: 'Failed to read request body' },
-        { status: 400 },
-      );
+      return problemResponse(400, 'Invalid Request Body', 'Failed to read request body');
     }
 
     // check size
     if (!isBodyWithinLimit(rawBody, maxBytes)) {
-      return NextResponse.json(
-        { error: 'Payload too large' },
-        { status: 413 },
-      );
+      return problemResponse(413, 'Payload Too Large', 'Request body exceeds maximum allowed size');
+    }
+
+    // empty body → pass through with undefined parsedBody (handler decides if required)
+    if (rawBody.length === 0) {
+      return handler(request, undefined, context);
     }
 
     // parse json if content-type is json or body looks like json
@@ -93,18 +92,12 @@ export function withBodyLimits(
       try {
         parsed = JSON.parse(rawBody);
       } catch {
-        return NextResponse.json(
-          { error: 'Invalid JSON' },
-          { status: 400 },
-        );
+        return problemResponse(400, 'Invalid Request Body', 'Request body must be valid JSON');
       }
 
       // check depth
       if (!checkJsonDepth(parsed, maxDepth)) {
-        return NextResponse.json(
-          { error: 'JSON nesting depth exceeds limit' },
-          { status: 400 },
-        );
+        return problemResponse(400, 'Invalid Request Body', 'JSON nesting depth exceeds limit');
       }
 
       return handler(request, parsed, context);
@@ -113,4 +106,17 @@ export function withBodyLimits(
     // non-json body — pass raw string
     return handler(request, rawBody, context);
   };
+}
+
+// RFC 7807 Problem Details response helper
+function problemResponse(status: number, title: string, detail: string): NextResponse {
+  return NextResponse.json(
+    {
+      type: `https://aptivo.dev/errors/${title.toLowerCase().replace(/\s+/g, '-')}`,
+      title,
+      status,
+      detail,
+    },
+    { status, headers: { 'content-type': 'application/problem+json' } },
+  );
 }

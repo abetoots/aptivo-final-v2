@@ -1,7 +1,8 @@
 /**
  * LLM-07: Budget Enforcement Tests
  * @task LLM-07
- * @reuse SP-08 boundary test patterns ($49/$50/$51, $499/$500/$501)
+ * @reuse SP-08 boundary test patterns ($49/$50/$51) for daily; monthly boundary
+ *   updated to $1,000 per Phase 1.5 reconciliation (ADD §7.2.2)
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -62,9 +63,9 @@ describe('BudgetService', () => {
       }
     });
 
-    it('blocks at monthly limit boundary ($500 blocks)', async () => {
+    it('blocks at monthly limit boundary ($1000 blocks)', async () => {
       vi.mocked(store.getDailySpend).mockResolvedValue(0);
-      vi.mocked(store.getMonthlySpend).mockResolvedValue(500);
+      vi.mocked(store.getMonthlySpend).mockResolvedValue(1000);
 
       const result = await service.checkBudget('core');
       expect(result.ok).toBe(false);
@@ -73,17 +74,17 @@ describe('BudgetService', () => {
       }
     });
 
-    it('passes at $499 monthly (just under limit)', async () => {
+    it('passes at $999 monthly (just under limit)', async () => {
       vi.mocked(store.getDailySpend).mockResolvedValue(0);
-      vi.mocked(store.getMonthlySpend).mockResolvedValue(499);
+      vi.mocked(store.getMonthlySpend).mockResolvedValue(999);
 
       const result = await service.checkBudget('core');
       expect(result.ok).toBe(true);
     });
 
-    it('blocks at $501 monthly (over limit)', async () => {
+    it('blocks at $1001 monthly (over limit)', async () => {
       vi.mocked(store.getDailySpend).mockResolvedValue(0);
-      vi.mocked(store.getMonthlySpend).mockResolvedValue(501);
+      vi.mocked(store.getMonthlySpend).mockResolvedValue(1001);
 
       const result = await service.checkBudget('core');
       expect(result.ok).toBe(false);
@@ -105,7 +106,7 @@ describe('BudgetService', () => {
 
     it('triggers warning at 90% monthly threshold', async () => {
       vi.mocked(store.getDailySpend).mockResolvedValue(10);
-      vi.mocked(store.getMonthlySpend).mockResolvedValue(450); // 90% of 500
+      vi.mocked(store.getMonthlySpend).mockResolvedValue(900); // 90% of 1000
 
       const result = await service.checkBudget('core');
       expect(result.ok).toBe(true);
@@ -126,7 +127,7 @@ describe('BudgetService', () => {
         createBudgetConfig({ blockOnExceed: false }),
       );
       vi.mocked(store.getDailySpend).mockResolvedValue(100);
-      vi.mocked(store.getMonthlySpend).mockResolvedValue(1000);
+      vi.mocked(store.getMonthlySpend).mockResolvedValue(2000);
 
       const result = await service.checkBudget('core');
       expect(result.ok).toBe(true);
@@ -155,9 +156,9 @@ describe('BudgetService', () => {
 
     it('blocks when projected cost exceeds monthly limit', async () => {
       vi.mocked(store.getDailySpend).mockResolvedValue(0);
-      vi.mocked(store.getMonthlySpend).mockResolvedValue(499);
+      vi.mocked(store.getMonthlySpend).mockResolvedValue(999);
 
-      const result = await service.enforcePreRequest('core', 2); // 499+2 = 501 > 500
+      const result = await service.enforcePreRequest('core', 2); // 999+2 = 1001 > 1000
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error._tag).toBe('MonthlyBudgetExceeded');

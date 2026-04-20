@@ -3,13 +3,14 @@
  * @task FEAT-01
  */
 
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { checkPermissionWithBlacklist } from '../../../lib/security/rbac-middleware';
 import { extractUser } from '../../../lib/security/rbac-resolver';
+import { withBodyLimits } from '../../../lib/security/route-guard';
 import { getWorkflowDefinitionService } from '../../../lib/services';
 
 // POST — create a new workflow definition
-export async function POST(request: Request) {
+async function handlePost(request: NextRequest, body: unknown) {
   const forbidden = await checkPermissionWithBlacklist('platform/workflow.manage')(request);
   if (forbidden) return forbidden;
 
@@ -18,16 +19,6 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { type: 'https://aptivo.dev/errors/unauthorized', title: 'Unauthorized', status: 401 },
       { status: 401 },
-    );
-  }
-
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json(
-      { type: 'https://aptivo.dev/errors/bad-request', title: 'Bad Request', status: 400, detail: 'Invalid JSON body' },
-      { status: 400 },
     );
   }
 
@@ -49,6 +40,8 @@ export async function POST(request: Request) {
 
   return NextResponse.json({ data: result.value }, { status: 201 });
 }
+
+export const POST = withBodyLimits(handlePost);
 
 // GET — list workflow definitions (optional ?domain= filter)
 export async function GET(request: Request) {

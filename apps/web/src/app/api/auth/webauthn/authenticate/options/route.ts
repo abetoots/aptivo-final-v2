@@ -6,10 +6,12 @@
  * requires auth via x-user-id header (dev) or supabase jwt (production).
  */
 
+import { type NextRequest } from 'next/server';
 import { extractUser } from '@/lib/security/rbac-resolver.js';
+import { withBodyLimits } from '@/lib/security/route-guard.js';
 import { getWebAuthnService } from '@/lib/services.js';
 
-export async function POST(request: Request) {
+async function handlePost(request: NextRequest, _parsedBody: unknown) {
   // verify authentication
   const user = await extractUser(request);
   if (!user) {
@@ -47,3 +49,5 @@ export async function POST(request: Request) {
     { status: 200, headers: { 'content-type': 'application/json' } },
   );
 }
+
+export const POST = withBodyLimits(handlePost);

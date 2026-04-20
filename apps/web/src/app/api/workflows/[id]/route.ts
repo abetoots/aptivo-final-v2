@@ -3,8 +3,9 @@
  * @task FEAT-01
  */
 
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 import { checkPermissionWithBlacklist } from '../../../../lib/security/rbac-middleware';
+import { withBodyLimits } from '../../../../lib/security/route-guard';
 import { getWorkflowDefinitionService } from '../../../../lib/services';
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -35,21 +36,11 @@ export async function GET(request: Request, context: RouteParams) {
 }
 
 // PUT — update
-export async function PUT(request: Request, context: RouteParams) {
+async function handlePut(request: NextRequest, body: unknown, context?: unknown) {
   const forbidden = await checkPermissionWithBlacklist('platform/workflow.manage')(request);
   if (forbidden) return forbidden;
 
-  const { id } = await context.params;
-
-  let body: unknown;
-  try {
-    body = await request.json();
-  } catch {
-    return NextResponse.json(
-      { type: 'https://aptivo.dev/errors/bad-request', title: 'Bad Request', status: 400, detail: 'Invalid JSON body' },
-      { status: 400 },
-    );
-  }
+  const { id } = await (context as RouteParams).params;
 
   const service = getWorkflowDefinitionService();
   const result = await service.update(id, body);
@@ -75,6 +66,8 @@ export async function PUT(request: Request, context: RouteParams) {
 
   return NextResponse.json({ data: result.value });
 }
+
+export const PUT = withBodyLimits(handlePut);
 
 // DELETE — remove by id
 export async function DELETE(request: Request, context: RouteParams) {

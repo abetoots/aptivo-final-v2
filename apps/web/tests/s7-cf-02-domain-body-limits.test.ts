@@ -85,7 +85,8 @@ describe('S7-CF-02: Domain Route Body Limits', () => {
 
       expect(res.status).toBe(400);
       const body = await res.json();
-      expect(body.error).toContain('nesting depth');
+      expect(body.title).toBe('Invalid Request Body');
+      expect(body.detail).toContain('nesting depth');
     });
 
     it('returns 400 for invalid JSON', async () => {

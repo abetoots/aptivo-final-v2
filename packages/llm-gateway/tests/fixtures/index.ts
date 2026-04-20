@@ -72,7 +72,7 @@ export function createMockBudgetStore(overrides?: Partial<BudgetStore>): BudgetS
   const defaultConfig: BudgetConfig = {
     domain: 'core',
     dailyLimitUsd: 50,
-    monthlyLimitUsd: 500,
+    monthlyLimitUsd: 1000,
     dailyWarningThreshold: 0.90,
     blockOnExceed: true,
   };
@@ -89,7 +89,7 @@ export function createBudgetConfig(overrides?: Partial<BudgetConfig>): BudgetCon
   return {
     domain: 'core' as Domain,
     dailyLimitUsd: 50,
-    monthlyLimitUsd: 500,
+    monthlyLimitUsd: 1000,
     dailyWarningThreshold: 0.90,
     blockOnExceed: true,
     ...overrides,

@@ -66,23 +66,26 @@ export function createMetricQueries(db: DrizzleClient): MetricQueryDeps {
 
     async getHitlP95LatencyMs(windowMs) {
       const cutoff = new Date(Date.now() - windowMs);
-      // p95 latency = created_at → resolved_at for resolved requests
+      // CR-3: p95 HITL notification delivery latency per BRD §5.1.
+      // Measures created_at → delivered_at for HITL approval notifications —
+      // NOT hitl_requests resolution time (which is human decision time).
       const rows = await db
         .select({
           p95: sql<number>`
             coalesce(
               percentile_cont(0.95) within group (
-                order by extract(epoch from (${hitlRequests.resolvedAt} - ${hitlRequests.createdAt})) * 1000
+                order by extract(epoch from (${notificationDeliveries.deliveredAt} - ${notificationDeliveries.createdAt})) * 1000
               ),
               0
             )::int
           `,
         })
-        .from(hitlRequests)
+        .from(notificationDeliveries)
         .where(
           and(
-            sql`${hitlRequests.resolvedAt} is not null`,
-            gte(hitlRequests.createdAt, cutoff),
+            eq(notificationDeliveries.templateSlug, 'hitl-approval-request'),
+            sql`${notificationDeliveries.deliveredAt} is not null`,
+            gte(notificationDeliveries.createdAt, cutoff),
           ),
         );
       return rows[0]?.p95 ?? 0;

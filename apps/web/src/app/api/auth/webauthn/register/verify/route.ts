@@ -6,10 +6,12 @@
  * requires auth via x-user-id header (dev) or supabase jwt (production).
  */
 
+import { type NextRequest } from 'next/server';
 import { extractUser } from '@/lib/security/rbac-resolver.js';
+import { withBodyLimits } from '@/lib/security/route-guard.js';
 import { getWebAuthnService } from '@/lib/services.js';
 
-export async function POST(request: Request) {
+async function handlePost(request: NextRequest, parsedBody: unknown) {
   // verify authentication
   const user = await extractUser(request);
   if (!user) {
@@ -24,27 +26,13 @@ export async function POST(request: Request) {
     );
   }
 
-  // parse request body
-  let body: {
+  const body = (parsedBody ?? {}) as {
     credentialId?: string;
     publicKey?: string;
     counter?: number;
     transports?: string;
     friendlyName?: string;
   };
-  try {
-    body = await request.json();
-  } catch {
-    return new Response(
-      JSON.stringify({
-        type: 'https://aptivo.dev/errors/validation',
-        title: 'Invalid Request Body',
-        status: 400,
-        detail: 'Request body must be valid JSON',
-      }),
-      { status: 400, headers: { 'content-type': 'application/json' } },
-    );
-  }
 
   if (!body.credentialId || !body.publicKey || body.counter === undefined) {
     return new Response(
@@ -98,3 +86,5 @@ export async function POST(request: Request) {
     { status: 200, headers: { 'content-type': 'application/json' } },
   );
 }
+
+export const POST = withBodyLimits(handlePost);
