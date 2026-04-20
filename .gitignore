@@ -38,3 +38,12 @@ yarn-error.log*
 *.pem
 .serena
 .claude
+
+# Doc-lint / evaluation tooling output (regenerated from docs; not source-of-truth)
+.create-docs-backups/
+evaluation_result.json
+sla_evaluation_report.json
+api_versioning_compliance_report.json
+generic-evaluation-template.md
+prompts/signal-detection.md
+new/
