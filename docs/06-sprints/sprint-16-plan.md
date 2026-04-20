@@ -115,9 +115,24 @@ Post-review revisions (two rounds: Plan agent critique during design, then multi
 
 ### Phase B: LLM Safety v2 Finish (Days 1-8)
 
-#### LLM3-03: Injection Eval Harness (4 SP) — land FIRST
+#### LLM3-03: Injection Eval Harness (4 SP) — ✅ COMPLETE (2026-04-20)
 
 *Re-estimated from 3 SP after multi-model review: curation of 200+ distinct non-paraphrased samples is real annotation work, not 1-2 hours.*
+
+**Delivery notes**:
+- Corpus: 220 samples across 6 category-buckets (27/28/27/28 across four attack types + 110 benign + 20 boundary), stratified 80/20 train (176) / holdout (44). ~50/50 split between pattern-hitting and semantic-variant attacks so the rule-based recall gap is visible (the gap ML is expected to close).
+- Harness: `runEval(classifier, corpus, { split, domain, gitSha })` → `Result<EvalResult, EvalError>`; pure, no I/O. `persistEvalResult(result, dir)` separately writes timestamped JSON.
+- `challenge` verdicts counted as positive (TP or FP) — the eval measures detection, not final action policy.
+- Rule-based baseline on holdout (core domain): **Precision 1.000, Recall 0.318, F1 0.483** (7 of 22 attacks caught). All misses are semantic variants. Documented in `docs/04-specs/injection-eval-baseline.md` with per-category breakdown and Senior Dev sign-off checklist.
+- `pnpm test:eval` script added to `@aptivo/llm-gateway`.
+
+**Pre-commit multi-model review** (`S16_LLM3_03_MULTI_REVIEW.md`, 2026-04-20): Codex unavailable (repeated HTTP 403); Gemini + Lead proceeded per skill fallback. Three consensus recommendations + one Lead-added item applied:
+- **FPR added to `CategoryMetrics`** (Gemini): benign-bucket precision/recall are structurally zero; FPR is the meaningful metric. Now every category carries `{ precision, recall, f1, fpr, samples }`. Benign holdout FPR = 0.000 added to baseline doc.
+- **`totalSamples` tracks `processedCount`** (Gemini): was `filtered.length`, which would desync from the matrix sum if the classifier ever errored. Now always self-consistent.
+- **Random suffix on persisted filenames** (Gemini): `eval-<runAt>-<6charRandom>.json` so concurrent CI runs can't collide in the same millisecond.
+- **Domain-propagation test added** (Lead): mock classifier asserts `opts.domain` is forwarded; covers the default `core` and an explicit `crypto` override.
+
+**Test totals**: 24 new tests (up from 20 after pre-commit fixes); **139 total llm-gateway tests** (up from 115 baseline, net +24).
 
 **Description**: Build the measurement tool that defines what "the ML classifier is better than rule-based" means. A labelled corpus of 200+ injection samples (100 malicious spread across four categories, 100 benign, 20 adversarial boundary cases) is curated under `packages/llm-gateway/tests/fixtures/injection-corpus.ts`. The corpus uses a stratified 80/20 train/holdout split so LLM3-02 cannot overfit by tuning against the same samples the baseline is measured on. The samples must **not** be derived by paraphrasing the existing regex patterns — otherwise the ML classifier looks artificially strong against rule-based. A small `runEval(classifier, corpus)` function produces a confusion matrix, overall precision/recall/F1, and a per-category breakdown. The rule-based baseline is computed on the holdout split, the numbers are recorded (not asserted as pass/fail) in `docs/04-specs/injection-eval-baseline.md`, and the Senior Dev signs off on corpus quality before LLM3-02 consumes it.
 

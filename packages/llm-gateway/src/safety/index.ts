@@ -30,6 +30,18 @@ export type { StreamingFilterConfig, ChunkResult } from './streaming-content-fil
 export { DEFAULT_CONTENT_PATTERNS } from './content-patterns.js';
 export type { ContentPattern } from './content-patterns.js';
 
+// eval harness (LLM3-03)
+export { runEval, persistEvalResult } from './eval-harness.js';
+export type {
+  EvalSample,
+  EvalCategory,
+  EvalResult,
+  EvalRunOptions,
+  EvalError,
+  ConfusionMatrix,
+  CategoryMetrics,
+} from './eval-harness.js';
+
 export type {
   ContentFilterStage,
   ContentFilterVerdict,

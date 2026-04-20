@@ -19,6 +19,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:eval": "vitest run tests/safety/eval-harness.test.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
