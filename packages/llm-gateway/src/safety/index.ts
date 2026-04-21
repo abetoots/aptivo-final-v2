@@ -42,6 +42,25 @@ export type {
   CategoryMetrics,
 } from './eval-harness.js';
 
+// ML injection classifier (LLM3-02)
+export {
+  createMlInjectionClassifier,
+  asAsyncInjectionClassifier,
+  ModelVerdictSchema,
+} from './ml-injection-classifier.js';
+export type {
+  AsyncInjectionClassifier,
+  ModelClient,
+  ModelVerdict,
+  Logger,
+  MlClassifierDeps,
+  UsageSink,
+  SafetyInferenceRecord,
+} from './ml-injection-classifier.js';
+
+export { createReplicateClient } from './model-client.js';
+export type { ReplicateClientConfig } from './model-client.js';
+
 export type {
   ContentFilterStage,
   ContentFilterVerdict,

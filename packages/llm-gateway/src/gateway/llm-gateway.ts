@@ -20,7 +20,7 @@ import type { BudgetService } from '../budget/budget-service.js';
 import type { UsageLogger } from '../usage/usage-logger.js';
 import type { TokenBucket } from '../rate-limit/token-bucket.js';
 import { validateOutput, validateTextOutput } from '../validation/output-validator.js';
-import type { InjectionClassifier } from '../safety/injection-classifier.js';
+import type { AsyncInjectionClassifier } from '../safety/ml-injection-classifier.js';
 import type { ContentFilter } from '../safety/content-filter.js';
 import type { ProviderRouter } from '../routing/provider-router.js';
 import type { RoutingStrategy } from '../routing/routing-types.js';
@@ -38,8 +38,16 @@ export interface GatewayDeps {
   modelToProvider: Record<string, string>;
   /** maps provider ID to fallback provider ID (one-hop) */
   fallbackMap?: Record<string, string>;
-  /** optional injection classifier (LLM2-01) */
-  injectionClassifier?: InjectionClassifier;
+  /**
+   * Optional injection classifier. Must be async-shaped so both the
+   * rule-based (LLM2-01, sync) and ML wrapper (LLM3-02, HTTP) paths
+   * share one branch. Callers holding a synchronous classifier should
+   * wrap it via `asAsyncInjectionClassifier` at composition time — NOT
+   * inside the gateway hot path (historical probe-based dispatch was
+   * removed because it issued a real model call per request to detect
+   * the return shape).
+   */
+  injectionClassifier?: AsyncInjectionClassifier;
   /** optional content filter (LLM2-02) */
   contentFilter?: ContentFilter;
   /** optional multi-provider router (LLM2-04) */
@@ -120,7 +128,10 @@ export function createLlmGateway(deps: GatewayDeps) {
         console.warn(`llm budget warning: domain=${request.domain}`, budgetResult.value);
       }
 
-      // step 3: injection classifier (optional)
+      // step 3: injection classifier (optional). Gateway takes the async
+      // shape only — composition root wraps sync classifiers once. No
+      // per-request probe (removed after pre-commit review flagged it as
+      // a per-request inference call).
       if (deps.injectionClassifier) {
         for (const msg of request.messages) {
           // extract text from string or ContentPart[]
@@ -130,7 +141,7 @@ export function createLlmGateway(deps: GatewayDeps) {
               ? msg.content.filter((p: { type?: string; text?: string }) => p.type === 'text').map((p: { text?: string }) => p.text ?? '').join(' ')
               : '';
           if (!text) continue;
-          const classifyResult = deps.injectionClassifier.classify(text, request.domain);
+          const classifyResult = await deps.injectionClassifier.classify(text, request.domain);
           if (classifyResult.ok && classifyResult.value.verdict === 'block') {
             return Result.err({ _tag: 'PromptInjectionBlocked' as const, verdict: classifyResult.value });
           }

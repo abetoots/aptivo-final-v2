@@ -61,4 +61,9 @@ export const DEFAULT_FLAGS: FeatureFlag[] = [
     enabled: false,
     description: 'enable streaming content filter (deny-by-default)',
   },
+  {
+    key: 'ml-injection-classifier',
+    enabled: false,
+    description: 'LLM3-02: route injection detection through the ML classifier with rule-based fallback (Replicate). S16 note: runtime toggle lives at env ML_INJECTION_ENABLED until the flag service exposes a sync cache peek (S17).',
+  },
 ];

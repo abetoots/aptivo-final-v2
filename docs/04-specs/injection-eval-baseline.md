@@ -80,8 +80,19 @@ Reported for completeness. LLM3-02 tuning must not target these numbers.
 
 Signed off via commit 2026-04-20 (sign-off is implicit in the baseline doc being committed; future corpus changes require a new baseline run and sign-off).
 
-## 7. Change Log
+## 7. ML Classifier Comparison (pending)
+
+LLM3-02 shipped the ML classifier wrapper + Replicate `ModelClient` adapter behind the `ml-injection-classifier` feature flag (default off). The eval harness is vendor-independent and will accept the ML classifier via the same `AsyncInjectionClassifier` interface the rule-based classifier is adapted to.
+
+The live ML-vs-baseline comparison is **blocked on Replicate procurement** (vendor credentials + model training) and is flagged as a Sprint 17 pre-enablement task. Once live, this section will be filled in with:
+
+- Per-category precision / recall / F1 / FPR for the ML classifier on the `holdout` split
+- Delta vs. rule-based baseline (target: recall ≥ 0.80, precision ≥ 0.90, benign FPR < 0.05)
+- Enablement recommendation (GO / NO-GO / adjust thresholds)
+
+## 8. Change Log
 
 | Date | Change | Author |
 |---|---|---|
 | 2026-04-20 | Initial corpus + baseline (LLM3-03) | Sprint 16 |
+| 2026-04-20 | LLM3-02 shipped behind flag; ML comparison deferred to post-procurement | Sprint 16 |

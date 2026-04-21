@@ -10,6 +10,17 @@ import type { DrizzleClient } from './types.js';
 import { llmUsageLogs } from '../schema/llm-usage.js';
 
 // -- local types (mirroring @aptivo/llm-gateway UsageStore) --
+//
+// DRIFT RISK: this interface is intentionally duplicated from
+// `packages/llm-gateway/src/usage/usage-logger.ts` so the database
+// package doesn't depend on llm-gateway (architectural layering:
+// database is a leaf of domain packages). Any widening of the
+// gateway's `requestType` union (e.g. adding 'safety_inference' in
+// LLM3-02) must be mirrored here manually.
+//
+// S17 task: move `UsageRecord` to `@aptivo/types` so one definition
+// serves both sides. Until then, any PR that touches the gateway's
+// UsageRecord must also touch this file.
 
 export interface UsageRecord {
   workflowId?: string;
@@ -21,7 +32,10 @@ export interface UsageRecord {
   completionTokens: number;
   totalTokens: number;
   costUsd: number;
-  requestType: 'completion' | 'embedding' | 'vision';
+  // 'safety_inference' added in LLM3-02 for the ML injection classifier so
+  // its spend is attributed alongside completion/embedding traffic. The DB
+  // column is varchar(50) with no check constraint — TS union is authoritative.
+  requestType: 'completion' | 'embedding' | 'vision' | 'safety_inference';
   latencyMs: number;
   wasFallback: boolean;
   primaryProvider?: string;

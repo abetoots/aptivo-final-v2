@@ -179,7 +179,31 @@ Post-review revisions (two rounds: Plan agent critique during design, then multi
 
 ---
 
-#### LLM3-02: ML Injection Classifier with Rule-Based Fallback (5 SP)
+#### LLM3-02: ML Injection Classifier with Rule-Based Fallback (5 SP) — ✅ COMPLETE (2026-04-20)
+
+**Delivery notes**:
+- `createMlInjectionClassifier` wraps the rule-based classifier with a `ModelClient` call. On success within timeout (default 500 ms) + Zod-valid shape, ML wins; on timeout / HTTP error / Zod parse failure, falls back and emits `logger.warn({ event })` with one of `ml_classifier_timeout`, `ml_classifier_error`, `ml_classifier_invalid_response`.
+- `createReplicateClient({ url, token, fetch, version })` — minimal `ModelClient` adapter; POSTs to Replicate predictions; unwraps `{ output: ... }` envelopes OR the raw body for other vendor shapes.
+- **Plan deviation (documented inline in `ml-injection-classifier.ts`)**: the plan called this a "drop-in replacement for `InjectionClassifier`" but HTTP inference is inherently async and incompatible with the existing synchronous `Result<InjectionVerdict, never>` contract. Resolution: introduced `AsyncInjectionClassifier` type (returns `Promise<Result<...>>`); rule-based classifier adapted via `asAsyncInjectionClassifier(sync)`. Gateway `complete()` updated to `await` classifier calls. `GatewayDeps.injectionClassifier` accepts either shape (duck-typed probe decides which).
+- ML inference records `llm_usage_logs` rows with `requestType: 'safety_inference'` (the existing column — multi-review §G1 correction). New `UsageLogger.logSafetyInference({ domain, provider, model, costUsd, latencyMs })`; database adapter `UsageRecord.requestType` union widened accordingly.
+- Logger + feature-flag DI honored — packages never import from `apps/web`. `services.ts` provides `safetyLoggerBridge` wrapping `log.*`, binds `isEnabled()` via env (`ML_INJECTION_ENABLED=true`) for now; a sync-accessible feature-flag cache is a later polish.
+- Vendor lock: Replicate only. `ModelClient` interface keeps the door open for a HuggingFace swap without changing the wrapper.
+- Feature flag `ml-injection-classifier` added to `DEFAULT_FLAGS` with `enabled: false` — ship-behind-flag; production enablement is the S17 decision after live Replicate eval numbers are collected.
+- **ML eval vs. baseline** (plan AC): the eval harness + corpus from LLM3-03 is vendor-independent and ready. Running against live Replicate requires vendor procurement + model training (not in scope). The `injection-eval-baseline.md` will gain an ML row post-procurement; flagged as an S17 pre-enablement task.
+
+**Pre-commit multi-model review** (`S16_LLM3_02_MULTI_REVIEW.md`, 2026-04-21): Codex MCP session expired; Gemini + Lead proceeded per skill fallback. Gemini found one critical bug and one high-impact issue, both Lead-verified and fixed:
+- **🚨 CRITICAL — duck-typed probe issued real ML inference per request**: `isAsyncClassifier(c)` called `c.classify('', 'core')` just to test for thenable return shape, and was invoked inside `complete()` on every request. For a real ML classifier wired in, every gateway call would have triggered an extra Replicate inference with an empty prompt — doubling cost, doubling latency, burning rate limits. **Fix**: removed the probe entirely. `GatewayDeps.injectionClassifier` now accepts `AsyncInjectionClassifier` only; sync classifiers are wrapped via `asAsyncInjectionClassifier()` once at composition time. Added two call-count regression tests that assert `classify()` is invoked exactly once per message per `complete()`.
+- **⚠️ HIGH — feature-flag gate bypassed the FeatureFlagService**: `services.ts` bound `isEnabled` to `process.env.ML_INJECTION_ENABLED` rather than the flag service. **Fix**: strengthened the comment and description to make the env-var override explicit; tracked proper wiring as S17 work (requires either widening `isEnabled` to async or exposing a sync cache peek on `FeatureFlagService`).
+- **🔸 MEDIUM — `UsageRecord.requestType` drift risk**: duplicate interface in gateway + database adapter. **Fix**: added explicit `DRIFT RISK` comment in the adapter; tracked `UsageRecord` consolidation into `@aptivo/types` as S17 work (proper fix requires cross-package refactor).
+- **Additional Lead-surfaced fix**: `logSafetyInference.domain` widened from `providers.Domain` to `string` with a cast at the `store.insert` boundary — fixes a type-boundary friction where `SafetyInferenceRecord.domain` was deliberately typed `string` for cross-package compatibility.
+
+**Test totals**: 18 new tests total (10 ML classifier + 6 Replicate client + 2 gateway call-count regression); **161 total llm-gateway tests** (up from 139).
+
+---
+
+(original micro-task breakdown below preserved for reference)
+
+##### Original scope breakdown — LLM3-02
 
 **Description**: Ship an ML classifier that wraps the existing rule-based one. On model success within the 500ms timeout and with a Zod-valid response shape, the ML verdict is returned. On timeout, HTTP error, or Zod parse failure, the classifier falls back to the rule-based verdict and emits a structured warning via the injected safe-logger. The entire ML path is gated behind the `ml-injection-classifier` feature flag (default off); with the flag off, no model call is made at all. The vendor is locked to **Replicate** before sprint start — the `ModelClient` interface is kept minimal so a HuggingFace swap remains a post-sprint decision, not a mid-sprint branch. ML inference latency and cost are logged to `llm_usage_logs` with `category: 'safety_inference'` so spend on safety classifiers shows up alongside generation spend. Env var reads (`ML_INJECTION_MODEL_URL`, `ML_INJECTION_MODEL_TOKEN`) happen in `apps/web/src/lib/services.ts` — packages never read env. Feature-flag state and logger instance are passed into the factory via DI callbacks (`isEnabled`, `logger`).
 

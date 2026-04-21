@@ -158,6 +158,18 @@ import {
   createProviderRouter,
 } from '@aptivo/llm-gateway';
 import type { LLMProvider } from '@aptivo/llm-gateway';
+import {
+  createInjectionClassifier,
+  createMlInjectionClassifier,
+  createReplicateClient,
+  asAsyncInjectionClassifier,
+  type AsyncInjectionClassifier,
+  type Logger as SafetyLogger,
+} from '@aptivo/llm-gateway/safety';
+
+// safe-logger bridge — adapts apps/web's log.* into the package's minimal
+// Logger contract (packages must not import from apps/web directly)
+import { log as appLog } from './logging/safe-logger.js';
 
 // ---------------------------------------------------------------------------
 // lazy initialization helper
@@ -601,15 +613,84 @@ export const getLlmGateway = lazy(() => {
     ? createProviderRouter({ providers, modelToProvider })
     : undefined;
 
+  const usageLogger = new UsageLogger(usageLogStore);
+  const injectionClassifier = buildInjectionClassifier(usageLogger);
+
   return createLlmGateway({
     providers,
     budgetService: new BudgetService(budgetStore),
-    usageLogger: new UsageLogger(usageLogStore),
+    usageLogger,
     rateLimiter: new TokenBucket(rateLimitStore),
     modelToProvider,
     router,
+    injectionClassifier,
   });
 });
+
+// ---------------------------------------------------------------------------
+// LLM3-02 — injection classifier composition (rule-based + optional ML wrapper)
+// ---------------------------------------------------------------------------
+
+// adapter so the package's minimal Logger contract doesn't need to import
+// from apps/web. log.* from safe-logger accepts a context object that the
+// package already passes in the expected shape.
+const safetyLoggerBridge: SafetyLogger = {
+  debug: (msg, ctx) => appLog.debug(msg, ctx),
+  info: (msg, ctx) => appLog.info(msg, ctx),
+  warn: (msg, ctx) => appLog.warn(msg, ctx),
+  error: (msg, ctx) => appLog.error(msg, ctx),
+};
+
+function buildInjectionClassifier(usageLogger: UsageLogger): AsyncInjectionClassifier {
+  const ruleBasedFallback = asAsyncInjectionClassifier(createInjectionClassifier());
+
+  const modelUrl = process.env.ML_INJECTION_MODEL_URL;
+  const modelToken = process.env.ML_INJECTION_MODEL_TOKEN;
+  // ML classifier ships only when the environment is configured AND the
+  // feature flag is on at call time. With no URL/token the rule-based
+  // classifier is the only path — the ML wrapper would be a stub call.
+  if (!modelUrl || !modelToken) {
+    return ruleBasedFallback;
+  }
+
+  const modelClient = createReplicateClient({
+    url: modelUrl,
+    token: modelToken,
+    version: process.env.ML_INJECTION_MODEL_VERSION,
+  });
+
+  // KNOWN LIMITATION (S17 follow-up): the ml-injection-classifier flag lives
+  // in DEFAULT_FLAGS but is NOT bound to the FeatureFlagService yet. The ML
+  // classifier's isEnabled contract is sync (`() => boolean`) because the
+  // Classify happens on the LLM request hot path, and the flag service's
+  // isEnabled is async (Redis-backed). Two options to resolve, tracked for
+  // S17:
+  //   (a) widen isEnabled to `() => boolean | Promise<boolean>` and await
+  //       inside the wrapper, OR
+  //   (b) expose a sync cache peek on FeatureFlagService.
+  // Until then, this binding uses the env var ML_INJECTION_ENABLED as the
+  // runtime toggle. Admins flipping the flag in DEFAULT_FLAGS / env
+  // FEATURE_FLAGS JSON do NOT affect this classifier — they must set the
+  // env var. This is a deliberate tradeoff, documented so the flag
+  // registry's ml-injection-classifier entry isn't misinterpreted as live.
+  const isEnabled = (): boolean => {
+    return process.env.ML_INJECTION_ENABLED === 'true';
+  };
+
+  return createMlInjectionClassifier({
+    modelClient,
+    ruleBasedFallback,
+    isEnabled,
+    logger: safetyLoggerBridge,
+    timeoutMs: Number(process.env.ML_INJECTION_TIMEOUT_MS) || undefined,
+    usageSink: {
+      logSafetyInference: (rec) => usageLogger.logSafetyInference(rec),
+    },
+    provider: 'replicate',
+    model: process.env.ML_INJECTION_MODEL_VERSION ?? 'aptivo/injection-detector:latest',
+    costPerCallUsd: Number(process.env.ML_INJECTION_COST_USD) || 0,
+  });
+}
 
 // ---------------------------------------------------------------------------
 // crypto domain stores (S6-INF-CRY)

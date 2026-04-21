@@ -22,7 +22,13 @@ export interface UsageRecord {
   completionTokens: number;
   totalTokens: number;
   costUsd: number;
-  requestType: 'completion' | 'embedding' | 'vision';
+  /**
+   * Request type. `safety_inference` added in LLM3-02 for the ML injection
+   * classifier so its spend is attributed alongside completion/embedding
+   * traffic. The DB column is a varchar(50) with no check constraint — the
+   * TS union is the source of truth.
+   */
+  requestType: 'completion' | 'embedding' | 'vision' | 'safety_inference';
   latencyMs: number;
   wasFallback: boolean;
   primaryProvider?: string;
@@ -74,6 +80,39 @@ export class UsageLogger {
       latencyMs,
       wasFallback: opts?.wasFallback ?? false,
       primaryProvider: opts?.primaryProvider,
+    });
+  }
+
+  /**
+   * LLM3-02: Records a safety-inference call (e.g. the ML injection
+   * classifier). These calls don't produce tokens or completions — only
+   * a per-call cost and latency — so the token fields are zeroed.
+   * `domain` is typed as `string` (not the narrow providers.Domain union)
+   * so the safety package's `SafetyInferenceRecord` — which uses `string`
+   * for cross-boundary compatibility — can be forwarded without a cast.
+   */
+  async logSafetyInference(input: {
+    domain: string;
+    provider: string;
+    model: string;
+    costUsd: number;
+    latencyMs: number;
+  }): Promise<void> {
+    await this.store.insert({
+      // cast at the boundary: `UsageRecord.domain` is the narrow
+      // providers.Domain union; the safety package (and the DB column
+      // itself) accept any string. The narrow type is a conservative
+      // TS-level constraint, not a runtime enforcement.
+      domain: input.domain as Domain,
+      provider: input.provider,
+      model: input.model,
+      promptTokens: 0,
+      completionTokens: 0,
+      totalTokens: 0,
+      costUsd: input.costUsd,
+      requestType: 'safety_inference',
+      latencyMs: input.latencyMs,
+      wasFallback: false,
     });
   }
 }
