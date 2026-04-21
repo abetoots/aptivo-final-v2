@@ -1,8 +1,11 @@
 # WebSocket Lifecycle Specification
 
 **Version**: 1.0.0
-**Status**: Draft
+**Status**: Implemented (Sprint 16, WFE3-02)
+**Server**: `apps/ws-server` (new Node.js process; `ws` library + `jose` for JWT)
+**Frame schemas**: `packages/types/src/websocket-events.ts` (Zod — authoritative contract)
 **Closes**: RC-1 (WebSocket connection lifecycle), RC-2 (WebSocket reconnection behavior)
+**Change discipline**: any modification to frame shape or error codes requires an explicit migration note + v1.1 bump. Frozen at v1.0 by end of S16.
 
 ---
 
@@ -59,18 +62,40 @@ If outside replay window, server sends `{ type: 'full_sync' }` requiring client 
 
 ## 3. Error Codes
 
-| Code | Reason | Action |
-|------|--------|--------|
-| 1000 | Normal close | No reconnect |
-| 1001 | Going away (deployment) | Auto reconnect |
-| 1008 | Policy violation (auth) | Re-authenticate |
-| 1011 | Server error | Reconnect with backoff |
-| 4001 | Auth timeout | Re-authenticate |
-| 4002 | Rate limited | Retry after delay |
+| Code | Reason | Action | Emitted by |
+|------|--------|--------|-----------|
+| 1000 | Normal close | No reconnect | Client/server |
+| 1001 | Going away (deployment) | Auto reconnect | Server-initiated shutdown |
+| 1008 | Policy violation (heartbeat miss) | Re-authenticate | Heartbeat timer (3+ missed pongs) |
+| 1011 | Server error | Reconnect with backoff | Unexpected server failure |
+| 1013 | Try again later (backpressure) | Reconnect with delay | Outbound queue > capacity |
+| 4001 | Auth timeout / invalid auth | Re-authenticate | Auth frame verification failure; auth deadline elapsed |
+| 4002 | Rate limited | Retry after delay | Inbound frame rate exceeds per-connection cap |
+| 4003 | Token expired mid-session | Re-authenticate | Watchdog detected `exp` passed |
 
-## 4. Phase 2 Status
+**Committed in code** at `packages/types/src/websocket-events.ts` (`WsCloseCodes` enum). Adding a new code requires a v1.1 bump + server support + client awareness.
 
-WebSocket support is **documented but not implemented** in Phase 2. The specification defines the contract for Phase 3 implementation. Phase 2 uses polling-based updates via Inngest `step.waitForEvent()` for real-time behavior.
+## 4. Implementation Notes (Sprint 16)
+
+Implemented in `apps/ws-server` with the following composition:
+
+| Module | Responsibility |
+|---|---|
+| `src/server.ts` | Bootstrap, lifecycle, heartbeat / expiry interval timers |
+| `src/connection-manager.ts` | Per-connection state machine (auth, subscribe, deliver, heartbeat, expiry) |
+| `src/auth.ts` | Generic HS256 JWT verify (parallel impl to HITL — S17 consolidation task) |
+| `src/event-bridge.ts` | In-process event fanout (Redis pub/sub → S17) |
+| `src/replay-buffer.ts` | Per-topic ring buffer, 5-min TTL + 1000-event cap |
+| `src/rate-limit.ts` | Sliding-window inbound frame rate limiter (50/sec default per spec) |
+| `src/backpressure.ts` | Bounded outbound queue (1000 default per spec) |
+| `src/metrics.ts` | Counters: `ws_active_connections`, `ws_auth_failures_total`, messages sent, pub/sub latency |
+
+### S17 follow-ups (tracked in sprint plan)
+
+- Inngest → Redis pub/sub bridge so `apps/web` events reach horizontally-scaled ws-server instances.
+- Consolidate JWT verification with HITL's `jwt-manager` into a shared module.
+- Staging deploy verification (Railway manifest committed at `apps/ws-server/railway.json`; no production deployment performed in S16).
+- Wire `onAuthFailure` callback to the `AuditService` from the composition root so 4001/4003 events are captured for credential-stuffing detection.
 
 ---
 

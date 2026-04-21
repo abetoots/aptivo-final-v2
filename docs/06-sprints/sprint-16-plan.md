@@ -341,7 +341,52 @@ Post-review revisions (two rounds: Plan agent critique during design, then multi
 
 ### Phase C: WebSocket Server (Days 2-9)
 
-#### WFE3-02: WebSocket Server + Protocol Lock (6 SP)
+#### WFE3-02: WebSocket Server + Protocol Lock (6 SP) — ✅ COMPLETE (2026-04-21)
+
+**Delivery notes**:
+- New `apps/ws-server` Node.js app running on port 3001 (default) — mirrors `apps/spike-runner` scaffolding. Dependencies: `ws`, `jose`, `@aptivo/types`, `zod`.
+- Frame schemas frozen in `packages/types/src/websocket-events.ts` (Zod discriminated unions for inbound + outbound; `WsCloseCodes` enum). v1.0 spec contract — any shape change requires a v1.1 bump. Spec doc lifted to `Implemented (Sprint 16)` with committed error-code table.
+- Protocol: `auth_required` → `auth` → `auth_ok` / `auth_failed`; `subscribe` / `unsubscribe` / `resume` (with replay buffer lookup); `ping` / `pong` heartbeat; `event` fan-out; `reconnect` + `full_sync` directives; `error` for RBAC/shape failures.
+- Error codes used: 1000 / 1001 / 1008 (heartbeat miss) / 1013 (backpressure) / 4001 (auth timeout/fail) / 4002 (rate-limit) / **4003 (token expired mid-session — new code added in v1.0)**.
+- Pure modules with TDD: `replay-buffer.ts` (per-topic ring, 5-min TTL + 1000-event cap), `rate-limit.ts` (sliding-window, 50 frames/sec default), `backpressure.ts` (bounded outbound queue, 1000-cap), `auth.ts` (generic HS256 JWT verify). Each has a standalone test file.
+- Connection handler (`connection-manager.ts`) is the state machine — all collaborators (outbound queue, rate limiter, replay buffer, token verifier, authorize callback, close, clock) injected for testability. No direct `ws` dependency; 16 unit tests cover the full state machine.
+- Event bridge in-process for S16 (tracks attached handlers; `publish(event)` stores in replay + fans out). Redis pub/sub bridge for horizontal scaling deferred to S17.
+- Metrics (`metrics.ts`): `activeConnections`, `messagesSent`, `authFailuresTotal`, `lastPubsubLatencyMs`. Composition root can forward to observability.
+- `onAuthFailure` hook invoked on every 4001 / 4003 close and when token verification rejects — ready for the composition root to wire into `AuditService` for credential-stuffing detection (S17 wiring; hook is live in S16).
+- Railway manifest at `apps/ws-server/railway.json` with `rootDirectory` scoped `watchPatterns`, `ON_FAILURE` restart policy, and `/health` health-check placeholder. Staging deploy NOT performed in S16 — verification deferred to S17 pre-enablement.
+- Integration test (`server.integration.test.ts`) starts a real server on an ephemeral port, connects via `ws` client, walks the full auth → subscribe → publish → receive flow. Also covers 4001 on bogus token + 403 on forbidden topic.
+- **Plan deviation** (documented inline): the plan called for extracting JWT verification from HITL into a shared module. Instead, `apps/ws-server/src/auth.ts` uses a parallel minimal `jose`-based verifier for generic session JWTs (the ws-server expects a different claim set than HITL — sub + roles + exp, not requestId/action/channel/jti). Consolidating both call sites behind one shared module is tracked as S17 cleanup work.
+- 41 tests (7 auth + 7 replay-buffer + 4 rate-limit + 4 backpressure + 16 connection-manager + 3 server integration). All pass in <400 ms.
+
+**Pre-commit multi-model review** (`S16_WFE3_02_MULTI_REVIEW.md`, 2026-04-21): Gemini and Codex both reviewed; both found real critical defects. Codex was especially precise (line numbers + bytes). Fixes applied:
+
+- **🚨 CRITICAL — Backpressure was dormant for outbound-only traffic** (both): `markBlocked` was only flipped after inbound `message` events. A subscriber-only client with a slow socket would never engage the queue path, and the 1000-cap was bypassed; the ws library's internal buffer would grow unbounded. **Fix**: added `beforeEnqueue` hook to the outbound queue; wired to a watermark check on `socket.bufferedAmount` so every outbound frame triggers backpressure evaluation. Removed the unreachable `depth() > capacity` close branch — the real overflow signal is `enqueue() === false`, which `deliverEvent`/`sendPing` now route through a `closeConn(1013)` call.
+
+- **🚨 Heartbeat off-by-one** (Codex): spec says "3 missed pongs trigger close"; code fired on the 4th miss because of `>` vs `>=`. The unit test encoded the bug. **Fix**: changed to `>= maxMissedPongs`; test rewritten to lock in the spec-compliant behaviour (close on the 3rd tick, not the 4th).
+
+- **🚨 Frames could fire after close initiation** (Codex): `deps.close()` was called but the handler's `auth` and `subs` weren't cleared. A pub/sub event arriving between close-initiation and the socket's close callback would still get queued and sent. **Fix**: added a `closed` flag inside the handler; all outbound methods (`deliverEvent`, `sendPing`, `send`) short-circuit when closed. New regression test asserts that events delivered after `checkTokenExpiry` triggers a close are silently dropped.
+
+- **🟡 Replay buffer topic leak** (Gemini): `rings` Map never pruned stale topic entries — memory grew linearly with unique topics ever published. **Fix**: `eventsSince` now deletes the ring entry when pruning leaves zero events.
+
+- **🟡 Railway health-check pointed to non-existent route** (Codex): `railway.json` declared `/health` but the server exposed only WebSocket — deploy would flap. **Fix**: server now constructs an `http.Server` with a `/health` route returning 200 + connection-count snapshot; `WebSocketServer` shares the HTTP server via the `server` option. New integration test verifies `/health` returns 200.
+
+- **🟡 Shutdown drain race** (Gemini): `stop()` broadcast `reconnect` then immediately closed sockets — clients could miss the frame. **Fix**: 100 ms drain delay between broadcast and close; HTTP server also closed cleanly.
+
+Bonus fix (caught while updating the spec doc): the `s14-int2-02-doc-closure.doclint.test.ts` Sprint 14 doc-lint test asserted the spec was "documented but not implemented". Updated to assert the new "Implemented (Sprint 16, WFE3-02)" state — closes a stale assertion now that the spec is live.
+
+**Test totals**: 44 ws-server tests (up from 41 with backpressure-engagement, off-by-one regression, post-close silence, and `/health` integration tests added). Web tests still at 1,796 (no regressions).
+
+**Deferred to S17**:
+- Pong-within-10s deadline (separate per-ping timer; spec polish, not safety-critical).
+- Subscription cap per connection (needs sizing study).
+- Real Inngest → Redis pub/sub bridge for multi-instance fan-out.
+- Consolidate ws-server JWT verify with HITL's `jwt-manager`.
+- Wire `onAuthFailure` → `AuditService` in the composition root.
+- Staging deploy verification on Railway.
+
+---
+
+##### Original breakdown — WFE3-02 (6 SP, re-estimated from 3 SP)
 
 *Re-estimated from 5 SP after multi-model review: verified that no generic `verifyJwt` utility exists today (only HITL-specific verification in `packages/hitl-gateway/src/decision/multi-decision-service.ts`). JWT-verification extraction into a shared module is a real refactor inside this task, not a re-export.*
 

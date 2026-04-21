@@ -88,9 +88,12 @@ describe('INT2-02: websocket-lifecycle.md', () => {
     expect(content).toContain('4002');
   });
 
-  it('has phase 2 status section', () => {
-    expect(content).toContain('## 4. Phase 2 Status');
-    expect(content).toContain('documented but not implemented');
+  it('declares an implementation-status section', () => {
+    // Sprint 16 (WFE3-02) replaced the Phase 2 "documented but not
+    // implemented" status with an implementation section. The spec is
+    // now Implemented v1.0; the doclint flips to assert the new state.
+    expect(content).toContain('Implemented (Sprint 16, WFE3-02)');
+    expect(content).toContain('## 4. Implementation Notes');
   });
 
   it('has traceability section closing RC-1 and RC-2', () => {

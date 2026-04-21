@@ -9,6 +9,10 @@
 export { Result } from './result.js';
 export type { Success, Failure, Result as ResultType } from './result.js';
 
+// WFE3-02: WebSocket protocol contract (shared between apps/ws-server and
+// any UI consumer). Zod frame schemas + close-code enum.
+export * from './websocket-events.js';
+
 // Tagged union error types and factory functions
 export type {
   ValidationError,

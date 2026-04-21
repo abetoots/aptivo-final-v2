@@ -1,0 +1,32 @@
+{
+  "name": "@aptivo/ws-server",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@aptivo/types": "workspace:*",
+    "jose": "^5.10.0",
+    "ws": "^8.18.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@aptivo/typescript-config": "workspace:*",
+    "@types/node": "^25.3.3",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "5.9.2",
+    "vitest": "^4.0.18"
+  }
+}
