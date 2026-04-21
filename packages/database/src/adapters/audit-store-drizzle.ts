@@ -105,6 +105,50 @@ export function createDrizzleAuditStore(db: DrizzleClient): TransactionalAuditSt
             },
           });
       },
+
+      async aggregateAccessPattern(params: {
+        actor: string;
+        resourceType: string;
+        actions?: readonly string[];
+        windowMs: number;
+      }) {
+        // LLM3-04: counts recent audit_logs rows for the (actor, resourceType)
+        // tuple over the configured window so the anomaly detector can
+        // compare against its baseline. Returns 0-count + empty window
+        // when nothing matches so cold-start callers get a valid pattern.
+        //
+        // `actions`: when provided, only rows whose action is in the list
+        // are counted (IN clause). When omitted, all actions are counted
+        // — needed because the PII audit middleware emits multiple
+        // action variants (pii.read, pii.read.bulk, pii.read.export) and
+        // a fixed-string filter would silently miss real events.
+        const windowEnd = new Date();
+        const windowStart = new Date(windowEnd.getTime() - params.windowMs);
+
+        const actionFilter = params.actions && params.actions.length > 0
+          ? sql`AND action = ANY(${params.actions as string[]})`
+          : sql``;
+
+        const result = await client.execute(
+          sql`SELECT COUNT(*)::int AS count FROM ${auditLogs}
+              WHERE user_id = ${params.actor}
+                AND resource_type = ${params.resourceType}
+                ${actionFilter}
+                AND created_at >= ${windowStart}
+                AND created_at <= ${windowEnd}`,
+        );
+        const rows = Array.isArray(result) ? result : (result as { rows: Array<{ count: number }> }).rows;
+        const count = rows[0]?.count ?? 0;
+        return {
+          actor: params.actor,
+          resourceType: params.resourceType,
+          // representative label for display/logs; not used by the detector
+          action: params.actions?.join(',') ?? 'any',
+          count,
+          windowStart,
+          windowEnd,
+        };
+      },
     };
   }
 

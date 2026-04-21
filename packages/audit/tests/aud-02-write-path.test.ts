@@ -27,6 +27,16 @@ function createMockStore(overrides?: Partial<AuditStore>): AuditStore {
     lockChainHead: vi.fn().mockResolvedValue({ lastSeq: 0, lastHash: '0'.repeat(64) }),
     updateChainHead: vi.fn().mockResolvedValue(undefined),
     insert: vi.fn().mockResolvedValue({ id: 'audit-001' }),
+    // LLM3-04: added to AuditStore for anomaly-gate access-pattern lookups;
+    // default returns a zero-count aggregate (cold-start semantics)
+    aggregateAccessPattern: vi.fn().mockResolvedValue({
+      actor: 'test-actor',
+      resourceType: 'test-resource',
+      action: 'read',
+      count: 0,
+      windowStart: new Date(0),
+      windowEnd: new Date(0),
+    }),
     ...overrides,
   };
 }

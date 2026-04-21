@@ -113,7 +113,14 @@ export type LLMError =
   | { _tag: 'OutputValidationFailed'; zodErrors: string }
   | { _tag: 'NetworkError'; cause: unknown }
   | { _tag: 'PromptInjectionBlocked'; verdict: InjectionVerdict }
-  | { readonly _tag: 'ContentBlocked'; readonly stage: 'pre_request' | 'post_response'; readonly reason: string; readonly category: string };
+  | { readonly _tag: 'ContentBlocked'; readonly stage: 'pre_request' | 'post_response'; readonly reason: string; readonly category: string }
+  /**
+   * LLM3-04: the anomaly gate detected abnormal access patterns and the
+   * decision exceeded the block threshold. `cooldownMs` is present for
+   * throttle-vs-block symmetry but is only set on throttle; callers that
+   * see `AnomalyBlocked` should not retry automatically.
+   */
+  | { readonly _tag: 'AnomalyBlocked'; readonly reason?: string; readonly cooldownMs?: number };
 
 // ---------------------------------------------------------------------------
 // provider interface

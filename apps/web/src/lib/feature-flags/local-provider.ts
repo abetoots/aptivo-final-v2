@@ -66,4 +66,9 @@ export const DEFAULT_FLAGS: FeatureFlag[] = [
     enabled: false,
     description: 'LLM3-02: route injection detection through the ML classifier with rule-based fallback (Replicate). S16 note: runtime toggle lives at env ML_INJECTION_ENABLED until the flag service exposes a sync cache peek (S17).',
   },
+  {
+    key: 'anomaly-blocking',
+    enabled: false,
+    description: 'LLM3-04: enable the anomaly gate to throttle/block LLM requests when audit-detected access patterns exceed a z-score threshold. S16 note: runtime toggle lives at env ANOMALY_BLOCKING_ENABLED until the flag service exposes a sync cache peek (S17) — same limitation as ml-injection-classifier.',
+  },
 ];

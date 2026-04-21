@@ -256,9 +256,34 @@ Post-review revisions (two rounds: Plan agent critique during design, then multi
 
 ---
 
-#### LLM3-04: Active Anomaly Blocking (3 SP)
+#### LLM3-04: Active Anomaly Blocking (3 SP) — ✅ COMPLETE (2026-04-21)
 
 *Re-estimated from 2 SP after multi-model review: the `getAccessPattern` audit-store query is net-new plumbing, not an existing utility.*
+
+**Delivery notes**:
+- `createAnomalyGate({ detector, getAccessPattern, isEnabled, logger, thresholds })` — decision layer sitting between `@aptivo/audit`'s detection-only anomaly detector and the LLM gateway pipeline. Maps z-scores to `{ action: 'pass' | 'throttle' | 'block', cooldownMs?, reason? }`. Defaults: `throttleAt: 0.7`, `blockAt: 0.9`, `throttleCooldownMs: 60_000`.
+- **Fail-open paths** (deliberate — a locked gateway on day 1 is worse than delayed block on day 3): cold-start (`reason: 'insufficient baseline data'`) → pass; detector error (Result.err) → pass + `logger.warn('anomaly_gate_error', {...})`; `getAccessPattern` throws → pass + logger.warn.
+- **Feature-flag gate**: when `isEnabled()` returns false, the gate short-circuits to pass without calling the detector OR `getAccessPattern`. Same env-var toggle pattern as LLM3-02 (`ANOMALY_BLOCKING_ENABLED=true` gates runtime; proper FeatureFlagService wiring deferred to S17).
+- **`LLMError` union extended** with `{ _tag: 'AnomalyBlocked', reason?, cooldownMs? }` — explicit union edit per plan AC.
+- **Gateway pipeline integration**: new step 3b (between injection classifier and content filter). Actor resolution is pluggable via new `GatewayDeps.resolveActor?: (request) => string | undefined` — S16 wires this to `() => undefined` (no actor context in `CompletionRequest` today), so the gate is skipped for all current traffic. Request→actor plumbing lands with S17 department-ID stamping (parallel to FA3-01).
+- **New `AuditStore.aggregateAccessPattern({ actor, resourceType, action?, windowMs })` method** — counts recent `audit_logs` rows for the (actor, resourceType) tuple in the window, returns zero-count + empty-window timestamps when no events match. Drizzle adapter implementation uses a raw SQL COUNT(*) with timestamp filters. Mock stores in existing tests updated with a zero-count default (cold-start semantics).
+- **Baseline computation**: S16 uses a placeholder constant baseline (`{ mean: 10, stdDev: 3, sampleSize: 100 }`) in `services.ts` — real historical aggregation is tracked as an S17 OBS task, since the scheduled baseline-builder job doesn't exist yet. Note: with sampleSize 100 (above detector's minBaselineSamples=5), the gate actually fires based on z-score. Operators deploying this in S16 should keep `ANOMALY_BLOCKING_ENABLED` off until the real baseline job runs.
+- **New `@aptivo/llm-gateway` → `@aptivo/audit` workspace dep** added so the gate can import `AccessPattern`, `AnomalyResult`, `AnomalyError` types. No cycle (audit does not depend on llm-gateway).
+- Feature flag `anomaly-blocking` added to `DEFAULT_FLAGS` with `enabled: false`.
+
+**Pre-commit multi-model review** (`S16_LLM3_04_MULTI_REVIEW.md`, 2026-04-21): Gemini and Codex both reviewed (Codex back after auth refresh). Codex found a **latent correctness bug** Gemini missed and flagged test-fixture disconnects from detector math. Fixes applied:
+- **🚨 Aggregate key mismatch (latent, silent until S17)**: gateway passes `request.domain` as `resourceType` but real audit rows use resource types like `'candidate'` / `'employee'` and actions like `'pii.read.bulk'`. Once S17 wires `resolveActor`, the aggregate would always return 0 and the gate would never fire. **Pre-commit fix**: widened `aggregateAccessPattern` to accept `actions?: readonly string[]` so S17 can pass a per-domain action whitelist; when omitted, NO action filter is applied (matches all rows for the tuple). Added a prominent S17 BLOCKER comment at the `getAccessPattern` binding in `services.ts` documenting the key-semantics decision S17 must make.
+- **Impossible test fixtures (Codex)**: tests used `score: 0.95, reason: 'z=5.2'` but real detector maps z=5.2 → score≈0.867. Fixed to use values that actually match the detector's normalization (`score = z / 6`). Tests now validate both the gate's threshold logic AND the detector→gate coupling.
+- **Missing test: `getAccessPattern` throws** (Codex). Added; asserts fail-open + `logger.warn('anomaly_gate_error', ...)`.
+- **Missing test: pipeline ordering** (Codex). Added; wires both injection-blocker + anomaly-blocker and asserts injection wins first, anomaly gate never called.
+
+**Deferred to S17** (tracked in S17 preview):
+- Adapter-level integration test for `aggregateAccessPattern` (requires test DB infra).
+- Aligning aggregate query with real audit schema (the S17 BLOCKER) — either per-domain action whitelist, or change the gateway to pass resource-specific keys, or query by domain.
+- Proper `anomaly-blocking` flag wiring (same env-var tradeoff as LLM3-02).
+- Real historical baseline job (replaces placeholder constant).
+
+**Test totals**: 17 new tests (11 gate-unit + 6 gateway-pipeline integration); **178 total llm-gateway tests** (up from 161). 67 audit + 1,796 web tests unchanged.
 
 **Description**: Wire the existing `AnomalyDetector` in `@aptivo/audit` into the LLM gateway via a decision-layer adapter. The detector today returns `{ isAnomaly, score, reason }` on a z-score basis but has no consumer. The new `createAnomalyGate({ detector, thresholds, isEnabled, getAccessPattern })` reads a recent access pattern (aggregated from audit-store `resource_read` events for the (actor, resourceType) tuple over the last N minutes) and emits `{ action: 'pass' | 'throttle' | 'block', cooldownMs?, reason? }`. The gate is invoked inside `LlmGateway.complete` after injection detection and before content filtering. The gateway's `LLMError` union is extended with `{ _tag: 'AnomalyBlocked', reason, cooldownMs? }` — an explicit breaking-safe addition since the union is closed today. Cold-start behaviour fails open: insufficient baseline data maps to `pass`, because a locked gateway on day 1 is a bigger operational risk than a delayed block on day 3.
 
@@ -697,5 +722,10 @@ Sprint 17 picks up where S16 leaves off: domain workflows (Epic 5), case trackin
 | FA3-02 Budget notifications + HITL escalation (merged) | 3 | Deferred from S16 Path A; pairs with HITL escalation; Redis-backed dedupe for multi-instance durability |
 | Safe-logger migration for existing `@aptivo/llm-gateway` `console.warn` call sites | 1 | S16 DoD scoped safe-logger to new code only; 7 existing call sites need migration |
 | ML classifier production enablement review | 1 | Review LLM3-02 eval numbers; decide flag enablement |
+| **Anomaly-gate aggregate-key alignment** (S17 BLOCKER for anomaly-blocking enablement) | 2 | Per S16_LLM3_04 multi-review: gateway currently passes `request.domain` as `resourceType`, but real audit rows use values like `'candidate'`/`'employee'` with actions like `'pii.read.bulk'`. Must resolve before ANOMALY_BLOCKING_ENABLED can be flipped — options: per-domain action whitelist via `aggregateAccessPattern.actions`, OR change the gateway to pass resource-specific keys, OR index by domain |
+| Request→actor plumbing on `CompletionRequest` (enables both LLM3-04 and FA3-01 stamping) | 1-2 | `resolveActor` currently returns `undefined` because CompletionRequest carries no user context |
+| Anomaly-gate real baseline job (replaces S16 placeholder constant) | 2-3 | Historical baseline builder — OBS track |
+| Adapter test for `aggregateAccessPattern` against real Drizzle | 1 | Requires test DB infra; deferred from S16 |
+| Unify `UsageRecord` in `@aptivo/types` (removes drift between gateway + database adapter) | 1 | LLM3-02 deferral; cross-package refactor |
 
 **S17 target**: ~24-26 SP across Case Tracking (10) + Domain Workflows (12) + Path A residuals (~4). Tight but achievable given Phase 2 velocity; S19 contingency absorbs any slip.

@@ -303,6 +303,9 @@ importers:
 
   packages/llm-gateway:
     dependencies:
+      '@aptivo/audit':
+        specifier: workspace:*
+        version: link:../audit
       '@aptivo/types':
         specifier: workspace:*
         version: link:../types

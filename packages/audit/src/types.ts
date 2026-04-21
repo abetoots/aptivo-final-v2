@@ -79,6 +79,33 @@ export interface AuditStore {
   updateChainHead(scope: string, seq: number, hash: string): Promise<void>;
   /** insert audit log record */
   insert(record: InsertAuditLog): Promise<{ id: string }>;
+  /**
+   * LLM3-04: aggregate recent access-pattern counts for the anomaly gate.
+   * Implementations should return count = 0 and empty-window timestamps
+   * when no events match, rather than throwing, so cold-start callers
+   * can treat absence as a valid signal.
+   *
+   * `actions`: optional whitelist. When provided, only rows whose action
+   * is in the list are counted. When omitted, ALL actions for the
+   * (actor, resourceType) tuple are counted — use this when the caller
+   * doesn't know the exact action taxonomy. Needed because PII audit
+   * events emit `pii.read`, `pii.read.bulk`, `pii.read.export` etc.,
+   * not a single `'read'` action.
+   */
+  aggregateAccessPattern(params: {
+    actor: string;
+    resourceType: string;
+    actions?: readonly string[];
+    windowMs: number;
+  }): Promise<{
+    actor: string;
+    resourceType: string;
+    /** representative action label ('any' when no filter applied); for display only */
+    action: string;
+    count: number;
+    windowStart: Date;
+    windowEnd: Date;
+  }>;
 }
 
 // ---------------------------------------------------------------------------

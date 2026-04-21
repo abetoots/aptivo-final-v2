@@ -163,9 +163,12 @@ import {
   createMlInjectionClassifier,
   createReplicateClient,
   asAsyncInjectionClassifier,
+  createAnomalyGate,
   type AsyncInjectionClassifier,
+  type AnomalyGate,
   type Logger as SafetyLogger,
 } from '@aptivo/llm-gateway/safety';
+import { createAnomalyDetector } from '@aptivo/audit';
 
 // safe-logger bridge — adapts apps/web's log.* into the package's minimal
 // Logger contract (packages must not import from apps/web directly)
@@ -615,6 +618,7 @@ export const getLlmGateway = lazy(() => {
 
   const usageLogger = new UsageLogger(usageLogStore);
   const injectionClassifier = buildInjectionClassifier(usageLogger);
+  const anomalyGate = buildAnomalyGate();
 
   return createLlmGateway({
     providers,
@@ -624,6 +628,13 @@ export const getLlmGateway = lazy(() => {
     modelToProvider,
     router,
     injectionClassifier,
+    anomalyGate,
+    // resolveActor: the gateway evaluates the anomaly gate per request.
+    // CompletionRequest today carries `workflowId`/`workflowStepId` but not
+    // a user-id — so the gate is skipped for workflow-scoped traffic. When
+    // S17 wires request → user context (FA3-01 department-ID stamping
+    // lands similar plumbing), this resolver gets its actor.
+    resolveActor: () => undefined,
   });
 });
 
@@ -689,6 +700,64 @@ function buildInjectionClassifier(usageLogger: UsageLogger): AsyncInjectionClass
     provider: 'replicate',
     model: process.env.ML_INJECTION_MODEL_VERSION ?? 'aptivo/injection-detector:latest',
     costPerCallUsd: Number(process.env.ML_INJECTION_COST_USD) || 0,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// LLM3-04 — anomaly gate composition
+// ---------------------------------------------------------------------------
+
+function buildAnomalyGate(): AnomalyGate | undefined {
+  // KNOWN LIMITATION (S17 follow-up, same as ml-injection-classifier):
+  // the `anomaly-blocking` feature flag in DEFAULT_FLAGS is NOT bound to
+  // the FeatureFlagService because the gate's `isEnabled` contract is sync
+  // and the flag service is async. Runtime toggle is env-gated for S16;
+  // proper flag-service wiring lands with the sync-cache / async-widen
+  // work tracked for S17.
+  const envEnabled = process.env.ANOMALY_BLOCKING_ENABLED === 'true';
+  if (!envEnabled) {
+    // return undefined so the gateway branch is skipped entirely; zero overhead
+    return undefined;
+  }
+
+  const auditStore = getAuditStore();
+
+  // Bridge the audit-store's aggregate query to the detector's baseline
+  // lookup. Baseline is sample-mean / sample-stdDev of the same
+  // resourceType aggregated per-window across the last N days; for S16 we
+  // approximate with a minimal constant baseline until the scheduled
+  // baseline job lands (S17 OBS task).
+  const detector = createAnomalyDetector({
+    getBaseline: async (_actor, _resourceType, _windowDays) => {
+      // S16 placeholder: conservative baseline so small bursts pass and only
+      // large z-scores fire. Real historical aggregation is an S17 task.
+      return { mean: 10, stdDev: 3, sampleSize: 100 };
+    },
+  });
+
+  const windowMs = Number(process.env.ANOMALY_WINDOW_MS) || 10 * 60 * 1000; // 10 min default
+
+  return createAnomalyGate({
+    detector,
+    isEnabled: () => envEnabled,
+    logger: safetyLoggerBridge,
+    // ⚠️ S17 BLOCKER: the `resourceType` passed here is `request.domain`
+    // (crypto|hr|core), but real audit rows use resource types like
+    // 'candidate', 'employee', 'contract' and actions like 'pii.read.bulk'.
+    // With the current wiring the aggregate will match ZERO rows once
+    // S17 wires `resolveActor` — the gate will appear to work but never
+    // actually fire. S17 must align the key semantics before enabling
+    // `ANOMALY_BLOCKING_ENABLED` in any environment. Options to resolve:
+    //   (a) pass a per-domain action allow-list (e.g. crypto → ['trade',
+    //       'wallet.read']; hr → ['pii.read', 'pii.read.bulk', ...]) and
+    //       let the query match by actions, OR
+    //   (b) change the gateway to pass resource-specific keys instead
+    //       of the domain, OR
+    //   (c) add a domain-scoped index on audit_logs and query by domain
+    //       rather than resource_type.
+    // Documented in S16_LLM3_04_MULTI_REVIEW.md §"Aggregate Key Mismatch".
+    getAccessPattern: async (actor, resourceType) =>
+      auditStore.aggregateAccessPattern({ actor, resourceType, windowMs }),
   });
 }
 

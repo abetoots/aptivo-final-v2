@@ -21,6 +21,7 @@ import type { UsageLogger } from '../usage/usage-logger.js';
 import type { TokenBucket } from '../rate-limit/token-bucket.js';
 import { validateOutput, validateTextOutput } from '../validation/output-validator.js';
 import type { AsyncInjectionClassifier } from '../safety/ml-injection-classifier.js';
+import type { AnomalyGate } from '../safety/anomaly-gate.js';
 import type { ContentFilter } from '../safety/content-filter.js';
 import type { ProviderRouter } from '../routing/provider-router.js';
 import type { RoutingStrategy } from '../routing/routing-types.js';
@@ -48,6 +49,21 @@ export interface GatewayDeps {
    * the return shape).
    */
   injectionClassifier?: AsyncInjectionClassifier;
+  /**
+   * Optional anomaly gate (LLM3-04). Invoked after injection, before
+   * content filter. On block/throttle decisions the gateway surfaces
+   * `AnomalyBlocked` via `LLMError`. Fail-open is the gate's
+   * responsibility (cold-start, detector error) — the gateway treats
+   * `{ action: 'pass' }` as permit.
+   */
+  anomalyGate?: AnomalyGate;
+  /**
+   * Request context for anomaly evaluation. When the anomaly gate is
+   * wired, the gateway reads `request.userId` via this callback so the
+   * gate can scope its aggregate query. Defaults to skipping anomaly
+   * evaluation if the caller can't resolve an actor.
+   */
+  resolveActor?: (request: CompletionRequest) => string | undefined;
   /** optional content filter (LLM2-02) */
   contentFilter?: ContentFilter;
   /** optional multi-provider router (LLM2-04) */
@@ -144,6 +160,27 @@ export function createLlmGateway(deps: GatewayDeps) {
           const classifyResult = await deps.injectionClassifier.classify(text, request.domain);
           if (classifyResult.ok && classifyResult.value.verdict === 'block') {
             return Result.err({ _tag: 'PromptInjectionBlocked' as const, verdict: classifyResult.value });
+          }
+        }
+      }
+
+      // step 3b: anomaly gate (optional, LLM3-04). Runs after injection so
+      // pattern-matching attacks block first (cheaper, deterministic); runs
+      // before content filter so anomalous volumes aren't billed through the
+      // pipeline. Actor resolution is pluggable — if the caller can't name an
+      // actor, the gate is skipped.
+      if (deps.anomalyGate) {
+        const actor = deps.resolveActor?.(request);
+        if (actor) {
+          // resourceType reuses the request domain as a coarse scope key;
+          // finer-grained scoping (e.g. per-table) is an audit-store concern.
+          const decision = await deps.anomalyGate.evaluate(actor, request.domain);
+          if (decision.action === 'block' || decision.action === 'throttle') {
+            return Result.err({
+              _tag: 'AnomalyBlocked' as const,
+              reason: decision.reason,
+              cooldownMs: decision.cooldownMs,
+            });
           }
         }
       }

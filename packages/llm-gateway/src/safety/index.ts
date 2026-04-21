@@ -61,6 +61,15 @@ export type {
 export { createReplicateClient } from './model-client.js';
 export type { ReplicateClientConfig } from './model-client.js';
 
+// anomaly gate (LLM3-04)
+export { createAnomalyGate } from './anomaly-gate.js';
+export type {
+  AnomalyGate,
+  AnomalyGateDeps,
+  GateDecision,
+  GateThresholds,
+} from './anomaly-gate.js';
+
 export type {
   ContentFilterStage,
   ContentFilterVerdict,
