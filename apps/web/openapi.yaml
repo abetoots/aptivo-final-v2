@@ -91,6 +91,159 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
 
+  /api/admin/departments:
+    get:
+      summary: List departments (FA3-01)
+      tags: [admin, budget]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: List of departments
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Department' }
+                  count: { type: integer }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      summary: Create a department (FA3-01)
+      description: |
+        Creates a new department entity. Requires `platform/admin.department.edit`.
+        Subject to admin rate-limit (default 30 writes per 5-minute window);
+        exceeding returns 429 with `retry-after` header.
+        Emits audit event `platform.admin.department.created`.
+      tags: [admin, budget]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, ownerUserId]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 120 }
+                ownerUserId: { type: string, format: uuid }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data: { $ref: '#/components/schemas/Department' }
+        '400':
+          description: Validation error
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/problem+json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ProblemDetail'
+                  - type: object
+                    properties:
+                      retryAfterSec: { type: integer }
+
+  /api/admin/departments/{id}/budget:
+    get:
+      summary: Read current budget + spend report for a department (FA3-01)
+      tags: [admin, budget]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Budget config + spend snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      budget: { $ref: '#/components/schemas/BudgetConfig' }
+                      spend:
+                        oneOf:
+                          - $ref: '#/components/schemas/SpendReport'
+                          - type: 'null'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Department has no budget config
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+    put:
+      summary: Set or update the department's budget (FA3-01)
+      description: |
+        Upserts the budget config. Requires `platform/admin.budget.edit`.
+        Admin-rate-limited. Emits audit event `platform.admin.budget.updated`.
+      tags: [admin, budget]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BudgetConfig' }
+      responses:
+        '200':
+          description: Budget updated
+        '400':
+          description: Validation error
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Department not found
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/problem+json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ProblemDetail'
+                  - type: object
+                    properties:
+                      retryAfterSec: { type: integer }
+
   /api/workflows/validate:
     post:
       summary: Validate a draft workflow body (shape + graph) without persisting
@@ -207,6 +360,41 @@ components:
             stepIds:
               type: array
               items: { type: string }
+
+    Department:
+      type: object
+      required: [id, name, ownerUserId, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        ownerUserId: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    BudgetConfig:
+      type: object
+      required: [monthlyLimitUsd, warningThreshold, blockOnExceed, notifyOnWarning]
+      properties:
+        monthlyLimitUsd: { type: number, exclusiveMinimum: 0 }
+        warningThreshold: { type: number, exclusiveMinimum: 0, maximum: 1 }
+        blockOnExceed: { type: boolean }
+        notifyOnWarning: { type: boolean }
+
+    SpendReport:
+      type: object
+      required: [totalUsd, rowCount, coverageLevel]
+      properties:
+        totalUsd: { type: number }
+        rowCount: { type: integer }
+        coverageLevel:
+          type: string
+          enum: [none, partial, full]
+          description: |
+            Tells callers how much LLM traffic in the window was stamped
+            with `departmentId`. `'none'`: no matches at all; `'partial'`:
+            some stamped, some not (department-ID stamping is partial —
+            true until S17 middleware fully lands); `'full'`: all traffic
+            in the window is attributed.
 
     WorkflowGraphInvalidResponse:
       description: |

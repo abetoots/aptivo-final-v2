@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@aptivo/audit": "workspace:*",
+    "@aptivo/budget": "workspace:*",
     "@aptivo/database": "workspace:*",
     "@aptivo/file-storage": "workspace:*",
     "@aptivo/hitl-gateway": "workspace:*",

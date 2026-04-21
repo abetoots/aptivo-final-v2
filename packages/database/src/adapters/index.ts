@@ -71,6 +71,14 @@ export type {
   HitlRequestEntry,
 } from './admin-store.js';
 
+// FA3-01: department budget store
+export { createDrizzleDepartmentBudgetStore } from './department-budget-store-drizzle.js';
+export type {
+  DepartmentBudgetStore as DrizzleDepartmentBudgetStore,
+  DepartmentRecord as DrizzleDepartmentRecord,
+  BudgetConfig as DrizzleBudgetConfig,
+} from './department-budget-store-drizzle.js';
+
 // hitl persistence (P1.5-01)
 export {
   createDrizzleHitlRequestStore,

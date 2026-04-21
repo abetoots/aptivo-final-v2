@@ -16,6 +16,7 @@ import {
   varchar,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import { departments } from './departments.js';
 
 export const llmUsageLogs = pgTable(
   'llm_usage_logs',
@@ -46,11 +47,19 @@ export const llmUsageLogs = pgTable(
     timestamp: timestamp('timestamp', { withTimezone: true })
       .defaultNow()
       .notNull(),
+    // FA3-01: nullable department attribution. The stamping middleware
+    // that populates this is an S17 task — S16 ships the column so the
+    // department-spend reporting can be wired without a breaking
+    // migration later. Pre-commit review (Codex §1) caught the missing
+    // FK: without it, a bad writer could stamp orphan department IDs
+    // that still count in aggregates. The FK blocks that.
+    departmentId: uuid('department_id').references(() => departments.id),
   },
   (table) => [
     index('llm_usage_logs_workflow_id_idx').on(table.workflowId),
     index('llm_usage_logs_domain_idx').on(table.domain),
     index('llm_usage_logs_timestamp_idx').on(table.timestamp),
     index('llm_usage_logs_provider_idx').on(table.provider),
+    index('llm_usage_logs_department_id_idx').on(table.departmentId),
   ]
 );

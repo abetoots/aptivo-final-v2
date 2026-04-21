@@ -1,0 +1,25 @@
+{
+  "name": "@aptivo/budget",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@aptivo/types": "workspace:*"
+  },
+  "devDependencies": {
+    "@aptivo/typescript-config": "workspace:*",
+    "@types/node": "^25.3.3",
+    "typescript": "5.9.2",
+    "vitest": "^4.0.18"
+  }
+}

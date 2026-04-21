@@ -51,3 +51,7 @@ export {
 // workflow definitions (FEAT-01)
 export { workflowStatusEnum, workflowDefinitions } from './workflow-definitions.js';
 export type { WorkflowStep } from './workflow-definitions.js';
+
+// FA3-01: first-class department entity + per-department budget configs
+export { departments } from './departments.js';
+export { departmentBudgetConfigs } from './department-budget-configs.js';

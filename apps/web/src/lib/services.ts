@@ -170,6 +170,15 @@ import {
 } from '@aptivo/llm-gateway/safety';
 import { createAnomalyDetector } from '@aptivo/audit';
 
+// FA3-01: department budgeting
+import {
+  createDepartmentBudgetService,
+  type DepartmentBudgetService,
+  type Logger as BudgetLogger,
+} from '@aptivo/budget';
+import { createDrizzleDepartmentBudgetStore } from '@aptivo/database/adapters';
+import { createAdminRateLimit, type AdminRateLimit, type RateLimitRedis } from './security/admin-rate-limit.js';
+
 // safe-logger bridge — adapts apps/web's log.* into the package's minimal
 // Logger contract (packages must not import from apps/web directly)
 import { log as appLog } from './logging/safe-logger.js';
@@ -1211,3 +1220,26 @@ export const getSmtpConfigValidator = lazy(() => ({
 export const getCbConfigService = lazy(() =>
   createCbConfigService({ store: createInMemoryCbConfigStore() }),
 );
+
+// ---------------------------------------------------------------------------
+// FA3-01: department budgeting
+// ---------------------------------------------------------------------------
+
+const budgetLoggerBridge: BudgetLogger = {
+  debug: (msg, ctx) => appLog.debug(msg, ctx),
+  info: (msg, ctx) => appLog.info(msg, ctx),
+  warn: (msg, ctx) => appLog.warn(msg, ctx),
+  error: (msg, ctx) => appLog.error(msg, ctx),
+};
+
+export const getDepartmentBudgetService = lazy((): DepartmentBudgetService => {
+  const store = createDrizzleDepartmentBudgetStore(
+    db() as unknown as Parameters<typeof createDrizzleDepartmentBudgetStore>[0],
+  );
+  return createDepartmentBudgetService({ store, logger: budgetLoggerBridge });
+});
+
+export const getAdminRateLimit = lazy((): AdminRateLimit => {
+  const redis = getSessionRedis() as RateLimitRedis | null;
+  return createAdminRateLimit(redis);
+});

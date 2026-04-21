@@ -484,7 +484,30 @@ Bonus fix (caught while updating the spec doc): the `s14-int2-02-doc-closure.doc
 
 ### Phase D: Department Budgeting (Days 1-7)
 
-#### FA3-01: FA-4 Department Budgeting — Schema + Service + Admin API + Admin Rate-Limiter (6 SP)
+#### FA3-01: FA-4 Department Budgeting — Schema + Service + Admin API + Admin Rate-Limiter (6 SP) — ✅ COMPLETE (2026-04-21)
+
+**Delivery notes**:
+- New `@aptivo/budget` workspace package — factory-with-DI service (`createDepartmentBudgetService({ store, logger })`) with `createDepartment`, `findDepartment`, `listDepartments`, `setBudget`, `getBudget`, `checkBudget`, `getSpendReport`. 15 unit tests against in-memory store.
+- New schemas: `departments` (id / name / ownerUserId / timestamps), `department_budget_configs` (departmentId FK / monthlyLimitUsd / warningThreshold / blockOnExceed / notifyOnWarning), nullable `departmentId` UUID column on `llm_usage_logs` (with index) — no backfill required, no breaking change since column is nullable. Schema exports added to `packages/database/src/schema/index.ts`.
+- Drizzle adapter `createDrizzleDepartmentBudgetStore` implements the full store contract including `aggregateSpend` which returns BOTH stamped `rowCount` AND `unstampedRowCount` so the service can derive `coverageLevel: 'none' | 'partial' | 'full'` — this is the signal that department-ID stamping plumbing (S17) has or hasn't landed.
+- Tagged errors: `DepartmentBudgetError = DepartmentNotFound | MonthlyBudgetExceeded | BudgetConfigInvalid | PersistenceError`.
+- `SpendReport.coverageLevel` is the concrete answer to AD8's "department-ID stamping is deferred" problem — callers can now distinguish "$0 because no spend" from "$0 because traffic is unstamped."
+- **New `createAdminRateLimit` middleware** at `apps/web/src/lib/security/admin-rate-limit.ts` (multi-review §G3 found this didn't exist when the plan claimed it was reusable). Redis-backed sliding window, 30 writes per 5-minute window per actor default, window-aligned keys + TTL. Fails open when Redis isn't configured (dev/test); 429 + `application/problem+json` with `retry-after` header in production. 7 unit tests.
+- Admin API routes: `GET /api/admin/departments` (list), `POST /api/admin/departments` (create), `GET /api/admin/departments/[id]/budget` (read + spend snapshot), `PUT /api/admin/departments/[id]/budget` (upsert). All require RBAC (`platform/admin.department.edit` / `platform/admin.budget.edit`), all mutations rate-limited, all mutations emit audit events (`platform.admin.department.created`, `platform.admin.budget.updated`).
+- OpenAPI v1.2.0+ entries added for all four endpoints + `Department`, `BudgetConfig`, `SpendReport` schemas (incl. the `coverageLevel` enum documentation).
+- Composition root: `getDepartmentBudgetService()` and `getAdminRateLimit()` lazy getters added; `safetyLoggerBridge` pattern reused for the budget service's injected logger.
+- **Deferred to S17** (per Path A): department-ID stamping on LLM requests (FA3-01's schema is ready; the stamping middleware is a separate task), FA3-02 budget-exceed notifications (already deferred at plan time), HITL escalation on budget exceed.
+- 21 new tests (14 service + 7 rate-limit). Test totals: **1,803 web** (up from 1,796), **14 budget** (new package).
+
+**Pre-commit multi-model review** (`S16_FA3_01_MULTI_REVIEW.md`, 2026-04-21): Gemini and Codex both reviewed; Codex found two real data-integrity bugs Gemini missed. Fixes applied:
+
+- **🚨 Missing FK on `llm_usage_logs.departmentId`** (Codex): added `.references(() => departments.id)` so orphan stamped IDs can't accumulate once S17 wires request-time stamping.
+- **🚨 `aggregateSpend` unstamped-count leaked across departments** (Codex): the global unstamped count was misattributing to every department the `partial` coverageLevel just because any unrelated unstamped traffic existed in the window. Dropped the global query; adapter returns `unstampedRowCount: 0` always.
+- **🟡 `coverageLevel` was inconsistent** (both): doc said "S16 returns 'none' or 'partial'" but code had reachable 'full' and a test asserted it. Collapsed to a binary `'none' | 'full'` signal derived from stamped-rows-for-this-department.
+- **🟡 `getBudget` conflated "department missing" vs "budget not configured"** (Codex): added `BudgetNotConfigured` error variant; route handles the two 404 cases distinctly.
+- **🟡 Rate-limiter doc/implementation mismatch** (Gemini): the module said "sliding window" but implemented fixed-window. Doc updated to explicitly say FIXED-WINDOW with the burst-at-boundary tradeoff called out; implementation unchanged (fixed windows are fine at 30/5min admin scale).
+
+Test count adjusted from 22 → 21 after removing the now-unreachable 'partial' coverageLevel test.
 
 *Re-estimated from 5 SP after multi-model review: verified no `adminRateLimit` middleware exists today (grep confirmed). Plan previously claimed "reuses existing admin middleware"; the correct scope is **building** a minimal admin rate-limiter as part of this task.*
 
