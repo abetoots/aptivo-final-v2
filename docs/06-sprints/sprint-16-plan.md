@@ -786,14 +786,15 @@ Sprint 17 picks up where S16 leaves off: domain workflows (Epic 5), case trackin
 | Crypto live-trading workflow | 5 | Needs ML safety pipeline from LLM3-02 + anomaly gate from LLM3-04 |
 | HR onboarding workflow | 4 | Depends on MOD-02 interface contracts |
 | MOD-02 interface contract validation | 3 | Gates Epic 6 integrations in S18 |
-| Department-ID stamping on LLM requests | 2 | FA3-01 schema ready, plumbing lives in S17 |
+| Request→actor plumbing + Department-ID stamping (merged stream) | 3-4 | Wrap-review audit merged these — they're the same implementation work. Enables both FA3-01 department stamping AND LLM3-04 anomaly gate actor resolution in one pass |
 | FA3-02 Budget notifications + HITL escalation (merged) | 3 | Deferred from S16 Path A; pairs with HITL escalation; Redis-backed dedupe for multi-instance durability |
 | Safe-logger migration for existing `@aptivo/llm-gateway` `console.warn` call sites | 1 | S16 DoD scoped safe-logger to new code only; 7 existing call sites need migration |
 | ML classifier production enablement review | 1 | Review LLM3-02 eval numbers; decide flag enablement |
 | **Anomaly-gate aggregate-key alignment** (S17 BLOCKER for anomaly-blocking enablement) | 2 | Per S16_LLM3_04 multi-review: gateway currently passes `request.domain` as `resourceType`, but real audit rows use values like `'candidate'`/`'employee'` with actions like `'pii.read.bulk'`. Must resolve before ANOMALY_BLOCKING_ENABLED can be flipped — options: per-domain action whitelist via `aggregateAccessPattern.actions`, OR change the gateway to pass resource-specific keys, OR index by domain |
-| Request→actor plumbing on `CompletionRequest` (enables both LLM3-04 and FA3-01 stamping) | 1-2 | `resolveActor` currently returns `undefined` because CompletionRequest carries no user context |
+| ~~Request→actor plumbing on `CompletionRequest`~~ | — | **Merged with "Request→actor plumbing + Department-ID stamping (merged stream)" above per wrap-review audit — same implementation work** |
 | Anomaly-gate real baseline job (replaces S16 placeholder constant) | 2-3 | Historical baseline builder — OBS track |
 | Adapter test for `aggregateAccessPattern` against real Drizzle | 1 | Requires test DB infra; deferred from S16 |
 | Unify `UsageRecord` in `@aptivo/types` (removes drift between gateway + database adapter) | 1 | LLM3-02 deferral; cross-package refactor |
+| Wire `ml_classifier_timeout` metric counter to alerting threshold | 1 | Wrap-review audit: metric exists but no alert. Sustained Replicate-latency regimes silently fall back — ops needs visibility |
 
 **S17 target**: ~24-26 SP across Case Tracking (10) + Domain Workflows (12) + Path A residuals (~4). Tight but achievable given Phase 2 velocity; S19 contingency absorbs any slip.

@@ -388,13 +388,16 @@ components:
         rowCount: { type: integer }
         coverageLevel:
           type: string
-          enum: [none, partial, full]
+          enum: [none, full]
           description: |
-            Tells callers how much LLM traffic in the window was stamped
-            with `departmentId`. `'none'`: no matches at all; `'partial'`:
-            some stamped, some not (department-ID stamping is partial —
-            true until S17 middleware fully lands); `'full'`: all traffic
-            in the window is attributed.
+            Binary signal indicating whether this department has any
+            stamped rows in the window. `'none'`: no stamped rows for
+            this department (the universal state in S16 until
+            request-time stamping middleware lands in S17). `'full'`:
+            at least one stamped row exists for this department —
+            attribution is working. Per-request `'partial'` coverage
+            is NOT returned because unstamped rows can't be attributed
+            to specific departments at the row level.
 
     WorkflowGraphInvalidResponse:
       description: |

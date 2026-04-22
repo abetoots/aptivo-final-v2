@@ -71,4 +71,9 @@ export const DEFAULT_FLAGS: FeatureFlag[] = [
     enabled: false,
     description: 'LLM3-04: enable the anomaly gate to throttle/block LLM requests when audit-detected access patterns exceed a z-score threshold. S16 note: runtime toggle lives at env ANOMALY_BLOCKING_ENABLED until the flag service exposes a sync cache peek (S17) — same limitation as ml-injection-classifier.',
   },
+  {
+    key: 'ws-server-enabled',
+    enabled: false,
+    description: 'WFE3-02: opt-in for consumers that should route real-time traffic through apps/ws-server. Present so staging rollout can proceed independently of app deploy. Wrap-review audit (2026-04-21) caught this was missing from the registry despite being in the original WFE3-02 acceptance criteria.',
+  },
 ];
