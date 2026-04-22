@@ -50,6 +50,8 @@ This document defines **HOW** the Aptivo Agentic Core is architected to meet the
 | LLM Provider (Secondary) | **Anthropic** (Claude) | Fallback + cost optimization for structured tasks | Google Gemini, single-provider (simpler but no fallback) | Same provider interface as primary | Claude (S1), ratified by human (S15) |
 | Email Transport | **SMTP provider** (TBD at deployment) | Generic SMTP fallback for Novu. Vendor chosen at deploy time. | SendGrid (free 100/day), AWS SES ($0.10/1K), Postmark ($15/mo best reputation) | Standard SMTP; swap host + credentials | Claude (S13), deferred to deployment by human (S15) |
 | Audit | Append-only SQL + hash-chain (P1.5) | Phase 1.5 delivered hash-chaining ahead of plan — see §9.3 and TSD `platform-core/audit.md` | Event sourcing (complex), separate audit DB (ops overhead) | Standard SQL append-only with per-scope chain heads | Multi-model consensus (S0); hash-chain brought forward in P1.5 |
+| ML Injection Classifier Host | **Replicate** (pay-per-inference) | Managed inference, low ops burden, per-call pricing fits low-volume safety path. Rule-based fallback preserved; ML is additive, never solo. | HuggingFace Inference Endpoints (higher baseline cost), self-hosted (GPU ops + baseline cost), OpenAI moderation (limited to general categories, no workflow-aware injection detection) | `ModelClient` interface abstraction in `@aptivo/llm-gateway/safety`; swap factory + env vars | Claude (S16 plan), user via AskUserQuestion 2026-04-20 ("Wrap with rule fallback (Recommended)"), ratified by Gemini + Codex (S16 plan multi-review). Live eval blocked on procurement — ships behind `ml-injection-classifier` flag (default off). |
+| Real-Time Gateway (WebSocket) | **apps/ws-server (standalone Node.js process)** | Next.js App Router cannot upgrade WebSocket connections in its serverless runtime. Mirrors `apps/spike-runner` pattern. Deployed as a separate Railway service. | Hono edge adapter (less proven at Railway), external service (Ably/Pusher — new vendor dep, cost per connection) | Protocol contract frozen in `packages/types/src/websocket-events.ts` v1.0; no vendor lock-in | Claude (S16 plan), user via AskUserQuestion 2026-04-20 ("New apps/ws-server (Recommended)"), ratified by Gemini + Codex (S16 plan + WFE3-02 pre-commit reviews). Staging deploy verification deferred to S17. |
 
 **Build (unique differentiators)**:
 - MCP Integration Layer
@@ -87,11 +89,13 @@ This document defines **HOW** the Aptivo Agentic Core is architected to meet the
 │  Workflow Engine  │  Durable Execution orchestration            │
 │  HITL Gateway     │  Human approval with signed tokens          │
 │  MCP Layer        │  Universal external API connector           │
-│  LLM Gateway      │  Provider routing + cost tracking           │
+│  LLM Gateway      │  Provider routing + cost tracking + ML safety │
 │  Notification Bus │  Telegram, Email dispatch                   │
-│  Audit Service    │  Immutable event logging                    │
+│  Audit Service    │  Immutable event logging + anomaly aggregate│
 │  Identity Service │  Passwordless auth, RBAC                    │
 │  File Storage     │  S3-compatible blob service                 │
+│  WebSocket Gateway│  Real-time event fan-out (apps/ws-server)   │
+│  Budget Service   │  Org-scoped (dept) + system-scoped LLM spend│
 ├─────────────────────────────────────────────────────────────────┤
 │                      INFRASTRUCTURE                              │
 │  PostgreSQL (separate schemas) │ Redis │ S3/Minio              │
@@ -3975,7 +3979,8 @@ LangGraph.js runs inside Inngest `step.run()` activities for AI reasoning tasks 
 - **Input boundary markers**: System prompts use delimiter tokens (`<<<USER_DATA>>>...<<<END_USER_DATA>>>`) to structurally separate trusted instructions from untrusted input.
 - **MCP data isolation**: Data retrieved from MCP tools is placed in `user` role messages, not `system` role, preventing indirect prompt injection from overriding system instructions.
 - **Compensating controls**: HITL approval gates verify human oversight of all LLM-influenced decisions (§4.1); MCP idempotency keys prevent duplicate tool calls (§5.1.1); Zod schema validation constrains tool argument structure (§5.3).
-- **Phase 2**: Add regex-based injection pattern scanning, prompt injection detection classifier, and anomaly monitoring for unusual prompt patterns.
+- **Phase 2 (delivered)**: Rule-based injection classifier with 16 regex patterns across 4 categories (`instruction_override`, `role_play`, `system_extraction`, `context_manipulation`) at `packages/llm-gateway/src/safety/injection-classifier.ts`.
+- **Phase 3 — Sprint 16 (delivered)**: ML injection classifier wrapping the rule-based one with 500 ms timeout + Zod-validated response + rule-based fallback (`createMlInjectionClassifier` over Replicate). Active anomaly gate (`createAnomalyGate`) wraps the `@aptivo/audit` detector with pass/throttle/block decisions on bulk-access patterns; runs as gateway step 3b between injection and content filter. Both ship-behind-flag (`ml-injection-classifier` / `anomaly-blocking`, default off until enablement review lands). 220-sample eval harness (`runEval`) measures precision/recall against a stratified train/holdout split; rule-based baseline recorded in `docs/04-specs/injection-eval-baseline.md`. Real-time event fan-out via `apps/ws-server` feeds monitoring dashboards (Phase 3.5 UI-F) so anomalies surface visually.
 
 **Output Validation (Phase 1)**:
 - **Structured output enforcement**: All LLM completion requests specify JSON response format via provider SDK `response_format` parameter. Responses are parsed and validated against Zod schemas before use in workflow logic.
@@ -3992,6 +3997,8 @@ LangGraph.js runs inside Inngest `step.run()` activities for AI reasoning tasks 
 - Provider-side rate limits: Handled via retry with exponential backoff and provider fallback
 
 > **Residual Risk (Phase 1)**: Prompt injection defenses rely on structural separation (system/user messages, delimiter tokens) and compensating controls (HITL). No active injection detection or content-based filtering exists. Phase 2 adds detection classifiers and output guardrails.
+>
+> **Residual Risk (Phase 3, Sprint 16)**: ML classifier + anomaly gate are shipped but operationally dormant. Enablement is blocked on: (1) `FeatureFlagService` sync/async gap (current runtime toggle is env-var only, not the flag registry), (2) anomaly-gate aggregate-key alignment with real audit event schema, (3) request→actor plumbing on `CompletionRequest`, (4) Replicate procurement for live eval numbers. Silent ML fallback has a metric counter (`ml_classifier_timeout`) but no alert wired — ops visibility gap. All four items tracked in `docs/06-sprints/sprint-16-plan.md` S17 preview.
 
 ### 14.6 File Upload & Storage
 
