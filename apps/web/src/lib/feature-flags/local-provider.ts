@@ -64,12 +64,12 @@ export const DEFAULT_FLAGS: FeatureFlag[] = [
   {
     key: 'ml-injection-classifier',
     enabled: false,
-    description: 'LLM3-02: route injection detection through the ML classifier with rule-based fallback (Replicate). S16 note: runtime toggle lives at env ML_INJECTION_ENABLED until the flag service exposes a sync cache peek (S17).',
+    description: 'LLM3-02: route injection detection through the ML classifier with rule-based fallback (Replicate). Read by the gateway via FeatureFlagService.peekEnabled (sync, in-process cache). Default off; flip here or via FEATURE_FLAGS env JSON to enable. Cold cache evaluates as off — composition root warms the cache at startup.',
   },
   {
     key: 'anomaly-blocking',
     enabled: false,
-    description: 'LLM3-04: enable the anomaly gate to throttle/block LLM requests when audit-detected access patterns exceed a z-score threshold. S16 note: runtime toggle lives at env ANOMALY_BLOCKING_ENABLED until the flag service exposes a sync cache peek (S17) — same limitation as ml-injection-classifier.',
+    description: 'LLM3-04: enable the anomaly gate to throttle/block LLM requests when audit-detected access patterns exceed a z-score threshold. Read by the gateway via FeatureFlagService.peekEnabled (sync, in-process cache). Default off; flip here or via FEATURE_FLAGS env JSON. Cold cache evaluates as off.',
   },
   {
     key: 'ws-server-enabled',

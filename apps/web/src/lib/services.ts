@@ -690,22 +690,14 @@ function buildInjectionClassifier(usageLogger: UsageLogger): AsyncInjectionClass
     version: process.env.ML_INJECTION_MODEL_VERSION,
   });
 
-  // KNOWN LIMITATION (S17 follow-up): the ml-injection-classifier flag lives
-  // in DEFAULT_FLAGS but is NOT bound to the FeatureFlagService yet. The ML
-  // classifier's isEnabled contract is sync (`() => boolean`) because the
-  // Classify happens on the LLM request hot path, and the flag service's
-  // isEnabled is async (Redis-backed). Two options to resolve, tracked for
-  // S17:
-  //   (a) widen isEnabled to `() => boolean | Promise<boolean>` and await
-  //       inside the wrapper, OR
-  //   (b) expose a sync cache peek on FeatureFlagService.
-  // Until then, this binding uses the env var ML_INJECTION_ENABLED as the
-  // runtime toggle. Admins flipping the flag in DEFAULT_FLAGS / env
-  // FEATURE_FLAGS JSON do NOT affect this classifier — they must set the
-  // env var. This is a deliberate tradeoff, documented so the flag
-  // registry's ml-injection-classifier entry isn't misinterpreted as live.
+  // S17-B2: bound to the FeatureFlagService sync-peek cache. Composition
+  // root warms the cache at startup (see getFeatureFlagService), so the
+  // first request after deploy reads the warmed value rather than the
+  // defaultValue. Cold-cache requests fail safe (defaultValue: false →
+  // ML classifier off → rule-based fallback handles the request).
+  const flagService = getFeatureFlagService();
   const isEnabled = (): boolean => {
-    return process.env.ML_INJECTION_ENABLED === 'true';
+    return flagService.peekEnabled('ml-injection-classifier', false);
   };
 
   return createMlInjectionClassifier({
@@ -728,17 +720,14 @@ function buildInjectionClassifier(usageLogger: UsageLogger): AsyncInjectionClass
 // ---------------------------------------------------------------------------
 
 function buildAnomalyGate(): AnomalyGate | undefined {
-  // KNOWN LIMITATION (S17 follow-up, same as ml-injection-classifier):
-  // the `anomaly-blocking` feature flag in DEFAULT_FLAGS is NOT bound to
-  // the FeatureFlagService because the gate's `isEnabled` contract is sync
-  // and the flag service is async. Runtime toggle is env-gated for S16;
-  // proper flag-service wiring lands with the sync-cache / async-widen
-  // work tracked for S17.
-  const envEnabled = process.env.ANOMALY_BLOCKING_ENABLED === 'true';
-  if (!envEnabled) {
-    // return undefined so the gateway branch is skipped entirely; zero overhead
-    return undefined;
-  }
+  // S17-B2: bound to FeatureFlagService.peekEnabled. The gate is built
+  // unconditionally and isEnabled controls runtime behaviour per
+  // request — when peekEnabled returns false the gate short-circuits
+  // to `{ action: 'pass' }` without touching the audit store or
+  // detector (see anomaly-gate.ts:91-95). Composition root warms the
+  // cache at startup so the first request after deploy reads the
+  // configured flag value, not defaultValue.
+  const flagService = getFeatureFlagService();
 
   const auditStore = getAuditStore();
 
@@ -759,7 +748,7 @@ function buildAnomalyGate(): AnomalyGate | undefined {
 
   return createAnomalyGate({
     detector,
-    isEnabled: () => envEnabled,
+    isEnabled: () => flagService.peekEnabled('anomaly-blocking', false),
     logger: safetyLoggerBridge,
     // S17-B1: resolves the S16 BLOCKER comment. The gateway passes
     // `request.domain` ('hr'/'crypto'/'core') as `resourceType`. We map
@@ -1229,7 +1218,17 @@ export const getFeatureFlagService = lazy(() => {
   const provider = providerType === 'env'
     ? createEnvFlagProvider(DEFAULT_FLAGS)
     : createLocalFlagProvider(DEFAULT_FLAGS);
-  return createFeatureFlagService({ provider });
+  const service = createFeatureFlagService({
+    provider,
+    // S17-B2 (post-review): bind the app's safe-logger so warm()
+    // failures surface in operational logs. Without this, a broken
+    // provider would silently leave peekEnabled returning defaultValue.
+    logger: { warn: (event, ctx) => appLog.warn(event, ctx) },
+  });
+  // S17-B2: fire-and-forget warm so safety-gate peekEnabled reads the
+  // configured value rather than defaultValue on the first request.
+  void service.warm();
+  return service;
 });
 
 // ---------------------------------------------------------------------------

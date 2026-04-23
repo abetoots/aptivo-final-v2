@@ -57,6 +57,13 @@ vi.mock('../src/lib/db', () => ({
 vi.mock('@aptivo/audit', () => ({
   createAuditService: vi.fn().mockReturnValue({}),
   DEFAULT_MASKING_CONFIG: {},
+  // S17-B2: anomaly gate is now built unconditionally in services.ts
+  // (runtime control via FeatureFlagService.peekEnabled rather than
+  // an env-time short-circuit), so the detector factory is always
+  // imported.
+  createAnomalyDetector: vi.fn().mockReturnValue({
+    evaluate: vi.fn().mockResolvedValue({ ok: true, value: { isAnomaly: false } }),
+  }),
 }));
 
 vi.mock('@aptivo/audit/async', () => ({
