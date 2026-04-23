@@ -79,6 +79,13 @@ export type {
   BudgetConfig as DrizzleBudgetConfig,
 } from './department-budget-store-drizzle.js';
 
+// S17-B3: anomaly baseline store (closes Sprint-16 enablement gate #5)
+export { createDrizzleAnomalyBaselineStore } from './anomaly-baseline-store-drizzle.js';
+export type {
+  AnomalyBaselineStore as DrizzleAnomalyBaselineStore,
+  BaselineRecord as DrizzleBaselineRecord,
+} from './anomaly-baseline-store-drizzle.js';
+
 // hitl persistence (P1.5-01)
 export {
   createDrizzleHitlRequestStore,

@@ -48,6 +48,14 @@ vi.mock('@aptivo/database/adapters', () => ({
   createDrizzleBudgetStore: mockCreateDrizzleBudgetStore,
   createDrizzleUsageLogStore: mockCreateDrizzleUsageLogStore,
   createDrizzleMcpRegistryAdapter: vi.fn(),
+  // S17-B3: anomaly baseline store is now built by getLlmGateway path
+  // through buildAnomalyGate's lazy lookup. Mock returns a no-op store.
+  createDrizzleDepartmentBudgetStore: vi.fn(),
+  createDrizzleAnomalyBaselineStore: vi.fn().mockReturnValue({
+    findBaseline: vi.fn().mockResolvedValue(null),
+    upsertBaseline: vi.fn().mockResolvedValue(undefined),
+    latestComputedAt: vi.fn().mockResolvedValue(null),
+  }),
 }));
 
 vi.mock('../src/lib/db', () => ({

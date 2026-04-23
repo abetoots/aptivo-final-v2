@@ -54,3 +54,8 @@ export type {
   AnomalyError,
   AnomalyDetectorDeps,
 } from './anomaly/index.js';
+
+// S17-B3 (post-review): single source of truth for the anomaly-gate
+// scope key. Used by audit-store-drizzle.aggregateAccessPattern AND
+// apps/web's anomaly-baseline cron so both write/read the same key.
+export { formatAnomalyScopeKey } from './anomaly/scope-key.js';

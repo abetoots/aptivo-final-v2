@@ -170,7 +170,7 @@ import {
   type Logger as SafetyLogger,
   type SafetyInferenceCounter,
 } from '@aptivo/llm-gateway/safety';
-import { createAnomalyDetector } from '@aptivo/audit';
+import { createAnomalyDetector, formatAnomalyScopeKey } from '@aptivo/audit';
 
 // FA3-01: department budgeting
 import {
@@ -178,7 +178,10 @@ import {
   type DepartmentBudgetService,
   type Logger as BudgetLogger,
 } from '@aptivo/budget';
-import { createDrizzleDepartmentBudgetStore } from '@aptivo/database/adapters';
+import {
+  createDrizzleDepartmentBudgetStore,
+  createDrizzleAnomalyBaselineStore,
+} from '@aptivo/database/adapters';
 import { createAdminRateLimit, type AdminRateLimit, type RateLimitRedis } from './security/admin-rate-limit.js';
 
 // safe-logger bridge — adapts apps/web's log.* into the package's minimal
@@ -757,16 +760,28 @@ function buildAnomalyGate(): AnomalyGate | undefined {
 
   const auditStore = getAuditStore();
 
-  // Bridge the audit-store's aggregate query to the detector's baseline
-  // lookup. Baseline is sample-mean / sample-stdDev of the same
-  // resourceType aggregated per-window across the last N days; for S16 we
-  // approximate with a minimal constant baseline until the scheduled
-  // baseline job lands (S17 OBS task).
+  // S17-B3: real baseline lookup. The `anomaly-baseline-builder` cron
+  // (every 6h) populates `anomaly_baselines` with mean/stdDev/sampleSize
+  // per (actor, scope) over the trailing 7 days, bucketed at the same
+  // window the gate evaluates over. Cold-start `(actor, scope)` pairs
+  // return null → returned `sampleSize: 0` → detector branch
+  // `if (sampleSize < minBaselineSamples) return insufficient baseline data`
+  // fails open. Closes Sprint-16 enablement gate #5.
+  const baselineStore = getAnomalyBaselineStore();
   const detector = createAnomalyDetector({
-    getBaseline: async (_actor, _resourceType, _windowDays) => {
-      // S16 placeholder: conservative baseline so small bursts pass and only
-      // large z-scores fire. Real historical aggregation is an S17 task.
-      return { mean: 10, stdDev: 3, sampleSize: 100 };
+    getBaseline: async (actor, resourceType, _windowDays) => {
+      const row = await baselineStore.findBaseline(actor, resourceType);
+      if (!row) {
+        // signal "no data yet" via sampleSize=0 — detector handles the
+        // rest. Not throwing because cold-start is the expected normal
+        // for any new actor or scope.
+        return { mean: 0, stdDev: 0, sampleSize: 0 };
+      }
+      return {
+        mean: row.mean,
+        stdDev: row.stdDev,
+        sampleSize: row.sampleSize,
+      };
     },
   });
 
@@ -854,6 +869,33 @@ const DOMAIN_AUDIT_SCOPE = {
     actions: [] as readonly string[],
   },
 } as const;
+
+// S17-B3: anomaly baseline store + cron-scope projection.
+// `findBaseline(actor, scope.key)` is the lookup the detector uses;
+// `getAnomalyBaselineScopes()` is what the cron consumes. Scope `key`
+// MUST equal `aggregateAccessPattern`'s returned `resourceType`
+// (`resourceTypes.join(',')`) so the cron writes baselines under the
+// same key the gate later reads.
+export const getAnomalyBaselineStore = lazy(() =>
+  createDrizzleAnomalyBaselineStore(
+    db() as unknown as Parameters<typeof createDrizzleAnomalyBaselineStore>[0],
+  ),
+);
+
+export function getAnomalyBaselineScopes(): readonly {
+  key: string;
+  resourceTypes: readonly string[];
+  actions: readonly string[];
+}[] {
+  // S17-B3 (post-review): scope.key MUST match what the audit-store
+  // writes into AccessPattern.resourceType — both sides go through
+  // formatAnomalyScopeKey from @aptivo/audit so they can't drift.
+  return Object.values(DOMAIN_AUDIT_SCOPE).map((scope) => ({
+    key: formatAnomalyScopeKey(scope.resourceTypes),
+    resourceTypes: scope.resourceTypes,
+    actions: scope.actions,
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // crypto domain stores (S6-INF-CRY)

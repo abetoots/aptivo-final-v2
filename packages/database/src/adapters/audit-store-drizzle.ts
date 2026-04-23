@@ -11,7 +11,7 @@
  */
 
 import { eq, sql } from 'drizzle-orm';
-import type { AuditStore, ChainHead, InsertAuditLog } from '@aptivo/audit';
+import { formatAnomalyScopeKey, type AuditStore, type ChainHead, type InsertAuditLog } from '@aptivo/audit';
 import { auditLogs, auditChainHeads } from '../schema/audit-logs.js';
 import type { DrizzleClient } from './types.js';
 
@@ -158,8 +158,10 @@ export function createDrizzleAuditStore(db: DrizzleClient): TransactionalAuditSt
         const count = rows[0]?.count ?? 0;
         return {
           actor: params.actor,
-          // representative label for display/logs; not used by the detector
-          resourceType: params.resourceTypes.join(','),
+          // S17-B3: scope key — must equal what the baseline cron
+          // writes (apps/web/src/lib/services.ts:getAnomalyBaselineScopes).
+          // Centralised in @aptivo/audit so both sides can never drift.
+          resourceType: formatAnomalyScopeKey(params.resourceTypes),
           action: params.actions?.join(',') ?? 'any',
           count,
           windowStart,

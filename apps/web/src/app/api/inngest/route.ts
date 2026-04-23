@@ -10,7 +10,12 @@ import {
   getReplayDlqEventsFn,
   getDataDeletionHandler,
   getMetricService,
+  getAnomalyBaselineStore,
+  getAnomalyBaselineScopes,
 } from '../../../lib/services';
+import { getDb } from '../../../lib/db';
+import { createAnomalyBaselineBuilder } from '../../../lib/jobs/anomaly-baseline-builder';
+import { log as appLog } from '../../../lib/logging/safe-logger';
 import { demoWorkflowFn } from '../../../lib/workflows/demo-workflow';
 import { paperTradeFn } from '../../../lib/workflows/crypto-paper-trade';
 import { securityScanFn } from '../../../lib/workflows/crypto-security-scan';
@@ -49,10 +54,30 @@ const handleDataDeletion = inngest.createFunction(
 // slo cron — wired to real metric providers via MetricService (S7-CF-01)
 const sloCronFn = createSloCronFunction(getMetricService());
 
+// S17-B3: anomaly baseline builder cron — populates anomaly_baselines
+// every 6h so the LLM3-04 gate's getBaseline lookup hits real
+// historical data instead of S16's placeholder constant. Closes
+// Sprint-16 enablement gate #5.
+const anomalyBaselineBuilderFn = createAnomalyBaselineBuilder({
+  inngest,
+  db: getDb() as unknown as Parameters<typeof createAnomalyBaselineBuilder>[0]['db'],
+  store: getAnomalyBaselineStore(),
+  scopes: getAnomalyBaselineScopes(),
+  logger: { warn: (event, ctx) => appLog.warn(event, ctx) },
+});
+
 // domain workflow functions (S6-CRY-01, S6-HR-01)
 const domainFunctions = [paperTradeFn, securityScanFn, candidateFlowFn, interviewSchedulingFn, contractApprovalFn];
 
-const platformFunctions = [processAudit, replayDlq, handleDataDeletion, demoWorkflowFn, sloCronFn, ...domainFunctions];
+const platformFunctions = [
+  processAudit,
+  replayDlq,
+  handleDataDeletion,
+  demoWorkflowFn,
+  sloCronFn,
+  anomalyBaselineBuilderFn,
+  ...domainFunctions,
+];
 
 export const { GET, POST, PUT } = serve({
   client: inngest,

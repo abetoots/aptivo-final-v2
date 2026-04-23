@@ -55,3 +55,7 @@ export type { WorkflowStep } from './workflow-definitions.js';
 // FA3-01: first-class department entity + per-department budget configs
 export { departments } from './departments.js';
 export { departmentBudgetConfigs } from './department-budget-configs.js';
+
+// S17-B3: per-(actor, scope) baseline statistics for the LLM3-04
+// anomaly gate. Replaces the S16 placeholder constant; closes Gate #5.
+export { anomalyBaselines } from './anomaly-baselines.js';
