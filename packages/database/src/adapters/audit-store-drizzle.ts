@@ -108,14 +108,19 @@ export function createDrizzleAuditStore(db: DrizzleClient): TransactionalAuditSt
 
       async aggregateAccessPattern(params: {
         actor: string;
-        resourceType: string;
+        resourceTypes: readonly string[];
         actions?: readonly string[];
         windowMs: number;
       }) {
-        // LLM3-04: counts recent audit_logs rows for the (actor, resourceType)
-        // tuple over the configured window so the anomaly detector can
-        // compare against its baseline. Returns 0-count + empty window
-        // when nothing matches so cold-start callers get a valid pattern.
+        // LLM3-04 + S17-B1: counts recent audit_logs rows for
+        // (actor, resourceTypes, actions) over the configured window so
+        // the anomaly detector can compare against its baseline. Returns
+        // 0-count + empty window when nothing matches so cold-start
+        // callers get a valid pattern.
+        //
+        // resourceTypes is always an IN clause (S17-B1 widened from a
+        // singular value because a gateway domain like `hr` maps to
+        // multiple audit resource types).
         //
         // `actions`: when provided, only rows whose action is in the list
         // are counted (IN clause). When omitted, all actions are counted
@@ -125,6 +130,18 @@ export function createDrizzleAuditStore(db: DrizzleClient): TransactionalAuditSt
         const windowEnd = new Date();
         const windowStart = new Date(windowEnd.getTime() - params.windowMs);
 
+        // empty resourceTypes → no possible match; short-circuit.
+        if (params.resourceTypes.length === 0) {
+          return {
+            actor: params.actor,
+            resourceType: '',
+            action: params.actions?.join(',') ?? 'any',
+            count: 0,
+            windowStart,
+            windowEnd,
+          };
+        }
+
         const actionFilter = params.actions && params.actions.length > 0
           ? sql`AND action = ANY(${params.actions as string[]})`
           : sql``;
@@ -132,7 +149,7 @@ export function createDrizzleAuditStore(db: DrizzleClient): TransactionalAuditSt
         const result = await client.execute(
           sql`SELECT COUNT(*)::int AS count FROM ${auditLogs}
               WHERE user_id = ${params.actor}
-                AND resource_type = ${params.resourceType}
+                AND resource_type = ANY(${params.resourceTypes as string[]})
                 ${actionFilter}
                 AND created_at >= ${windowStart}
                 AND created_at <= ${windowEnd}`,
@@ -141,8 +158,8 @@ export function createDrizzleAuditStore(db: DrizzleClient): TransactionalAuditSt
         const count = rows[0]?.count ?? 0;
         return {
           actor: params.actor,
-          resourceType: params.resourceType,
           // representative label for display/logs; not used by the detector
+          resourceType: params.resourceTypes.join(','),
           action: params.actions?.join(',') ?? 'any',
           count,
           windowStart,

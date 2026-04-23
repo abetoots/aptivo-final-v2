@@ -85,20 +85,28 @@ export interface AuditStore {
    * when no events match, rather than throwing, so cold-start callers
    * can treat absence as a valid signal.
    *
+   * `resourceTypes`: array of resource_type values to count (matched
+   * via SQL `IN`). S17-B1 widened from a single value because a domain
+   * (`hr`, `crypto`) covers multiple audit resource types — `hr` covers
+   * `candidate` + `employee` + `contract`, etc. Empty array is a
+   * valid signal: callers like the LLM gateway's `core` domain have
+   * no audit surface, so an empty list short-circuits the SQL query
+   * and returns a zero-count pattern without executing.
+   *
    * `actions`: optional whitelist. When provided, only rows whose action
    * is in the list are counted. When omitted, ALL actions for the
-   * (actor, resourceType) tuple are counted — use this when the caller
-   * doesn't know the exact action taxonomy. Needed because PII audit
-   * events emit `pii.read`, `pii.read.bulk`, `pii.read.export` etc.,
-   * not a single `'read'` action.
+   * (actor, resourceTypes) tuple are counted. PII audit events emit
+   * `pii.read`, `pii.read.bulk`, `pii.read.export` — narrow the filter
+   * to the bulk variants when scoring anomalous bulk-export volume.
    */
   aggregateAccessPattern(params: {
     actor: string;
-    resourceType: string;
+    resourceTypes: readonly string[];
     actions?: readonly string[];
     windowMs: number;
   }): Promise<{
     actor: string;
+    /** representative resource label (joined when multi-valued); for display only */
     resourceType: string;
     /** representative action label ('any' when no filter applied); for display only */
     action: string;

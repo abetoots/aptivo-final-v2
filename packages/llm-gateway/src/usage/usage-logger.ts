@@ -32,6 +32,14 @@ export interface UsageRecord {
   latencyMs: number;
   wasFallback: boolean;
   primaryProvider?: string;
+  /**
+   * S17-B1: department attribution. Stamped by the gateway from the
+   * resolved actor (`ActorContext.departmentId`). When unset the row
+   * goes in unstamped — the column on `llm_usage_logs` is nullable.
+   * `DepartmentBudgetService.getSpendReport` reports `coverageLevel:
+   * 'none'` for ranges where every row is unstamped.
+   */
+  departmentId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,7 +66,7 @@ export class UsageLogger {
     response: CompletionResponse,
     provider: string,
     latencyMs: number,
-    opts?: { wasFallback?: boolean; primaryProvider?: string },
+    opts?: { wasFallback?: boolean; primaryProvider?: string; departmentId?: string },
   ): Promise<void> {
     const costUsd = calculateTotalCost(
       request.model,
@@ -80,6 +88,10 @@ export class UsageLogger {
       latencyMs,
       wasFallback: opts?.wasFallback ?? false,
       primaryProvider: opts?.primaryProvider,
+      // S17-B1: opts.departmentId is the actor's department from
+      // request.actor or deps.resolveActor; falls back to request.actor
+      // for callers that bypass the gateway pipeline (rare).
+      departmentId: opts?.departmentId ?? request.actor?.departmentId,
     });
   }
 

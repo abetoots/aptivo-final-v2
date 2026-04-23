@@ -14,6 +14,7 @@ import type {
   LLMError,
   CompletionRequest,
   CompletionResponse,
+  ActorContext,
 } from '../providers/types.js';
 import { isRetryableError } from '../providers/types.js';
 import type { BudgetService } from '../budget/budget-service.js';
@@ -58,12 +59,19 @@ export interface GatewayDeps {
    */
   anomalyGate?: AnomalyGate;
   /**
-   * Request context for anomaly evaluation. When the anomaly gate is
-   * wired, the gateway reads `request.userId` via this callback so the
-   * gate can scope its aggregate query. Defaults to skipping anomaly
-   * evaluation if the caller can't resolve an actor.
+   * S17-B1: fallback actor resolver. If `request.actor` is unset the
+   * gateway calls this hook once at the top of `complete()` and uses
+   * the result for anomaly-gate scoping AND department stamping on
+   * the usage log. Returning `undefined` skips anomaly evaluation and
+   * leaves the usage row unstamped (`departmentId = null`).
+   *
+   * Note: callers SHOULD prefer stamping `request.actor` directly
+   * (e.g. via the `requireLlmContext` middleware in `apps/web`) so
+   * the actor flows through the same path as request-context tracing.
+   * `resolveActor` exists for callers that don't have a middleware
+   * seam (background workflow steps that synthesise requests).
    */
-  resolveActor?: (request: CompletionRequest) => string | undefined;
+  resolveActor?: (request: CompletionRequest) => ActorContext | undefined;
   /** optional content filter (LLM2-02) */
   contentFilter?: ContentFilter;
   /** optional multi-provider router (LLM2-04) */
@@ -127,6 +135,13 @@ export function createLlmGateway(deps: GatewayDeps) {
       request: CompletionRequest,
       options: GatewayRequestOptions = {},
     ): Promise<Result<GatewayResponse, LLMError>> {
+      // S17-B1: resolve actor once at top of pipeline. `request.actor`
+      // (caller-stamped, e.g. via requireLlmContext middleware) wins
+      // over the deps-supplied resolver. Used for both anomaly-gate
+      // scoping and departmentId stamping on the usage log.
+      const actor: ActorContext | undefined =
+        request.actor ?? deps.resolveActor?.(request);
+
       // step 1: rate limit
       if (options.userId && deps.rateLimiter) {
         const rateResult = await deps.rateLimiter.enforce(options.userId);
@@ -167,21 +182,19 @@ export function createLlmGateway(deps: GatewayDeps) {
       // step 3b: anomaly gate (optional, LLM3-04). Runs after injection so
       // pattern-matching attacks block first (cheaper, deterministic); runs
       // before content filter so anomalous volumes aren't billed through the
-      // pipeline. Actor resolution is pluggable — if the caller can't name an
-      // actor, the gate is skipped.
-      if (deps.anomalyGate) {
-        const actor = deps.resolveActor?.(request);
-        if (actor) {
-          // resourceType reuses the request domain as a coarse scope key;
-          // finer-grained scoping (e.g. per-table) is an audit-store concern.
-          const decision = await deps.anomalyGate.evaluate(actor, request.domain);
-          if (decision.action === 'block' || decision.action === 'throttle') {
-            return Result.err({
-              _tag: 'AnomalyBlocked' as const,
-              reason: decision.reason,
-              cooldownMs: decision.cooldownMs,
-            });
-          }
+      // pipeline. S17-B1: actor was resolved once at the top of the pipeline;
+      // gate is skipped when no actor is available.
+      if (deps.anomalyGate && actor) {
+        // resourceType reuses the request domain as a coarse scope key;
+        // composition root maps domain → audit action whitelist so the
+        // aggregate query matches real audit rows (S16 BLOCKER closed).
+        const decision = await deps.anomalyGate.evaluate(actor.userId, request.domain);
+        if (decision.action === 'block' || decision.action === 'throttle') {
+          return Result.err({
+            _tag: 'AnomalyBlocked' as const,
+            reason: decision.reason,
+            cooldownMs: decision.cooldownMs,
+          });
         }
       }
 
@@ -276,7 +289,10 @@ export function createLlmGateway(deps: GatewayDeps) {
         if (!textResult.ok) return textResult;
       }
 
-      // step 10: log usage (fire-and-forget, don't block response)
+      // step 10: log usage (fire-and-forget, don't block response).
+      // S17-B1: pass resolved actor's departmentId so the usage row is
+      // attributable. When actor is undefined, departmentId is undefined
+      // and the row is left unstamped (column is nullable per S16).
       const costUsd = await logUsageSafe(
         deps.usageLogger,
         request,
@@ -285,6 +301,7 @@ export function createLlmGateway(deps: GatewayDeps) {
         latencyMs,
         wasFallback,
         primaryProvider.id,
+        actor?.departmentId,
       );
 
       // step 11: return
@@ -307,6 +324,7 @@ async function logUsageSafe(
   latencyMs: number,
   wasFallback: boolean,
   primaryProviderId: string,
+  departmentId: string | undefined,
 ): Promise<number> {
   const { calculateTotalCost } = await import('../cost/calculator.js');
   const costUsd = calculateTotalCost(
@@ -319,6 +337,7 @@ async function logUsageSafe(
     await logger.logUsage(request, response, provider, latencyMs, {
       wasFallback,
       primaryProvider: wasFallback ? primaryProviderId : undefined,
+      departmentId,
     });
   } catch (err) {
     // usage logging failure must not block the response

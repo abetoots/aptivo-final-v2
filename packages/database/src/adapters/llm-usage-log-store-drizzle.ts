@@ -39,6 +39,10 @@ export interface UsageRecord {
   latencyMs: number;
   wasFallback: boolean;
   primaryProvider?: string;
+  // S17-B1: department attribution. Mirrors the gateway's UsageRecord
+  // field (full @aptivo/types consolidation remains an S18 refactor).
+  // Column on llm_usage_logs is nullable; unstamped rows write null.
+  departmentId?: string;
 }
 
 export interface UsageStore {
@@ -66,6 +70,7 @@ export function createDrizzleUsageLogStore(db: DrizzleClient): UsageStore {
           latencyMs: record.latencyMs,
           wasFallback: record.wasFallback,
           primaryProvider: record.primaryProvider ?? null,
+          departmentId: record.departmentId ?? null,
         });
     },
   };

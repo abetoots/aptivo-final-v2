@@ -75,4 +75,35 @@ describe('UsageLogger', () => {
     const expected = expectedLlm * 1.05;
     expect(costUsd).toBeCloseTo(expected, 10);
   });
+
+  // S17-B1: department attribution
+  it('persists departmentId from opts when provided', async () => {
+    await logger.logUsage(
+      makeRequest(),
+      makeResponse(),
+      'openai',
+      100,
+      { departmentId: 'dept-eng' },
+    );
+
+    const record = store.inserted[0] as Record<string, unknown>;
+    expect(record['departmentId']).toBe('dept-eng');
+  });
+
+  it('persists departmentId from request.actor when opts.departmentId is unset', async () => {
+    const request = makeRequest({
+      actor: { userId: 'user-1', departmentId: 'dept-fin' },
+    });
+    await logger.logUsage(request, makeResponse(), 'openai', 100);
+
+    const record = store.inserted[0] as Record<string, unknown>;
+    expect(record['departmentId']).toBe('dept-fin');
+  });
+
+  it('leaves departmentId undefined when neither opts nor request.actor carry it', async () => {
+    await logger.logUsage(makeRequest(), makeResponse(), 'openai', 100);
+
+    const record = store.inserted[0] as Record<string, unknown>;
+    expect(record['departmentId']).toBeUndefined();
+  });
 });

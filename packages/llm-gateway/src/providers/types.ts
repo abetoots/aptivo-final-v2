@@ -60,6 +60,22 @@ export interface ToolCall {
 // request / response
 // ---------------------------------------------------------------------------
 
+/**
+ * S17-B1: actor context resolved from the request's authentication
+ * principal. Carries the user identity used for anomaly-gate scoping
+ * and the department used for usage attribution. Optional because not
+ * every gateway caller is request-scoped (e.g. background workflow
+ * steps may run as the platform service account).
+ *
+ * Populated either by the caller (e.g. requireLlmContext middleware
+ * in apps/web) or, as a fallback, by `GatewayDeps.resolveActor`.
+ */
+export interface ActorContext {
+  readonly userId: string;
+  readonly departmentId?: string;
+  readonly roles?: readonly string[];
+}
+
 export interface CompletionRequest {
   model: string;
   messages: Message[];
@@ -71,6 +87,12 @@ export interface CompletionRequest {
   workflowId?: string;
   workflowStepId?: string;
   domain: Domain;
+  /**
+   * S17-B1: actor stamped by the caller. When unset the gateway falls
+   * back to `GatewayDeps.resolveActor`. Field is optional so existing
+   * callers (background workflows, tests) compile unchanged.
+   */
+  actor?: ActorContext;
 }
 
 export interface CompletionResponse {

@@ -638,11 +638,22 @@ export const getLlmGateway = lazy(() => {
     router,
     injectionClassifier,
     anomalyGate,
-    // resolveActor: the gateway evaluates the anomaly gate per request.
-    // CompletionRequest today carries `workflowId`/`workflowStepId` but not
-    // a user-id — so the gate is skipped for workflow-scoped traffic. When
-    // S17 wires request → user context (FA3-01 department-ID stamping
-    // lands similar plumbing), this resolver gets its actor.
+    // S17-B1: callers stamp `request.actor` directly via the
+    // `requireLlmContext` middleware (apps/web/src/lib/middleware).
+    // This fallback resolver returns undefined because the gateway
+    // package has no request-context store of its own — background
+    // workflow callers that need anomaly evaluation must stamp the
+    // actor on the CompletionRequest before calling complete().
+    //
+    // STATUS as of S17-B1: the contract is in place but no
+    // production caller stamps `request.actor` yet. Workflows in
+    // `apps/web/src/lib/workflows/*` call `gateway.complete(request)`
+    // without an actor (their Inngest event payloads don't carry
+    // initiating-user context). Wiring those callsites is its own
+    // task — sequenced behind the workflow → user actor propagation
+    // work. Until then, anomaly evaluation is a no-op for workflow
+    // traffic and `llm_usage_logs.department_id` stays NULL — both
+    // are documented S16-carry limitations.
     resolveActor: () => undefined,
   });
 });
@@ -750,25 +761,84 @@ function buildAnomalyGate(): AnomalyGate | undefined {
     detector,
     isEnabled: () => envEnabled,
     logger: safetyLoggerBridge,
-    // ⚠️ S17 BLOCKER: the `resourceType` passed here is `request.domain`
-    // (crypto|hr|core), but real audit rows use resource types like
-    // 'candidate', 'employee', 'contract' and actions like 'pii.read.bulk'.
-    // With the current wiring the aggregate will match ZERO rows once
-    // S17 wires `resolveActor` — the gate will appear to work but never
-    // actually fire. S17 must align the key semantics before enabling
-    // `ANOMALY_BLOCKING_ENABLED` in any environment. Options to resolve:
-    //   (a) pass a per-domain action allow-list (e.g. crypto → ['trade',
-    //       'wallet.read']; hr → ['pii.read', 'pii.read.bulk', ...]) and
-    //       let the query match by actions, OR
-    //   (b) change the gateway to pass resource-specific keys instead
-    //       of the domain, OR
-    //   (c) add a domain-scoped index on audit_logs and query by domain
-    //       rather than resource_type.
-    // Documented in S16_LLM3_04_MULTI_REVIEW.md §"Aggregate Key Mismatch".
-    getAccessPattern: async (actor, resourceType) =>
-      auditStore.aggregateAccessPattern({ actor, resourceType, windowMs }),
+    // S17-B1: resolves the S16 BLOCKER comment. The gateway passes
+    // `request.domain` ('hr'/'crypto'/'core') as `resourceType`. We map
+    // that to the real audit row scope: a list of `resource_type`
+    // values + a list of `action` values that ARE actually emitted
+    // by the workflows + middleware in this repo. Domain `core` is
+    // short-circuited via empty resourceTypes because no `core` PII
+    // surface exists today.
+    //
+    // OPERATIONAL CAVEAT (deliberate; tracked separately): the audit
+    // service writes `audit_logs.user_id` ONLY when `actor.type ===
+    // 'user'` (see packages/audit/src/audit-service.ts:61). All
+    // current workflow emitters use `actor.type: 'system'`, so the
+    // `WHERE user_id = ${actor}` filter in aggregateAccessPattern
+    // matches zero rows for workflow-originated traffic regardless
+    // of resource_type/action. Closing Gate #2 in production
+    // therefore requires workflow→user actor propagation (i.e.
+    // workflows pass the initiating user through the Inngest event
+    // payload and emit audit rows with `actor.type: 'user'`). That
+    // work is intentionally out of B1 scope — see the S17 delivery
+    // review for the follow-up task. The mapping below is correct
+    // for the day actor.type='user' rows start landing.
+    getAccessPattern: async (actor, resourceType) => {
+      const mapping = DOMAIN_AUDIT_SCOPE[resourceType as keyof typeof DOMAIN_AUDIT_SCOPE]
+        ?? DOMAIN_AUDIT_SCOPE.core;
+      return auditStore.aggregateAccessPattern({
+        actor,
+        resourceTypes: mapping.resourceTypes,
+        actions: mapping.actions,
+        windowMs,
+      });
+    },
   });
 }
+
+/**
+ * S17-B1: per-domain anomaly-evaluation scope for the LLM gateway.
+ * Each domain maps to:
+ *   - resourceTypes: audit `resource_type` values that count toward the
+ *     anomaly aggregate (matched via SQL IN clause)
+ *   - actions: audit `action` values to filter on; empty = no filter
+ *
+ * Values were verified against actual emitters at the time of writing
+ * (S17-B1 multi-model review caught a phantom-values regression in an
+ * earlier draft):
+ *   - HR resource types come from the PII audit middleware vocabulary
+ *     (`packages/audit/src/middleware/pii-read-audit.ts`). NOTE: no
+ *     production callsites for `auditPiiReadBulk`/`auditPiiReadExport`
+ *     exist yet — the mapping is correct but inert until HR list/export
+ *     endpoints are wrapped with `withPiiReadAudit`. That instrumentation
+ *     is its own task tracked alongside Epic 5 HR onboarding (S18).
+ *   - Crypto resource types + actions come from
+ *     `apps/web/src/lib/workflows/crypto-paper-trade.ts` and
+ *     `crypto-security-scan.ts` — the events that *are* emitted today.
+ *   - `core` has no audit surface; empty arrays short-circuit the SQL
+ *     query in `audit-store-drizzle.aggregateAccessPattern`.
+ *
+ * Extending: add new domains here AND add their `Domain` value to
+ * `packages/llm-gateway/src/providers/types.ts`.
+ */
+const DOMAIN_AUDIT_SCOPE = {
+  hr: {
+    resourceTypes: ['candidate', 'employee', 'contract'] as const,
+    actions: ['pii.read.bulk', 'pii.read.export'] as const,
+  },
+  crypto: {
+    // verified 2026-04-23 against crypto-paper-trade.ts + crypto-security-scan.ts
+    resourceTypes: ['trade-signal', 'trade-execution', 'security-report'] as const,
+    actions: [
+      'crypto.signal.risk-rejected',
+      'crypto.trade.paper-executed',
+      'crypto.security.scanned',
+    ] as const,
+  },
+  core: {
+    resourceTypes: [] as readonly string[],
+    actions: [] as readonly string[],
+  },
+} as const;
 
 // ---------------------------------------------------------------------------
 // crypto domain stores (S6-INF-CRY)

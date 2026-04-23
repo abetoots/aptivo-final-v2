@@ -40,7 +40,7 @@ describe('LLM3-04: gateway + AnomalyGate', () => {
   it('returns AnomalyBlocked when the gate decides block', async () => {
     const gateway = createLlmGateway(baseDeps({
       anomalyGate: gateReturning({ action: 'block', reason: 'z=6.0' }),
-      resolveActor: () => 'user:1',
+      resolveActor: () => ({ userId: 'user:1' }),
     }));
     const result = await gateway.complete(makeRequest({ model: 'gpt-4o-mini' }));
     expect(result.ok).toBe(false);
@@ -53,7 +53,7 @@ describe('LLM3-04: gateway + AnomalyGate', () => {
   it('returns AnomalyBlocked with cooldownMs when the gate decides throttle', async () => {
     const gateway = createLlmGateway(baseDeps({
       anomalyGate: gateReturning({ action: 'throttle', cooldownMs: 60_000, reason: 'z=4.2' }),
-      resolveActor: () => 'user:1',
+      resolveActor: () => ({ userId: 'user:1' }),
     }));
     const result = await gateway.complete(makeRequest({ model: 'gpt-4o-mini' }));
     expect(result.ok).toBe(false);
@@ -66,7 +66,7 @@ describe('LLM3-04: gateway + AnomalyGate', () => {
   it('passes through to provider when gate decides pass', async () => {
     const deps = baseDeps({
       anomalyGate: gateReturning({ action: 'pass' }),
-      resolveActor: () => 'user:1',
+      resolveActor: () => ({ userId: 'user:1' }),
     });
     const gateway = createLlmGateway(deps);
     const result = await gateway.complete(makeRequest({ model: 'gpt-4o-mini' }));
@@ -90,7 +90,7 @@ describe('LLM3-04: gateway + AnomalyGate', () => {
     const gateSpy = gateReturning({ action: 'pass' });
     const gateway = createLlmGateway(baseDeps({
       anomalyGate: gateSpy,
-      resolveActor: () => 'user:42',
+      resolveActor: () => ({ userId: 'user:42' }),
     }));
     await gateway.complete(makeRequest({ model: 'gpt-4o-mini', domain: 'crypto' }));
     expect(gateSpy.evaluate).toHaveBeenCalledWith('user:42', 'crypto');
@@ -121,7 +121,7 @@ describe('LLM3-04: pipeline ordering — injection before anomaly', () => {
     const gateway = createLlmGateway(baseDeps({
       injectionClassifier: asyncBlocker(),
       anomalyGate,
-      resolveActor: () => 'user:1',
+      resolveActor: () => ({ userId: 'user:1' }),
     }));
     const result = await gateway.complete(makeRequest({ model: 'gpt-4o-mini' }));
     expect(result.ok).toBe(false);
