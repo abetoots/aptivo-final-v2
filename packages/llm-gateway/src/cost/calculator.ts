@@ -6,7 +6,7 @@
  * @warning S2-W11 cost attribution covers LLM + infrastructure
  */
 
-import { getModelPricing } from './pricing.js';
+import { getModelPricing, type PricingLogger } from './pricing.js';
 
 /** breakdown of costs for a single request */
 export interface CostBreakdown {
@@ -39,8 +39,9 @@ export function calculateCost(
   model: string,
   promptTokens: number,
   completionTokens: number,
+  logger?: PricingLogger,
 ): CostBreakdown {
-  const pricing = getModelPricing(model);
+  const pricing = getModelPricing(model, logger);
 
   const inputCost = (promptTokens / 1_000_000) * pricing.input;
   const outputCost = (completionTokens / 1_000_000) * pricing.output;
@@ -58,6 +59,7 @@ export function calculateTotalCost(
   model: string,
   promptTokens: number,
   completionTokens: number,
+  logger?: PricingLogger,
 ): number {
-  return calculateCost(model, promptTokens, completionTokens).totalCost;
+  return calculateCost(model, promptTokens, completionTokens, logger).totalCost;
 }

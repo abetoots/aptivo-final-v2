@@ -164,9 +164,11 @@ import {
   createReplicateClient,
   asAsyncInjectionClassifier,
   createAnomalyGate,
+  createInMemorySafetyCounter,
   type AsyncInjectionClassifier,
   type AnomalyGate,
   type Logger as SafetyLogger,
+  type SafetyInferenceCounter,
 } from '@aptivo/llm-gateway/safety';
 import { createAnomalyDetector } from '@aptivo/audit';
 
@@ -597,7 +599,14 @@ function buildLlmProviders(): {
 function buildLlmRateLimitStore() {
   const redis = getSessionRedis();
   if (redis) {
-    return createRedisRateLimitStore({ redis });
+    // S17-B4: pass the safe-logger so persist failures emit structured
+    // events (`redis_rate_limit_persist_failed`) rather than plain
+    // console.warn — closes one of the legacy console.warn migration
+    // sites in @aptivo/llm-gateway.
+    return createRedisRateLimitStore({
+      redis,
+      logger: { warn: (event, ctx) => appLog.warn(event, ctx) },
+    });
   }
   return new LlmInMemoryRateLimitStore();
 }
@@ -625,7 +634,12 @@ export const getLlmGateway = lazy(() => {
     ? createProviderRouter({ providers, modelToProvider })
     : undefined;
 
-  const usageLogger = new UsageLogger(usageLogStore);
+  // S17-B4: shared safe-logger bridge for gateway-level events
+  // (budget warnings, unknown-model pricing fallbacks). Same shape
+  // matches both GatewayDeps.logger and PricingLogger.
+  const gatewayLogger = { warn: (event: string, ctx?: Record<string, unknown>) => appLog.warn(event, ctx) };
+
+  const usageLogger = new UsageLogger(usageLogStore, gatewayLogger);
   const injectionClassifier = buildInjectionClassifier(usageLogger);
   const anomalyGate = buildAnomalyGate();
 
@@ -638,6 +652,7 @@ export const getLlmGateway = lazy(() => {
     router,
     injectionClassifier,
     anomalyGate,
+    logger: gatewayLogger,
     // S17-B1: callers stamp `request.actor` directly via the
     // `requireLlmContext` middleware (apps/web/src/lib/middleware).
     // This fallback resolver returns undefined because the gateway
@@ -671,6 +686,14 @@ const safetyLoggerBridge: SafetyLogger = {
   warn: (msg, ctx) => appLog.warn(msg, ctx),
   error: (msg, ctx) => appLog.error(msg, ctx),
 };
+
+// S17-B4: in-process safety-inference outcome counter. Shared between
+// the ML classifier (which records every call) and the MetricService
+// (which reads the timeout rate for the SLO cron). Single-instance
+// only — multi-instance accuracy requires a Redis-backed counter.
+const safetyInferenceCounter = createInMemorySafetyCounter();
+
+export const getSafetyInferenceCounter = lazy(() => safetyInferenceCounter);
 
 function buildInjectionClassifier(usageLogger: UsageLogger): AsyncInjectionClassifier {
   const ruleBasedFallback = asAsyncInjectionClassifier(createInjectionClassifier());
@@ -706,6 +729,9 @@ function buildInjectionClassifier(usageLogger: UsageLogger): AsyncInjectionClass
     isEnabled,
     logger: safetyLoggerBridge,
     timeoutMs: Number(process.env.ML_INJECTION_TIMEOUT_MS) || undefined,
+    // S17-B4: every classify() call records to the shared counter so
+    // the SLO cron can compute the ml_classifier_timeout rate.
+    metrics: safetyInferenceCounter,
     usageSink: {
       logSafetyInference: (rec) => usageLogger.logSafetyInference(rec),
     },
@@ -882,9 +908,13 @@ export const getPositionStore = lazy(() =>
 // ---------------------------------------------------------------------------
 
 export const getMetricService = lazy(() =>
-  createMetricService(
-    createMetricQueries(db() as unknown as Parameters<typeof createMetricQueries>[0]),
-  ),
+  createMetricService({
+    ...createMetricQueries(db() as unknown as Parameters<typeof createMetricQueries>[0]),
+    // S17-B4: same in-process counter the ML classifier increments,
+    // so the SLO cron's ml_classifier_timeout-rate evaluator reads
+    // a coherent view of recent traffic.
+    safetyInferenceCounter: getSafetyInferenceCounter(),
+  }),
 );
 
 // ---------------------------------------------------------------------------

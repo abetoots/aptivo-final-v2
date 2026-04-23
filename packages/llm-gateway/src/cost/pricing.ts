@@ -38,14 +38,31 @@ export const MODEL_PRICING: Readonly<Record<string, ModelPricingEntry>> = Object
 export const FALLBACK_MODEL = 'gpt-4o-mini' as const;
 
 /**
- * Returns pricing for a model, falling back to gpt-4o-mini rates
- * with a console warning if the model is unknown.
+ * S17-B4: minimal pricing-logger contract. Kept narrow so callers can
+ * pass any structured logger (composition root binds to the app's
+ * SafeLogger). Optional — when unset, falls back to `console.warn` to
+ * preserve legacy behaviour for callers that haven't been threaded.
  */
-export function getModelPricing(model: string): ModelPricingEntry {
+export interface PricingLogger {
+  warn(event: string, context?: Record<string, unknown>): void;
+}
+
+/**
+ * Returns pricing for a model, falling back to gpt-4o-mini rates
+ * with a structured warning if the model is unknown. The optional
+ * `logger` is the S17-B4 migration off `console.warn`; when omitted,
+ * the message is emitted via `console.warn` to keep legacy callers
+ * working without a forced refactor.
+ */
+export function getModelPricing(model: string, logger?: PricingLogger): ModelPricingEntry {
   const pricing = MODEL_PRICING[model];
   if (pricing) return pricing;
 
-  console.warn(`unknown model pricing: ${model}, using ${FALLBACK_MODEL} rates`);
+  if (logger) {
+    logger.warn('llm_pricing_unknown_model', { model, fallback: FALLBACK_MODEL });
+  } else {
+    console.warn(`unknown model pricing: ${model}, using ${FALLBACK_MODEL} rates`);
+  }
   // fallback is guaranteed to exist
   return MODEL_PRICING[FALLBACK_MODEL]!;
 }

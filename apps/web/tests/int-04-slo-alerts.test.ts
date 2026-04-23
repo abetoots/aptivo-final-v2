@@ -24,6 +24,10 @@ const healthyMetrics: SloMetrics = {
   retentionFailureCount: 0,
   notificationTotal: 200,
   notificationDelivered: 200,
+  // S17-B4: ML safety classifier metrics — healthy = below the
+  // min-samples threshold so the alert short-circuits to 'ok'.
+  mlClassifierTimeoutRate: 0,
+  mlSafetyVolume: 0,
 };
 
 describe('INT-04: SLO Alerts', () => {
@@ -98,9 +102,9 @@ describe('INT-04: SLO Alerts', () => {
   });
 
   describe('evaluateAllSlos', () => {
-    it('evaluates all 8 alerts (6 threshold + 2 burn-rate)', () => {
+    it('evaluates all 9 alerts (6 threshold + 2 burn-rate + 1 ml-classifier-timeout)', () => {
       const results = evaluateAllSlos(healthyMetrics);
-      expect(results.size).toBe(8);
+      expect(results.size).toBe(9);
     });
 
     it('all ok with healthy metrics', () => {
@@ -121,13 +125,16 @@ describe('INT-04: SLO Alerts', () => {
         retentionFailureCount: 3, // fires
         notificationTotal: 100,
         notificationDelivered: 80, // 80% — fires
+        // S17-B4: above min-samples + above max-rate threshold → fires
+        mlClassifierTimeoutRate: 0.10,
+        mlSafetyVolume: 50,
       };
       const results = evaluateAllSlos(badMetrics);
       let firingCount = 0;
       for (const [, result] of results) {
         if (result.status === 'firing') firingCount++;
       }
-      expect(firingCount).toBe(8);
+      expect(firingCount).toBe(9);
     });
   });
 });

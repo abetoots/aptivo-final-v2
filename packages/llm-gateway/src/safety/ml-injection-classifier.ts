@@ -21,6 +21,7 @@ import { Result } from '@aptivo/types';
 import { z } from 'zod';
 import type { Domain, InjectionVerdict } from './safety-types.js';
 import type { InjectionClassifier } from './injection-classifier.js';
+import type { SafetyInferenceCounter } from './safety-inference-counter.js';
 
 // ---------------------------------------------------------------------------
 // async classifier — adapter-friendly shape
@@ -108,6 +109,15 @@ export interface MlClassifierDeps {
   model?: string;
   /** flat per-call cost in USD; defaults to 0 until a pricing contract lands */
   costPerCallUsd?: number;
+  /**
+   * S17-B4: optional outcome counter feeding the SLO timeout-rate
+   * evaluator. When provided, every classify() call records exactly
+   * one outcome (`success` | `timeout` | `error`). The counter is
+   * read by `MetricService.getMlClassifierTimeoutRate` to compute the
+   * burn-rate signal. When unset, no counter wiring (used by tests
+   * that don't care about the metric path).
+   */
+  metrics?: SafetyInferenceCounter;
 }
 
 const DEFAULT_TIMEOUT_MS = 500;
@@ -133,6 +143,11 @@ export function createMlInjectionClassifier(deps: MlClassifierDeps): AsyncInject
             cause: parsed.error.message,
             domain,
           });
+          // S17-B4: invalid-response is an upstream contract break,
+          // not a transport timeout. Counted as 'error' so the
+          // timeout-rate metric stays focused on actual latency
+          // regressions.
+          deps.metrics?.record('error');
           return deps.ruleBasedFallback.classify(prompt, domain);
         }
         const latencyMs = Date.now() - start;
@@ -150,12 +165,15 @@ export function createMlInjectionClassifier(deps: MlClassifierDeps): AsyncInject
           matchedPatterns: [`ml:${parsed.data.category ?? 'unknown'}`],
           domain,
         };
+        deps.metrics?.record('success');
         return Result.ok(verdict);
       } catch (err) {
         if (isTimeout(err)) {
           deps.logger.warn('ml_classifier_timeout', { timeoutMs, domain });
+          deps.metrics?.record('timeout');
         } else {
           deps.logger.warn('ml_classifier_error', { cause: stringify(err), domain });
+          deps.metrics?.record('error');
         }
         return deps.ruleBasedFallback.classify(prompt, domain);
       }

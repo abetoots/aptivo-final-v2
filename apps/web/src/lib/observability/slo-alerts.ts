@@ -36,6 +36,12 @@ export interface SloMetrics {
   // notification metrics (T1-W23)
   notificationTotal: number;
   notificationDelivered: number;
+  // S17-B4: ml safety classifier — fraction of calls in window that timed
+  // out and silently fell back to rule-based. mlSafetyVolume is the
+  // total recorded calls in the same window so the evaluator can skip
+  // rate alerting when traffic is too low to be meaningful.
+  mlClassifierTimeoutRate: number;
+  mlSafetyVolume: number;
 }
 
 export type SloAlertResult =
@@ -51,6 +57,13 @@ export const SLO_THRESHOLDS = {
   auditDlqMaxPending: 100, // alert if >100 pending DLQ entries
   retentionMaxFailures: 0, // any failure fires alert
   notificationDeliveryRate: 0.95, // 95%
+  // S17-B4: sustained > 5% timeout rate over 5-min window means the ML
+  // classifier is silently falling back to rule-based; ops needs the
+  // signal so they can investigate Replicate latency or disable the
+  // flag. minSampleSize prevents alerts when 1-of-2 calls timing out
+  // produces a misleading 50% rate.
+  mlClassifierTimeoutMaxRate: 0.05,
+  mlClassifierTimeoutMinSamples: 20,
 } as const;
 
 // -- alert definitions --
@@ -280,6 +293,34 @@ export const mcpBurnRateAlert: SloAlert = createBurnRateAlert(1);
 
 // -- aggregate evaluator --
 
+// S17-B4: ML classifier silent-fallback detector. Fires when sustained
+// timeout/error rate indicates Replicate latency or outage. Skipped
+// when the sample size in-window is below threshold (a 50% rate over
+// 2 calls is noise, not signal).
+export const mlClassifierTimeoutAlert: SloAlert = {
+  id: 'slo-ml-classifier-timeout',
+  name: 'ML Injection Classifier Timeout Rate',
+  description:
+    'Fires when >5% of ML classifier calls in the 5-min window timed out (sustained Replicate latency → silent rule-based fallback)',
+  warning: 'S17-B4',
+  evaluate: (metrics) => {
+    const rate = metrics.mlClassifierTimeoutRate;
+    const threshold = SLO_THRESHOLDS.mlClassifierTimeoutMaxRate;
+    if (
+      metrics.mlSafetyVolume >= SLO_THRESHOLDS.mlClassifierTimeoutMinSamples
+      && rate > threshold
+    ) {
+      return {
+        status: 'firing',
+        value: rate,
+        threshold,
+        message: `ML classifier timeout rate ${(rate * 100).toFixed(1)}% over ${metrics.mlSafetyVolume} calls exceeds ${threshold * 100}% threshold — Replicate latency likely; classifier is falling back to rule-based`,
+      };
+    }
+    return { status: 'ok', value: rate, threshold };
+  },
+};
+
 export const ALL_SLO_ALERTS: SloAlert[] = [
   workflowSuccessAlert,
   hitlLatencyAlert,
@@ -289,6 +330,7 @@ export const ALL_SLO_ALERTS: SloAlert[] = [
   notificationDeliveryAlert,
   workflowBurnRateAlert,
   mcpBurnRateAlert,
+  mlClassifierTimeoutAlert,
 ];
 
 export function evaluateAllSlos(

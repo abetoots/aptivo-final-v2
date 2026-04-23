@@ -67,6 +67,9 @@ const healthyMetrics: SloMetrics = {
   retentionFailureCount: 0,
   notificationTotal: 200,
   notificationDelivered: 200,
+  // S17-B4
+  mlClassifierTimeoutRate: 0,
+  mlSafetyVolume: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -339,8 +342,8 @@ describe('OBS-01: burn-rate alerts in ALL_SLO_ALERTS', () => {
     expect(ids).toContain('slo-burn-mcp-success-burn');
   });
 
-  it('has 8 total alerts (6 threshold + 2 burn-rate)', () => {
-    expect(ALL_SLO_ALERTS).toHaveLength(8);
+  it('has 9 total alerts (6 threshold + 2 burn-rate + 1 ml-classifier-timeout)', () => {
+    expect(ALL_SLO_ALERTS).toHaveLength(9);
   });
 
   it('workflow burn-rate alert has correct metadata', () => {
@@ -355,11 +358,12 @@ describe('OBS-01: burn-rate alerts in ALL_SLO_ALERTS', () => {
     expect(mcpBurnRateAlert.description).toContain('mcp-success-burn');
   });
 
-  it('evaluateAllSlos returns results for all 8 alerts', () => {
+  it('evaluateAllSlos returns results for all 9 alerts', () => {
     const results = evaluateAllSlos(healthyMetrics);
-    expect(results.size).toBe(8);
+    expect(results.size).toBe(9);
     expect(results.has('slo-burn-workflow-success-burn')).toBe(true);
     expect(results.has('slo-burn-mcp-success-burn')).toBe(true);
+    expect(results.has('slo-ml-classifier-timeout')).toBe(true);
   });
 });
 

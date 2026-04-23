@@ -7,6 +7,7 @@
  */
 
 import type { SloMetricsDeps } from './slo-cron.js';
+import type { SafetyInferenceCounter } from '@aptivo/llm-gateway/safety';
 
 // -- types --
 
@@ -23,6 +24,12 @@ export interface MetricServiceDeps {
   countDeliveriesByStatus: (status: string, windowMs: number) => Promise<number>;
   /** count total notification deliveries within window */
   countDeliveriesTotal: (windowMs: number) => Promise<number>;
+  /**
+   * S17-B4: ML safety classifier outcome counter. Wired by the
+   * composition root to the same counter the ML classifier increments
+   * on each call. Used to compute the timeout-rate burn signal.
+   */
+  safetyInferenceCounter: SafetyInferenceCounter;
 }
 
 export interface MetricService extends SloMetricsDeps {
@@ -74,6 +81,16 @@ export function createMetricService(
         deps.countDeliveriesByStatus('delivered', windowMs),
       ]);
       return { total, delivered };
+    },
+
+    // S17-B4: sync read-through to the in-process counter. The cron's
+    // collectSloMetrics will Promise.all() everything else and call
+    // this synchronously inside the assembled metrics record.
+    getMlSafetyMetrics() {
+      return {
+        timeoutRate: deps.safetyInferenceCounter.timeoutRate(windowMs),
+        volume: deps.safetyInferenceCounter.volumeInWindow(windowMs),
+      };
     },
   };
 }

@@ -77,3 +77,12 @@ export type {
   ContentFilterConfig,
 } from './safety-types.js';
 export { DEFAULT_DOMAIN_TIERS, DEFAULT_TIER_CATEGORIES } from './safety-types.js';
+
+// safety-inference outcome counter (S17-B4) — feeds the SLO cron's
+// ml_classifier_timeout-rate evaluator without needing a log query path.
+export { createInMemorySafetyCounter } from './safety-inference-counter.js';
+export type {
+  SafetyInferenceCounter,
+  SafetyInferenceOutcome,
+  InMemorySafetyCounterOptions,
+} from './safety-inference-counter.js';

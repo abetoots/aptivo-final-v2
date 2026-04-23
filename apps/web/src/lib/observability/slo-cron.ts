@@ -17,6 +17,10 @@ export interface SloMetricsDeps {
   getHitlLatencyP95: () => Promise<number>;
   getRetentionFailureCount: () => Promise<number>;
   getNotificationCounts: () => Promise<{ total: number; delivered: number }>;
+  // S17-B4: ml safety classifier outcome counter readback. Sync because
+  // the in-memory counter is sync; if a future Redis-backed counter
+  // lands the contract widens to async (Promise<{ rate, volume }>).
+  getMlSafetyMetrics: () => { timeoutRate: number; volume: number };
 }
 
 // -- metrics collector --
@@ -34,6 +38,8 @@ export async function collectSloMetrics(
       deps.getNotificationCounts(),
     ]);
 
+  const mlSafety = deps.getMlSafetyMetrics();
+
   return {
     workflowTotal: workflow.total,
     workflowSuccess: workflow.success,
@@ -44,6 +50,8 @@ export async function collectSloMetrics(
     retentionFailureCount: retentionFailures,
     notificationTotal: notifications.total,
     notificationDelivered: notifications.delivered,
+    mlClassifierTimeoutRate: mlSafety.timeoutRate,
+    mlSafetyVolume: mlSafety.volume,
   };
 }
 

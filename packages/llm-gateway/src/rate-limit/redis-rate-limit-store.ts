@@ -28,6 +28,12 @@ export interface RedisRateLimitStoreConfig {
   keyPrefix?: string;
   /** ttl in seconds for each key (default: 3600 = 1 hour) */
   defaultTtlSeconds?: number;
+  /**
+   * S17-B4: optional structured logger for redis-write failures.
+   * Falls back to `console.warn` when omitted so existing tests +
+   * callers keep working without a forced refactor.
+   */
+  logger?: { warn(event: string, context?: Record<string, unknown>): void };
 }
 
 // ---------------------------------------------------------------------------
@@ -35,7 +41,7 @@ export interface RedisRateLimitStoreConfig {
 // ---------------------------------------------------------------------------
 
 export function createRedisRateLimitStore(config: RedisRateLimitStoreConfig): RateLimitStore {
-  const { redis, keyPrefix = 'ratelimit:llm:', defaultTtlSeconds = 3600 } = config;
+  const { redis, keyPrefix = 'ratelimit:llm:', defaultTtlSeconds = 3600, logger } = config;
 
   return {
     async get(key: string): Promise<RateLimitState | null> {
@@ -52,9 +58,18 @@ export function createRedisRateLimitStore(config: RedisRateLimitStoreConfig): Ra
     async set(key: string, state: RateLimitState): Promise<void> {
       try {
         await redis.set(`${keyPrefix}${key}`, JSON.stringify(state), { ex: defaultTtlSeconds });
-      } catch {
-        // fail-open on write — log warning but don't throw
-        console.warn('redis rate limit store: failed to persist state for', key);
+      } catch (cause) {
+        // fail-open on write — log warning but don't throw.
+        // S17-B4: prefer the injected logger; legacy console.warn path
+        // preserved for callers that haven't been threaded yet.
+        if (logger) {
+          logger.warn('redis_rate_limit_persist_failed', {
+            key,
+            cause: cause instanceof Error ? cause.message : String(cause),
+          });
+        } else {
+          console.warn('redis rate limit store: failed to persist state for', key);
+        }
       }
     },
   };

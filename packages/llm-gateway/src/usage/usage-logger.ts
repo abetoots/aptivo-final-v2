@@ -7,6 +7,7 @@
 
 import type { CompletionRequest, CompletionResponse, Domain } from '../providers/types.js';
 import { calculateTotalCost } from '../cost/calculator.js';
+import type { PricingLogger } from '../cost/pricing.js';
 
 // ---------------------------------------------------------------------------
 // usage record
@@ -56,7 +57,13 @@ export interface UsageStore {
 // ---------------------------------------------------------------------------
 
 export class UsageLogger {
-  constructor(private readonly store: UsageStore) {}
+  // S17-B4: optional logger forwarded into calculateTotalCost so
+  // unknown-model fallback warnings emit through the structured
+  // logger instead of console.warn.
+  constructor(
+    private readonly store: UsageStore,
+    private readonly pricingLogger?: PricingLogger,
+  ) {}
 
   /**
    * Logs a completed LLM request's usage and cost.
@@ -72,6 +79,7 @@ export class UsageLogger {
       request.model,
       response.usage.promptTokens,
       response.usage.completionTokens,
+      this.pricingLogger,
     );
 
     await this.store.insert({

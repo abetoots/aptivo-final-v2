@@ -386,6 +386,32 @@ All services emit telemetry via OpenTelemetry SDK with direct OTLP export (Railw
 | **Health Check Failures**    | Railway         | Container unhealthy 3x | PagerDuty P1  | On-Call SRE     |
 | **Application Errors**       | Sentry/OTel     | New error type     | Slack #ops-errors | On-Call Support |
 | **Feature Flag Misconfig**   | Startup logs    | Env var parse failure | Slack #ops-alerts | DevOps Team     |
+| **ML Classifier Timeout Rate** | SLO cron (`slo-ml-classifier-timeout`) | > 5% timeouts over 5-min window AND ≥ 20 calls in window | Slack #ops-alerts | On-Call SRE |
+
+#### 5.2.1 ML Classifier Timeout Alert (S17-B4)
+
+The `slo-ml-classifier-timeout` SLO alert (defined in `apps/web/src/lib/observability/slo-alerts.ts`) fires from the SLO cron when the ML injection classifier (LLM3-02) silently falls back to the rule-based classifier at sustained rates. The fallback is correct behaviour — it preserves availability under Replicate latency or transient errors — but a sustained fallback regime means the ML model isn't actually scoring traffic, so ops needs visibility.
+
+**Symptom**
+- SLO event `platform/slo.alert.fired` with `alertId: "slo-ml-classifier-timeout"`.
+- Message format: `ML classifier timeout rate X.X% over N calls exceeds 5% threshold — Replicate latency likely; classifier is falling back to rule-based`.
+
+**Likely causes**
+1. Replicate API latency regression (most common). The 500ms timeout in `MlInjectionClassifierDeps.timeoutMs` is hit before the model returns.
+2. Regional network degradation between Railway and Replicate (also surfaces as elevated `ml_classifier_timeout` warns).
+3. Misconfigured `ML_INJECTION_MODEL_URL` / `ML_INJECTION_MODEL_TOKEN` (would surface as `ml_classifier_error` warns at startup, NOT this alert — see Caveat below).
+
+**What this alert does NOT catch**
+- Replicate API outages or upstream contract breaks. Those produce `ml_classifier_error` or `ml_classifier_invalid_response` warns, recorded as `error` outcomes in the counter — they increase `mlSafetyVolume` but not `mlClassifierTimeoutRate`. The alert is intentionally latency-focused. A separate error-rate alert is tracked as a follow-up; for now, watch for `ml_classifier_error` in structured logs and fall back to flipping the feature flag (see step 3 below).
+
+**Oncall response**
+1. Check Replicate status (https://www.replicatestatus.com or the configured dashboard) for the model region.
+2. If Replicate is healthy, inspect recent `ml_classifier_timeout` warns in structured logs — the `timeoutMs` field shows the configured budget; consider raising it temporarily via `ML_INJECTION_TIMEOUT_MS` (cap at 1500ms to avoid hot-path stalls).
+3. If the classifier remains over budget, flip the `ml-injection-classifier` feature flag OFF via the registry (FeatureFlagService — see §2.4 Feature Flag Management). The rule-based classifier remains in place; safety posture degrades from ML+rule to rule-only, which is acceptable for the duration of the incident.
+4. After mitigation, the alert auto-clears when the rate drops back below 5% over the trailing 5-min window. There is no manual ack — the SLO cron evaluator is stateless.
+
+**Caveat**
+- The counter (`SafetyInferenceCounter` in `@aptivo/llm-gateway/safety`) is in-process per `apps/web` instance. In a multi-instance Railway deployment, each instance reports its own slice; alert thresholds are per-instance. Multi-instance aggregation requires migrating to a Redis-backed counter (carry-forward, not in S17 scope).
 
 ### 5.3 Health Check Endpoints
 

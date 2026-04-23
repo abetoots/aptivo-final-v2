@@ -53,6 +53,9 @@ const healthyMetrics: SloMetrics = {
   retentionFailureCount: 0,
   notificationTotal: 200,
   notificationDelivered: 200,
+  // S17-B4
+  mlClassifierTimeoutRate: 0,
+  mlSafetyVolume: 0,
 };
 
 function makeDeps(overrides?: Partial<SloMetricsDeps>): SloMetricsDeps {
@@ -63,6 +66,8 @@ function makeDeps(overrides?: Partial<SloMetricsDeps>): SloMetricsDeps {
     getHitlLatencyP95: async () => 2000,
     getRetentionFailureCount: async () => 0,
     getNotificationCounts: async () => ({ total: 200, delivered: 200 }),
+    // S17-B4
+    getMlSafetyMetrics: () => ({ timeoutRate: 0, volume: 0 }),
     ...overrides,
   };
 }
@@ -163,6 +168,8 @@ describe('S6-CF-01: collectSloMetrics', () => {
       retentionFailureCount: 0,
       notificationTotal: 200,
       notificationDelivered: 200,
+      mlClassifierTimeoutRate: 0,
+      mlSafetyVolume: 0,
     });
   });
 
@@ -174,6 +181,7 @@ describe('S6-CF-01: collectSloMetrics', () => {
       getHitlLatencyP95: vi.fn().mockResolvedValue(0),
       getRetentionFailureCount: vi.fn().mockResolvedValue(0),
       getNotificationCounts: vi.fn().mockResolvedValue({ total: 0, delivered: 0 }),
+      getMlSafetyMetrics: vi.fn().mockReturnValue({ timeoutRate: 0, volume: 0 }),
     };
 
     await collectSloMetrics(spies);
@@ -199,7 +207,7 @@ describe('S6-CF-01: SLO cron function', () => {
     const { result } = await engine.execute();
 
     expect(result).toMatchObject({
-      totalAlerts: 8,
+      totalAlerts: 9,
       firingCount: 0,
     });
     expect(result.evaluatedAt).toBeDefined();

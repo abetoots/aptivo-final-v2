@@ -76,6 +76,13 @@ export interface GatewayDeps {
   contentFilter?: ContentFilter;
   /** optional multi-provider router (LLM2-04) */
   router?: ProviderRouter;
+  /**
+   * S17-B4: optional structured logger for budget warnings (and any
+   * future gateway-level operational events). Falls back to
+   * `console.warn` when omitted so existing tests + non-app callers
+   * keep working without a forced refactor.
+   */
+  logger?: { warn(event: string, context?: Record<string, unknown>): void };
 }
 
 export interface GatewayRequestOptions {
@@ -156,7 +163,16 @@ export function createLlmGateway(deps: GatewayDeps) {
       if (!budgetResult.ok) return budgetResult;
 
       if (budgetResult.value.warningTriggered) {
-        console.warn(`llm budget warning: domain=${request.domain}`, budgetResult.value);
+        // S17-B4: prefer the injected logger; legacy console.warn path
+        // preserved for callers that haven't been threaded.
+        if (deps.logger) {
+          deps.logger.warn('llm_budget_warning', {
+            domain: request.domain,
+            ...budgetResult.value,
+          });
+        } else {
+          console.warn(`llm budget warning: domain=${request.domain}`, budgetResult.value);
+        }
       }
 
       // step 3: injection classifier (optional). Gateway takes the async
@@ -302,6 +318,7 @@ export function createLlmGateway(deps: GatewayDeps) {
         wasFallback,
         primaryProvider.id,
         actor?.departmentId,
+        deps.logger,
       );
 
       // step 11: return
@@ -325,12 +342,17 @@ async function logUsageSafe(
   wasFallback: boolean,
   primaryProviderId: string,
   departmentId: string | undefined,
+  pricingLogger: { warn(event: string, context?: Record<string, unknown>): void } | undefined,
 ): Promise<number> {
   const { calculateTotalCost } = await import('../cost/calculator.js');
+  // S17-B4: pass logger so unknown-model warnings emit through the
+  // structured logger when one is wired by the composition root,
+  // instead of unconditionally hitting console.warn.
   const costUsd = calculateTotalCost(
     request.model,
     response.usage.promptTokens,
     response.usage.completionTokens,
+    pricingLogger,
   );
 
   try {
