@@ -93,20 +93,31 @@ export function createInMemorySafetyCounter(
     },
 
     timeoutRate(windowMs) {
+      // S17-B4 (post-Codex review): count in-window events WITHOUT
+      // mutating the buffer. An earlier draft called
+      // `pruneOlderThan(now - windowMs)` here, which deleted events
+      // older than the *queried* window and broke subsequent
+      // larger-window reads (a smaller-window read would silently
+      // truncate the retention buffer). Pruning is now a `record()`-
+      // only concern, bounded by `maxRetentionMs`.
       const cutoff = now() - windowMs;
-      pruneOlderThan(cutoff);
-      if (events.length === 0) return 0;
       let timeouts = 0;
+      let total = 0;
       for (const e of events) {
+        if (e.at < cutoff) continue;
+        total++;
         if (e.outcome === 'timeout') timeouts++;
       }
-      return timeouts / events.length;
+      return total === 0 ? 0 : timeouts / total;
     },
 
     volumeInWindow(windowMs) {
       const cutoff = now() - windowMs;
-      pruneOlderThan(cutoff);
-      return events.length;
+      let total = 0;
+      for (const e of events) {
+        if (e.at >= cutoff) total++;
+      }
+      return total;
     },
 
     reset() {

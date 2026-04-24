@@ -12,6 +12,7 @@ import {
   getMetricService,
   getAnomalyBaselineStore,
   getAnomalyBaselineScopes,
+  getAnomalyWindowMs,
 } from '../../../lib/services';
 import { getDb } from '../../../lib/db';
 import { createAnomalyBaselineBuilder } from '../../../lib/jobs/anomaly-baseline-builder';
@@ -64,6 +65,10 @@ const anomalyBaselineBuilderFn = createAnomalyBaselineBuilder({
   store: getAnomalyBaselineStore(),
   scopes: getAnomalyBaselineScopes(),
   logger: { warn: (event, ctx) => appLog.warn(event, ctx) },
+  // S17-B3 (post-Codex review): keep cron bucket size in lockstep
+  // with the live gate's query window. getAnomalyWindowMs() is the
+  // single env-var resolver shared by both sites.
+  config: { windowMs: getAnomalyWindowMs() },
 });
 
 // domain workflow functions (S6-CRY-01, S6-HR-01)

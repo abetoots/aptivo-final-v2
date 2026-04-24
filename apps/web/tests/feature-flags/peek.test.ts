@@ -138,6 +138,34 @@ describe('S17-B2: FeatureFlagService.peekEnabled', () => {
     );
   });
 
+  it('cold-start (warm() not yet resolved) returns defaultValue — safety gates default-false = safe direction', async () => {
+    // S17-B2 post-Codex-review regression: composition-root calls
+    // `void service.warm()` fire-and-forget, so the first
+    // peekEnabled() calls between getFeatureFlagService() and warm
+    // resolution see an empty cache. For the two safety gates
+    // (`ml-injection-classifier`, `anomaly-blocking`) that bind
+    // `defaultValue: false`, the empty-cache result disables the
+    // gate — the safe direction. This test documents that contract
+    // explicitly so it's not relearned.
+    const provider = createProvider([
+      { key: 'ml-injection-classifier', enabled: true },
+      { key: 'anomaly-blocking', enabled: true },
+    ]);
+    const service = createFeatureFlagService({ provider });
+
+    // fire-and-forget warm (mirrors services.ts composition)
+    const warmPromise = service.warm();
+
+    // before warm resolves, both safety gates read as OFF
+    expect(service.peekEnabled('ml-injection-classifier', false)).toBe(false);
+    expect(service.peekEnabled('anomaly-blocking', false)).toBe(false);
+
+    // after warm, the true values show up
+    await warmPromise;
+    expect(service.peekEnabled('ml-injection-classifier', false)).toBe(true);
+    expect(service.peekEnabled('anomaly-blocking', false)).toBe(true);
+  });
+
   it('does NOT apply rule-based targeting — only the flag default `enabled` is returned', async () => {
     // sync peek can't carry context, so rules are deliberately skipped
     const provider = createProvider([

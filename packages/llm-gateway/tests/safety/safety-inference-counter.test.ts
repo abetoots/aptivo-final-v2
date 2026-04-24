@@ -75,6 +75,31 @@ describe('S17-B4: createInMemorySafetyCounter', () => {
     expect(counter.volumeInWindow(60_000)).toBe(1);
   });
 
+  it('read methods do NOT mutate the buffer — mixed-window reads stay correct', () => {
+    // Codex review (S17-B4 post-hoc): an earlier draft pruned inside
+    // `timeoutRate`/`volumeInWindow`. That meant a small-window read
+    // deleted events older than the queried window, so a subsequent
+    // larger-window read saw truncated data. Pruning is now record()-
+    // only. This test demonstrates the invariant.
+    let now = 1_000_000;
+    const counter = createInMemorySafetyCounter({
+      maxRetentionMs: 30 * 60 * 1000,
+      now: () => now,
+    });
+    counter.record('timeout');
+    now += 2 * 60_000; // +2 min
+    counter.record('success');
+    now += 5 * 60_000; // +5 min (7 min after first event)
+    counter.record('success');
+
+    // small-window query (3 min) should only see the last event
+    expect(counter.volumeInWindow(3 * 60_000)).toBe(1);
+    // larger-window query (10 min) must still see all three
+    expect(counter.volumeInWindow(10 * 60_000)).toBe(3);
+    // small-window again — still correct, no truncation
+    expect(counter.volumeInWindow(3 * 60_000)).toBe(1);
+  });
+
   it('preserves all in-window events under sustained high throughput (no count-based eviction)', () => {
     // S17-B4 multi-model review caught that a previous count-cap
     // implementation evicted in-window events at >33 rps. Time-based

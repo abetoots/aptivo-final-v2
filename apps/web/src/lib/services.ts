@@ -785,7 +785,7 @@ function buildAnomalyGate(): AnomalyGate | undefined {
     },
   });
 
-  const windowMs = Number(process.env.ANOMALY_WINDOW_MS) || 10 * 60 * 1000; // 10 min default
+  const windowMs = getAnomalyWindowMs();
 
   return createAnomalyGate({
     detector,
@@ -881,6 +881,22 @@ export const getAnomalyBaselineStore = lazy(() =>
     db() as unknown as Parameters<typeof createDrizzleAnomalyBaselineStore>[0],
   ),
 );
+
+/**
+ * S17-B3 (post-Codex review): single source for the anomaly evaluation
+ * window. The live gate's `aggregateAccessPattern` query and the
+ * baseline-builder cron's per-bucket aggregation MUST use the same
+ * window size, otherwise the detector compares live counts against
+ * baselines computed over mismatched bucket sizes and the z-score is
+ * meaningless.
+ *
+ * Both call sites (`buildAnomalyGate` in services.ts and the cron
+ * registration in `app/api/inngest/route.ts`) import this helper.
+ * Env-var override: `ANOMALY_WINDOW_MS` (default 10 min).
+ */
+export function getAnomalyWindowMs(): number {
+  return Number(process.env.ANOMALY_WINDOW_MS) || 10 * 60 * 1000;
+}
 
 export function getAnomalyBaselineScopes(): readonly {
   key: string;
@@ -1297,8 +1313,21 @@ export const getFeatureFlagService = lazy(() => {
     // provider would silently leave peekEnabled returning defaultValue.
     logger: { warn: (event, ctx) => appLog.warn(event, ctx) },
   });
-  // S17-B2: fire-and-forget warm so safety-gate peekEnabled reads the
-  // configured value rather than defaultValue on the first request.
+  // S17-B2: fire-and-forget warm. This kicks off cache population but
+  // does NOT block the first request — that would make `getLlmGateway`
+  // async and is not compatible with the lazy/sync pattern used here.
+  //
+  // COLD-START BEHAVIOUR (post-Codex review): until `warm()` resolves,
+  // every `peekEnabled(key, defaultValue)` call returns `defaultValue`.
+  // For the two safety gates that bind to peekEnabled — `ml-injection-
+  // classifier` and `anomaly-blocking` — `defaultValue` is `false`
+  // (see buildInjectionClassifier / buildAnomalyGate). `false` means
+  // the gate is disabled, which is the SAFE direction: the rule-based
+  // injection classifier still runs (ML wrapper falls through), and
+  // the anomaly gate short-circuits to `{ action: 'pass' }`. Neither
+  // direction exposes user data or bypasses policy. Callers that need
+  // to wait for warmup must invoke `service.warm()` explicitly before
+  // the first request (e.g., in a startup hook).
   void service.warm();
   return service;
 });
