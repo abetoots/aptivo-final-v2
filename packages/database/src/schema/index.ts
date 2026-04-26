@@ -59,3 +59,6 @@ export { departmentBudgetConfigs } from './department-budget-configs.js';
 // S17-B3: per-(actor, scope) baseline statistics for the LLM3-04
 // anomaly gate. Replaces the S16 placeholder constant; closes Gate #5.
 export { anomalyBaselines } from './anomaly-baselines.js';
+
+// S17-CT-1: case-tracking tickets (Epic 4 foundation).
+export { tickets, ticketStatusEnum, ticketPriorityEnum } from './tickets.js';

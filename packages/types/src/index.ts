@@ -13,6 +13,9 @@ export type { Success, Failure, Result as ResultType } from './result.js';
 // any UI consumer). Zod frame schemas + close-code enum.
 export * from './websocket-events.js';
 
+// S17-CT-1: ticket lifecycle Inngest event schemas (Epic 4)
+export * from './events/ticket.js';
+
 // Tagged union error types and factory functions
 export type {
   ValidationError,

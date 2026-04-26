@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Aptivo API
-  version: 1.2.0
+  version: 1.2.1
   description: |
     Aptivo platform API. Bootstrapped in Sprint 16 as the canonical contract
     for Phase 3.5 UI consumption. Only endpoints added or touched in Sprint 16+
@@ -244,6 +244,263 @@ paths:
                     properties:
                       retryAfterSec: { type: integer }
 
+  /api/tickets:
+    get:
+      summary: List case-tracking tickets (S17-CT-1)
+      description: |
+        Paginated list with optional filters. Requires `platform/tickets.read`.
+        `limit` defaults to 50, max 200. Newest-first ordering by `createdAt`.
+      tags: [tickets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          required: false
+          schema: { $ref: '#/components/schemas/TicketStatus' }
+        - in: query
+          name: priority
+          required: false
+          schema: { $ref: '#/components/schemas/TicketPriority' }
+        - in: query
+          name: ownerUserId
+          required: false
+          schema: { type: string, format: uuid }
+        - in: query
+          name: departmentId
+          required: false
+          schema: { type: string, format: uuid }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - in: query
+          name: offset
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        '200':
+          description: Tickets page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, totalCount, limit, offset]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: '#/components/schemas/Ticket' }
+                  totalCount: { type: integer }
+                  limit: { type: integer }
+                  offset: { type: integer }
+        '400':
+          description: Invalid query parameter
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+    post:
+      summary: Create a ticket (S17-CT-1)
+      description: |
+        Requires `platform/tickets.create`. Admin-rate-limited.
+        Emits audit event `platform.ticket.created`. When `workflowDefinitionId`
+        is supplied, the workflow definition must exist (404-style problem
+        is a 400 with `type=workflow-definition-not-found`).
+      tags: [tickets]
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTicket' }
+      responses:
+        '201':
+          description: Ticket created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: Validation failure or workflow-definition issue
+          content:
+            application/problem+json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ProblemDetail'
+                  - type: object
+                    properties:
+                      issues:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            path: { type: string }
+                            message: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+
+  /api/tickets/{id}:
+    get:
+      summary: Fetch a single ticket (S17-CT-1)
+      tags: [tickets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Ticket
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: Invalid id (not a UUID)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Ticket not found
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+    patch:
+      summary: Partial update of a ticket (S17-CT-1)
+      description: |
+        Requires `platform/tickets.update`. Admin-rate-limited.
+        Emits audit event `platform.ticket.updated`. Closed tickets
+        are rejected with 409 `type=ticket-already-closed`.
+      tags: [tickets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTicket' }
+      responses:
+        '200':
+          description: Ticket updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: Validation failure
+          content:
+            application/problem+json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ProblemDetail'
+                  - type: object
+                    properties:
+                      issues:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            path: { type: string }
+                            message: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Ticket not found
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '409':
+          description: Ticket already closed
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+    delete:
+      summary: Soft-close a ticket (S17-CT-1)
+      description: |
+        Sets `status='closed'` + `closedAt=now()` rather than removing
+        the row. Requires `platform/tickets.delete`. Admin-rate-limited.
+        Emits audit event `platform.ticket.closed`.
+      tags: [tickets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Ticket soft-closed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: Invalid id (not a UUID)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Ticket not found
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '409':
+          description: Ticket already closed
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+
   /api/workflows/validate:
     post:
       summary: Validate a draft workflow body (shape + graph) without persisting
@@ -422,6 +679,67 @@ components:
         _tag: { type: string, enum: [ShapeInvalid] }
         type: { type: string }
         detail: { type: string }
+
+    TicketStatus:
+      type: string
+      enum: [open, in_progress, escalated, closed]
+
+    TicketPriority:
+      type: string
+      enum: [low, medium, high, critical]
+
+    Ticket:
+      description: Case-tracking ticket (S17-CT-1)
+      type: object
+      required: [id, status, priority, title, body, ownerUserId, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        workflowDefinitionId:
+          type: string
+          format: uuid
+          nullable: true
+        status: { $ref: '#/components/schemas/TicketStatus' }
+        priority: { $ref: '#/components/schemas/TicketPriority' }
+        title: { type: string, maxLength: 200 }
+        body: { type: string }
+        ownerUserId: { type: string, format: uuid }
+        departmentId:
+          type: string
+          format: uuid
+          nullable: true
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        closedAt:
+          type: string
+          format: date-time
+          nullable: true
+
+    CreateTicket:
+      type: object
+      required: [title, body, ownerUserId]
+      properties:
+        workflowDefinitionId:
+          type: string
+          format: uuid
+          nullable: true
+        status: { $ref: '#/components/schemas/TicketStatus' }
+        priority: { $ref: '#/components/schemas/TicketPriority' }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        body: { type: string, minLength: 1 }
+        ownerUserId: { type: string, format: uuid }
+        departmentId:
+          type: string
+          format: uuid
+          nullable: true
+
+    UpdateTicket:
+      description: Partial-update body. Omit fields to leave them unchanged.
+      type: object
+      properties:
+        status: { $ref: '#/components/schemas/TicketStatus' }
+        priority: { $ref: '#/components/schemas/TicketPriority' }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        body: { type: string, minLength: 1 }
 
     ProblemDetail:
       description: RFC 7807 Problem Details response

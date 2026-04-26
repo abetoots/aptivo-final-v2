@@ -181,6 +181,7 @@ import {
 import {
   createDrizzleDepartmentBudgetStore,
   createDrizzleAnomalyBaselineStore,
+  createDrizzleTicketStore,
 } from '@aptivo/database/adapters';
 import { createAdminRateLimit, type AdminRateLimit, type RateLimitRedis } from './security/admin-rate-limit.js';
 
@@ -1412,4 +1413,53 @@ export const getDepartmentBudgetService = lazy((): DepartmentBudgetService => {
 export const getAdminRateLimit = lazy((): AdminRateLimit => {
   const redis = getSessionRedis() as RateLimitRedis | null;
   return createAdminRateLimit(redis);
+});
+
+// ---------------------------------------------------------------------------
+// S17-CT-1: case-tracking ticket store + service (Epic 4)
+// ---------------------------------------------------------------------------
+
+export const getTicketStore = lazy(() =>
+  createDrizzleTicketStore(
+    db() as unknown as Parameters<typeof createDrizzleTicketStore>[0],
+  ),
+);
+
+export const getTicketService = lazy(() => {
+  // import lazily to avoid pulling case-tracking into every services
+  // consumer at module load
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createTicketService } = require('./case-tracking/ticket-service.js') as typeof import('./case-tracking/ticket-service.js');
+
+  const defService = getWorkflowDefinitionService();
+  const auditService = getAuditService();
+
+  // S17-CT-1 (post-Codex review): the gate validates graph integrity
+  // in addition to existence. The workflow-definition-service runs
+  // validateGraph on create/update, but defs persisted before the
+  // validator was widened (or seeded) could be invalid; ticket
+  // creation should not link to a broken workflow regardless of
+  // origin. Lazy-import keeps the validator out of every services
+  // consumer's load path.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { validateGraph } = require('./workflows/graph-validation.js') as typeof import('./workflows/graph-validation.js');
+
+  return createTicketService({
+    store: getTicketStore(),
+    verifyWorkflowDefinition: async (id: string) => {
+      const result = await defService.findById(id);
+      if (!result.ok) return { status: 'not_found' as const };
+      const graph = validateGraph(result.value.steps);
+      if (!graph.ok) {
+        return { status: 'invalid' as const, reason: graph.error._tag };
+      }
+      return { status: 'ok' as const };
+    },
+    emitAudit: async (input) => {
+      const r = await auditService.emit(input);
+      // fire-and-forget — audit emit failure must not block the
+      // ticket write path. Service-level errors are already logged.
+      if (!r.ok) appLog.warn('ticket_audit_emit_failed', { action: input.action });
+    },
+  });
 });

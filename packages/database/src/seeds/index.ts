@@ -24,3 +24,9 @@ export {
   HR_TEMPLATES,
   HR_MCP_SERVERS,
 } from './hr-seeds.js';
+
+// S17-CT-1: case-tracking RBAC seeds (Epic 4)
+export {
+  seedCaseTrackingRoles,
+  CASE_TRACKING_PERMISSIONS,
+} from './case-tracking-seeds.js';

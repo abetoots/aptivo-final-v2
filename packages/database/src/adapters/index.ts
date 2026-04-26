@@ -86,6 +86,19 @@ export type {
   BaselineRecord as DrizzleBaselineRecord,
 } from './anomaly-baseline-store-drizzle.js';
 
+// S17-CT-1: case-tracking ticket store (Epic 4)
+export { createDrizzleTicketStore } from './ticket-store-drizzle.js';
+export type {
+  TicketStore as DrizzleTicketStore,
+  TicketRecord as DrizzleTicketRecord,
+  TicketStatus,
+  TicketPriority,
+  CreateTicketInput,
+  UpdateTicketInput,
+  ListTicketsParams,
+  ListTicketsResult,
+} from './ticket-store-drizzle.js';
+
 // hitl persistence (P1.5-01)
 export {
   createDrizzleHitlRequestStore,
