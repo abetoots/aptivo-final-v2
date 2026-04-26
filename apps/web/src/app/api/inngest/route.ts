@@ -13,9 +13,11 @@ import {
   getAnomalyBaselineStore,
   getAnomalyBaselineScopes,
   getAnomalyWindowMs,
+  getJobsRedis,
 } from '../../../lib/services';
 import { getDb } from '../../../lib/db';
 import { createAnomalyBaselineBuilder } from '../../../lib/jobs/anomaly-baseline-builder';
+import { createWsEventPublisherFunctions } from '../../../lib/inngest/functions/ws-event-publisher';
 import { log as appLog } from '../../../lib/logging/safe-logger';
 import { demoWorkflowFn } from '../../../lib/workflows/demo-workflow';
 import { paperTradeFn } from '../../../lib/workflows/crypto-paper-trade';
@@ -71,6 +73,32 @@ const anomalyBaselineBuilderFn = createAnomalyBaselineBuilder({
   config: { windowMs: getAnomalyWindowMs() },
 });
 
+// S17-WS-PUB: WebSocket-fan-out publisher functions. One Inngest
+// function per WS-relevant event (workflow + HITL today; ticket
+// events arrive with Epic 4). Each publishes an EventFrame envelope
+// to the shared `ws:events` Redis list. The ws-server polls and fans
+// out. Closes Sprint-16 enablement gate #6. When jobs Redis isn't
+// configured (e.g. local dev without Upstash), the functions are
+// skipped — workflow/HITL events still fire normally and Inngest
+// retries can be replayed once Redis is wired.
+const wsPublisherFunctions = (() => {
+  const redis = getJobsRedis();
+  if (!redis) {
+    appLog.info('ws_event_publisher_disabled', {
+      reason: 'jobs Redis not configured (UPSTASH_* env vars missing); WS fan-out is dark for this process',
+    });
+    return [] as ReturnType<typeof createWsEventPublisherFunctions>;
+  }
+  return createWsEventPublisherFunctions({
+    inngest,
+    // @upstash/redis Redis client implements lpush; the project's
+    // RedisClient interface (auth-focused) doesn't declare it, so
+    // cast at the seam.
+    redis: redis as unknown as Parameters<typeof createWsEventPublisherFunctions>[0]['redis'],
+    logger: { warn: (event, ctx) => appLog.warn(event, ctx) },
+  });
+})();
+
 // domain workflow functions (S6-CRY-01, S6-HR-01)
 const domainFunctions = [paperTradeFn, securityScanFn, candidateFlowFn, interviewSchedulingFn, contractApprovalFn];
 
@@ -81,6 +109,7 @@ const platformFunctions = [
   demoWorkflowFn,
   sloCronFn,
   anomalyBaselineBuilderFn,
+  ...wsPublisherFunctions,
   ...domainFunctions,
 ];
 
