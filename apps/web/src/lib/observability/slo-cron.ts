@@ -21,6 +21,10 @@ export interface SloMetricsDeps {
   // the in-memory counter is sync; if a future Redis-backed counter
   // lands the contract widens to async (Promise<{ rate, volume }>).
   getMlSafetyMetrics: () => { timeoutRate: number; volume: number };
+  // S17-CT-2: case-tracking SLA at-risk + open-ticket counts.
+  // Async because the underlying TicketSlaService.listAtRisk fans
+  // out three store queries.
+  getTicketSlaMetrics: () => Promise<{ atRiskCount: number; total: number }>;
 }
 
 // -- metrics collector --
@@ -39,6 +43,7 @@ export async function collectSloMetrics(
     ]);
 
   const mlSafety = deps.getMlSafetyMetrics();
+  const ticketSla = await deps.getTicketSlaMetrics();
 
   return {
     workflowTotal: workflow.total,
@@ -52,6 +57,8 @@ export async function collectSloMetrics(
     notificationDelivered: notifications.delivered,
     mlClassifierTimeoutRate: mlSafety.timeoutRate,
     mlSafetyVolume: mlSafety.volume,
+    ticketSlaAtRiskCount: ticketSla.atRiskCount,
+    ticketSlaTotal: ticketSla.total,
   };
 }
 

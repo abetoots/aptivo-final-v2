@@ -42,6 +42,12 @@ export interface SloMetrics {
   // rate alerting when traffic is too low to be meaningful.
   mlClassifierTimeoutRate: number;
   mlSafetyVolume: number;
+  // S17-CT-2: case-tracking SLA — counts of open tickets at risk of
+  // breaching their SLA window. ticketSlaTotal is the open-ticket
+  // population so the evaluator can skip rate alerting when there
+  // are too few open tickets to draw a signal from.
+  ticketSlaAtRiskCount: number;
+  ticketSlaTotal: number;
 }
 
 export type SloAlertResult =
@@ -64,6 +70,13 @@ export const SLO_THRESHOLDS = {
   // produces a misleading 50% rate.
   mlClassifierTimeoutMaxRate: 0.05,
   mlClassifierTimeoutMinSamples: 20,
+  // S17-CT-2: ticket SLA at-risk rate. Fires when more than 20% of
+  // open tickets in the window have crossed their priority's
+  // warningThresholdPct (default 80% of resolveMinutes consumed).
+  // minSamples noise filter same pattern as ml_classifier_timeout —
+  // a 50% at-risk rate over 2 open tickets is noise, not signal.
+  ticketSlaAtRiskMaxRate: 0.20,
+  ticketSlaAtRiskMinSamples: 5,
 } as const;
 
 // -- alert definitions --
@@ -321,6 +334,34 @@ export const mlClassifierTimeoutAlert: SloAlert = {
   },
 };
 
+// S17-CT-2: case-tracking SLA at-risk evaluator. Fires when too many
+// open tickets are within their warning threshold of the SLA window.
+// Skipped when sample size is below threshold (low-traffic noise).
+export const ticketSlaAtRiskAlert: SloAlert = {
+  id: 'slo-ticket-sla-at-risk',
+  name: 'Ticket SLA At-Risk Rate',
+  description:
+    'Fires when >20% of open tickets are at risk of SLA breach (default warning threshold 80% of resolveMinutes consumed); minSamples=5 to filter low-traffic noise',
+  warning: 'S17-CT-2',
+  evaluate: (metrics) => {
+    const total = metrics.ticketSlaTotal;
+    const rate = total > 0 ? metrics.ticketSlaAtRiskCount / total : 0;
+    const threshold = SLO_THRESHOLDS.ticketSlaAtRiskMaxRate;
+    if (
+      total >= SLO_THRESHOLDS.ticketSlaAtRiskMinSamples
+      && rate > threshold
+    ) {
+      return {
+        status: 'firing',
+        value: rate,
+        threshold,
+        message: `${metrics.ticketSlaAtRiskCount} of ${total} open tickets are at-risk (${(rate * 100).toFixed(1)}%) — exceeds ${threshold * 100}% threshold; investigate priority capacity or backlog`,
+      };
+    }
+    return { status: 'ok', value: rate, threshold };
+  },
+};
+
 export const ALL_SLO_ALERTS: SloAlert[] = [
   workflowSuccessAlert,
   hitlLatencyAlert,
@@ -331,6 +372,7 @@ export const ALL_SLO_ALERTS: SloAlert[] = [
   workflowBurnRateAlert,
   mcpBurnRateAlert,
   mlClassifierTimeoutAlert,
+  ticketSlaAtRiskAlert,
 ];
 
 export function evaluateAllSlos(

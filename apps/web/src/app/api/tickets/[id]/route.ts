@@ -14,6 +14,7 @@ import { withBodyLimits } from '../../../../lib/security/route-guard';
 import {
   getAdminRateLimit,
   getTicketService,
+  getTicketSlaService,
 } from '../../../../lib/services';
 import type { TicketError } from '../../../../lib/case-tracking/ticket-service';
 
@@ -73,7 +74,13 @@ export async function GET(request: Request, ctx: RouteContext) {
 
   const result = await getTicketService().findById(id);
   if (!result.ok) return ticketErrorToResponse(result.error);
-  return NextResponse.json({ data: result.value });
+  // S17-CT-2: enrich the response with the computed SLA status so
+  // clients can render deadline / breach / at-risk inline without
+  // a follow-up call. Returns null when the ticket's priority has
+  // no SLA config row yet (cold-start); routes never fail on a
+  // missing SLA — sla=null is the documented contract.
+  const sla = await getTicketSlaService().computeSla(result.value);
+  return NextResponse.json({ data: result.value, slaStatus: sla });
 }
 
 // ---------------------------------------------------------------------------

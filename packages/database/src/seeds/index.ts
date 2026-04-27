@@ -25,8 +25,11 @@ export {
   HR_MCP_SERVERS,
 } from './hr-seeds.js';
 
-// S17-CT-1: case-tracking RBAC seeds (Epic 4)
+// S17-CT-1 + S17-CT-2: case-tracking RBAC + SLA seeds (Epic 4)
 export {
   seedCaseTrackingRoles,
+  seedTicketSlaDefaults,
+  seedAllCaseTracking,
   CASE_TRACKING_PERMISSIONS,
+  TICKET_SLA_DEFAULTS,
 } from './case-tracking-seeds.js';

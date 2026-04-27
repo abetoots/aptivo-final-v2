@@ -28,6 +28,9 @@ const healthyMetrics: SloMetrics = {
   // min-samples threshold so the alert short-circuits to 'ok'.
   mlClassifierTimeoutRate: 0,
   mlSafetyVolume: 0,
+  // S17-CT-2: ticket SLA — healthy = below min-samples
+  ticketSlaAtRiskCount: 0,
+  ticketSlaTotal: 0,
 };
 
 describe('INT-04: SLO Alerts', () => {
@@ -102,9 +105,9 @@ describe('INT-04: SLO Alerts', () => {
   });
 
   describe('evaluateAllSlos', () => {
-    it('evaluates all 9 alerts (6 threshold + 2 burn-rate + 1 ml-classifier-timeout)', () => {
+    it('evaluates all 10 alerts (6 threshold + 2 burn-rate + 1 ml-classifier-timeout + 1 ticket-sla)', () => {
       const results = evaluateAllSlos(healthyMetrics);
-      expect(results.size).toBe(9);
+      expect(results.size).toBe(10);
     });
 
     it('all ok with healthy metrics', () => {
@@ -128,13 +131,16 @@ describe('INT-04: SLO Alerts', () => {
         // S17-B4: above min-samples + above max-rate threshold → fires
         mlClassifierTimeoutRate: 0.10,
         mlSafetyVolume: 50,
+        // S17-CT-2: above min-samples + above max-rate threshold → fires
+        ticketSlaAtRiskCount: 4,
+        ticketSlaTotal: 10,
       };
       const results = evaluateAllSlos(badMetrics);
       let firingCount = 0;
       for (const [, result] of results) {
         if (result.status === 'firing') firingCount++;
       }
-      expect(firingCount).toBe(9);
+      expect(firingCount).toBe(10);
     });
   });
 });

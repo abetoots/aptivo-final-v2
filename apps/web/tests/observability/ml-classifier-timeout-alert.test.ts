@@ -26,6 +26,8 @@ const baseMetrics: SloMetrics = {
   notificationDelivered: 0,
   mlClassifierTimeoutRate: 0,
   mlSafetyVolume: 0,
+  ticketSlaAtRiskCount: 0,
+  ticketSlaTotal: 0,
 };
 
 describe('S17-B4: mlClassifierTimeoutAlert', () => {

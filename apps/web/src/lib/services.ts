@@ -182,6 +182,7 @@ import {
   createDrizzleDepartmentBudgetStore,
   createDrizzleAnomalyBaselineStore,
   createDrizzleTicketStore,
+  createDrizzleTicketSlaConfigStore,
 } from '@aptivo/database/adapters';
 import { createAdminRateLimit, type AdminRateLimit, type RateLimitRedis } from './security/admin-rate-limit.js';
 
@@ -973,6 +974,10 @@ export const getMetricService = lazy(() =>
     // so the SLO cron's ml_classifier_timeout-rate evaluator reads
     // a coherent view of recent traffic.
     safetyInferenceCounter: getSafetyInferenceCounter(),
+    // S17-CT-2: ticket SLA at-risk evaluator. Same instance the
+    // /api/tickets routes use — counts are taken from one source.
+    ticketSlaService: getTicketSlaService(),
+    slaTruncationLogger: { warn: (event, ctx) => appLog.warn(event, ctx) },
   }),
 );
 
@@ -1424,6 +1429,23 @@ export const getTicketStore = lazy(() =>
     db() as unknown as Parameters<typeof createDrizzleTicketStore>[0],
   ),
 );
+
+export const getTicketSlaConfigStore = lazy(() =>
+  createDrizzleTicketSlaConfigStore(
+    db() as unknown as Parameters<typeof createDrizzleTicketSlaConfigStore>[0],
+  ),
+);
+
+export const getTicketSlaService = lazy(() => {
+  // S17-CT-2: lazy require to keep the SLA engine off the cold-load
+  // path of every services consumer. Same pattern as getTicketService.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createTicketSlaService } = require('./case-tracking/ticket-sla-service.js') as typeof import('./case-tracking/ticket-sla-service.js');
+  return createTicketSlaService({
+    slaConfigStore: getTicketSlaConfigStore(),
+    ticketStore: getTicketStore(),
+  });
+});
 
 export const getTicketService = lazy(() => {
   // import lazily to avoid pulling case-tracking into every services

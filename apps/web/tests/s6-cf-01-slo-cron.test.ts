@@ -56,6 +56,9 @@ const healthyMetrics: SloMetrics = {
   // S17-B4
   mlClassifierTimeoutRate: 0,
   mlSafetyVolume: 0,
+  // S17-CT-2
+  ticketSlaAtRiskCount: 0,
+  ticketSlaTotal: 0,
 };
 
 function makeDeps(overrides?: Partial<SloMetricsDeps>): SloMetricsDeps {
@@ -68,6 +71,8 @@ function makeDeps(overrides?: Partial<SloMetricsDeps>): SloMetricsDeps {
     getNotificationCounts: async () => ({ total: 200, delivered: 200 }),
     // S17-B4
     getMlSafetyMetrics: () => ({ timeoutRate: 0, volume: 0 }),
+    // S17-CT-2
+    getTicketSlaMetrics: async () => ({ atRiskCount: 0, total: 0 }),
     ...overrides,
   };
 }
@@ -170,6 +175,8 @@ describe('S6-CF-01: collectSloMetrics', () => {
       notificationDelivered: 200,
       mlClassifierTimeoutRate: 0,
       mlSafetyVolume: 0,
+      ticketSlaAtRiskCount: 0,
+      ticketSlaTotal: 0,
     });
   });
 
@@ -182,6 +189,7 @@ describe('S6-CF-01: collectSloMetrics', () => {
       getRetentionFailureCount: vi.fn().mockResolvedValue(0),
       getNotificationCounts: vi.fn().mockResolvedValue({ total: 0, delivered: 0 }),
       getMlSafetyMetrics: vi.fn().mockReturnValue({ timeoutRate: 0, volume: 0 }),
+      getTicketSlaMetrics: vi.fn().mockResolvedValue({ atRiskCount: 0, total: 0 }),
     };
 
     await collectSloMetrics(spies);
@@ -207,7 +215,7 @@ describe('S6-CF-01: SLO cron function', () => {
     const { result } = await engine.execute();
 
     expect(result).toMatchObject({
-      totalAlerts: 9,
+      totalAlerts: 10,
       firingCount: 0,
     });
     expect(result.evaluatedAt).toBeDefined();

@@ -8,6 +8,7 @@
 
 import type { SloMetricsDeps } from './slo-cron.js';
 import type { SafetyInferenceCounter } from '@aptivo/llm-gateway/safety';
+import type { TicketSlaService } from '../case-tracking/ticket-sla-service.js';
 
 // -- types --
 
@@ -30,6 +31,22 @@ export interface MetricServiceDeps {
    * on each call. Used to compute the timeout-rate burn signal.
    */
   safetyInferenceCounter: SafetyInferenceCounter;
+  /**
+   * S17-CT-2: ticket SLA service for the at-risk evaluator. The
+   * service exposes `summarizeOpenTickets` which derives both the
+   * numerator (at-risk count) and denominator (open total) from a
+   * single paginated walk — Codex review caught that earlier
+   * separate queries could let denominator outpace numerator under
+   * large backlogs and silently suppress alerts.
+   */
+  ticketSlaService: TicketSlaService;
+  /**
+   * Optional logger for SLA-summary truncation warnings. When the
+   * open-ticket population exceeds the SLA service's safety cap
+   * (default 10k), the cron logs `ticket_sla_summary_truncated` so
+   * ops sees that the at-risk rate may be undercounted.
+   */
+  slaTruncationLogger?: { warn(event: string, ctx?: Record<string, unknown>): void };
 }
 
 export interface MetricService extends SloMetricsDeps {
@@ -91,6 +108,24 @@ export function createMetricService(
         timeoutRate: deps.safetyInferenceCounter.timeoutRate(windowMs),
         volume: deps.safetyInferenceCounter.volumeInWindow(windowMs),
       };
+    },
+
+    // S17-CT-2 (post-Codex review): single paginated walk produces
+    // both the numerator (at-risk count) and denominator (open
+    // total) so they cannot disagree. The earlier separate-query
+    // version could let totalCount outpace at-risk when the open
+    // backlog exceeded the per-status cap, silently suppressing
+    // alerts. summarizeOpenTickets bounds traversal at SAFETY_CAP
+    // (10k) and reports `truncated: true` so ops sees the gap.
+    async getTicketSlaMetrics() {
+      const summary = await deps.ticketSlaService.summarizeOpenTickets();
+      if (summary.truncated && deps.slaTruncationLogger) {
+        deps.slaTruncationLogger.warn('ticket_sla_summary_truncated', {
+          inspected: summary.total,
+          atRiskInWindow: summary.atRiskCount,
+        });
+      }
+      return { atRiskCount: summary.atRiskCount, total: summary.total };
     },
   };
 }

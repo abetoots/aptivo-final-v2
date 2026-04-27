@@ -30,6 +30,29 @@ function makeMockDeps(overrides?: Partial<MetricServiceDeps>): MetricServiceDeps
     getHitlP95LatencyMs: vi.fn().mockResolvedValue(2500),
     countDeliveriesByStatus: vi.fn().mockResolvedValue(90),
     countDeliveriesTotal: vi.fn().mockResolvedValue(100),
+    // S17-B4: stub the in-process safety counter so the metric
+    // service constructor doesn't crash on missing deps.
+    safetyInferenceCounter: {
+      record: vi.fn(),
+      timeoutRate: vi.fn().mockReturnValue(0),
+      volumeInWindow: vi.fn().mockReturnValue(0),
+      reset: vi.fn(),
+    },
+    // S17-CT-2: stub ticket SLA service. summarizeOpenTickets is the
+    // single query the metric layer uses (post-Codex review fix);
+    // returns empty so the at-risk evaluator stays at 'ok'.
+    ticketSlaService: {
+      computeSla: vi.fn().mockResolvedValue(null),
+      listAtRisk: vi.fn().mockResolvedValue([]),
+      summarizeOpenTickets: vi.fn().mockResolvedValue({
+        total: 0,
+        atRiskCount: 0,
+        breachedCount: 0,
+        atRisk: [],
+        truncated: false,
+      }),
+      refreshConfigs: vi.fn().mockResolvedValue(undefined),
+    },
     ...overrides,
   };
 }

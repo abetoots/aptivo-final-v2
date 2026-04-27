@@ -62,3 +62,6 @@ export { anomalyBaselines } from './anomaly-baselines.js';
 
 // S17-CT-1: case-tracking tickets (Epic 4 foundation).
 export { tickets, ticketStatusEnum, ticketPriorityEnum } from './tickets.js';
+
+// S17-CT-2: per-priority SLA window configs (4 default rows).
+export { ticketSlaConfigs } from './ticket-sla-configs.js';

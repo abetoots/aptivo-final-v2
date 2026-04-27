@@ -23,9 +23,19 @@ const mockExtractUser = vi.fn();
 const mockCheckPermission = vi.fn();
 const mockRateLimit = { check: vi.fn().mockResolvedValue(null) };
 
+// S17-CT-2: GET /api/tickets/:id now enriches with slaStatus from
+// the ticket-sla-service. Stub returns null (no SLA config) so the
+// route falls back to slaStatus: null in the JSON response.
+const mockTicketSlaService = {
+  computeSla: vi.fn().mockResolvedValue(null),
+  listAtRisk: vi.fn(),
+  refreshConfigs: vi.fn(),
+};
+
 vi.mock('../../src/lib/services', () => ({
   getTicketService: () => mockTicketService,
   getAdminRateLimit: () => mockRateLimit,
+  getTicketSlaService: () => mockTicketSlaService,
 }));
 
 vi.mock('../../src/lib/security/rbac-middleware', () => ({

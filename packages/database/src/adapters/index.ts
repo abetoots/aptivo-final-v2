@@ -99,6 +99,13 @@ export type {
   ListTicketsResult,
 } from './ticket-store-drizzle.js';
 
+// S17-CT-2: per-priority SLA window store
+export { createDrizzleTicketSlaConfigStore } from './ticket-sla-config-store-drizzle.js';
+export type {
+  TicketSlaConfigStore as DrizzleTicketSlaConfigStore,
+  TicketSlaConfigRecord as DrizzleTicketSlaConfigRecord,
+} from './ticket-sla-config-store-drizzle.js';
+
 // hitl persistence (P1.5-01)
 export {
   createDrizzleHitlRequestStore,
