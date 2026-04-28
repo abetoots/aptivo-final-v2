@@ -35,6 +35,7 @@ function makeTicket(overrides: Partial<DrizzleTicketRecord> = {}): DrizzleTicket
     createdAt: new Date('2026-04-26T10:00:00Z'),
     updatedAt: new Date('2026-04-26T10:00:00Z'),
     closedAt: null,
+    escalationState: null,
     ...overrides,
   };
 }
@@ -75,6 +76,7 @@ function makeTicketStore(rows: readonly DrizzleTicketRecord[]): DrizzleTicketSto
     }),
     update: vi.fn(),
     softClose: vi.fn(),
+    setEscalationState: vi.fn(),
   };
 }
 

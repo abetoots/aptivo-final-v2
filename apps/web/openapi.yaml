@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Aptivo API
-  version: 1.2.1
+  version: 1.2.2
   description: |
     Aptivo platform API. Bootstrapped in Sprint 16 as the canonical contract
     for Phase 3.5 UI consumption. Only endpoints added or touched in Sprint 16+
@@ -501,6 +501,127 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetail' }
 
+  /api/tickets/{id}/escalate:
+    get:
+      summary: Read the escalation chain status for a ticket (S17-CT-3)
+      description: |
+        Returns the current tier, full chain, history, and whether the
+        ticket is at the top tier. Requires `platform/tickets.read`.
+        404 problem+json when the ticket doesn't exist; 422 when the
+        priority has no escalation chain configured (today: `low`).
+      tags: [tickets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Chain status
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/TicketEscalationChainStatus' }
+        '400':
+          description: Invalid id (not a UUID)
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Ticket not found
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '422':
+          description: Priority has no escalation chain
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+    post:
+      summary: Manually escalate a ticket to its next tier (S17-CT-3)
+      description: |
+        Advances the ticket one tier up its priority chain. Requires
+        `platform/tickets.escalate`. Admin-rate-limited. Emits
+        `platform.ticket.escalated` audit event with the supplied
+        reason. 409 when the ticket is already at its top tier or
+        already closed; 422 when the priority has no chain configured.
+      tags: [tickets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 1, maxLength: 500 }
+      responses:
+        '200':
+          description: Ticket escalated; returns the updated ticket
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/Ticket' }
+        '400':
+          description: Validation failure
+          content:
+            application/problem+json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ProblemDetail'
+                  - type: object
+                    properties:
+                      issues:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            path: { type: string }
+                            message: { type: string }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Ticket not found
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '409':
+          description: Ticket already closed OR already at top tier OR chain exhausted
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '422':
+          description: Priority has no escalation chain
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+
   /api/workflows/validate:
     post:
       summary: Validate a draft workflow body (shape + graph) without persisting
@@ -740,6 +861,40 @@ components:
         priority: { $ref: '#/components/schemas/TicketPriority' }
         title: { type: string, minLength: 1, maxLength: 200 }
         body: { type: string, minLength: 1 }
+
+    TicketEscalationHistoryEntry:
+      type: object
+      required: [toTier, at, escalatedBy]
+      properties:
+        toTier: { type: string }
+        at: { type: string, format: date-time }
+        reason:
+          type: string
+          nullable: true
+        escalatedBy:
+          type: object
+          required: [id, type]
+          properties:
+            id: { type: string }
+            type: { type: string, enum: [user, system, workflow] }
+
+    TicketEscalationChainStatus:
+      description: Read shape for /api/tickets/{id}/escalate (S17-CT-3)
+      type: object
+      required: [ticketId, currentTier, chain, history, isAtTopTier]
+      properties:
+        ticketId: { type: string, format: uuid }
+        currentTier: { type: string }
+        nextTier:
+          type: string
+          nullable: true
+        chain:
+          type: array
+          items: { type: string }
+        history:
+          type: array
+          items: { $ref: '#/components/schemas/TicketEscalationHistoryEntry' }
+        isAtTopTier: { type: boolean }
 
     ProblemDetail:
       description: RFC 7807 Problem Details response

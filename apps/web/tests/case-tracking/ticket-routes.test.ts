@@ -65,6 +65,7 @@ const TICKET = {
   createdAt: new Date('2026-04-26T10:00:00Z'),
   updatedAt: new Date('2026-04-26T10:00:00Z'),
   closedAt: null,
+  escalationState: null,
 };
 
 beforeEach(() => {

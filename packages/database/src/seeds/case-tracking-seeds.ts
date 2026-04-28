@@ -23,15 +23,17 @@ import { rolePermissions } from '../schema/user-roles.js';
 import { ticketSlaConfigs } from '../schema/ticket-sla-configs.js';
 
 export const CASE_TRACKING_PERMISSIONS = [
-  // platform-admin: full CRUD
+  // platform-admin: full CRUD + escalate
   { role: 'platform-admin', permission: 'platform/tickets.read' },
   { role: 'platform-admin', permission: 'platform/tickets.create' },
   { role: 'platform-admin', permission: 'platform/tickets.update' },
   { role: 'platform-admin', permission: 'platform/tickets.delete' },
-  // case-manager: read/create/update (no soft-close)
+  { role: 'platform-admin', permission: 'platform/tickets.escalate' },
+  // case-manager: read/create/update + escalate (no soft-close)
   { role: 'case-manager', permission: 'platform/tickets.read' },
   { role: 'case-manager', permission: 'platform/tickets.create' },
   { role: 'case-manager', permission: 'platform/tickets.update' },
+  { role: 'case-manager', permission: 'platform/tickets.escalate' },
   // case-viewer: read-only
   { role: 'case-viewer', permission: 'platform/tickets.read' },
 ] as const;

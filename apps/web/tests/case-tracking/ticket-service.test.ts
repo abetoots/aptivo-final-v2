@@ -31,6 +31,7 @@ function makeRecord(overrides: Partial<DrizzleTicketRecord> = {}): DrizzleTicket
     createdAt: new Date('2026-04-26T10:00:00Z'),
     updatedAt: new Date('2026-04-26T10:00:00Z'),
     closedAt: null,
+    escalationState: null,
     ...overrides,
   };
 }
@@ -68,6 +69,7 @@ function makeStore(initial?: DrizzleTicketRecord): DrizzleTicketStore & {
     list: vi.fn(async () => ({ rows: current ? [current] : [], totalCount: current ? 1 : 0 })),
     update: updateSpy,
     softClose: closeSpy,
+    setEscalationState: vi.fn(async () => current),
     createSpy,
     updateSpy,
     closeSpy,

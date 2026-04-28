@@ -37,6 +37,9 @@ export interface TicketRecord {
   createdAt: Date;
   updatedAt: Date;
   closedAt: Date | null;
+  // S17-CT-3: opaque to the store; the case-tracking service is the
+  // only writer/reader. Null until first escalation.
+  escalationState: unknown;
 }
 
 export interface CreateTicketInput {
@@ -83,6 +86,27 @@ export interface TicketStore {
   update(id: string, patch: UpdateTicketInput): Promise<TicketRecord | null>;
   /** Soft-close: status='closed', closedAt=now(). Returns null when ticket not found. */
   softClose(id: string): Promise<TicketRecord | null>;
+  /**
+   * S17-CT-3: persists `escalationState` JSONB and optionally flips
+   * status (typically 'escalated' on advance). The case-tracking
+   * service is the only caller; the store stays opaque to the JSONB
+   * shape.
+   *
+   * Returns null when the ticket doesn't exist OR — when
+   * `expectedUpdatedAt` is supplied — when the row's `updated_at`
+   * has moved on since the caller read it. The service distinguishes
+   * the two by the prior findById it must have performed: a null
+   * here after a known-existing ticket means a lost update (race
+   * with a concurrent escalation or status change). This is the
+   * optimistic-concurrency contract the escalation service relies on
+   * to surface `TicketEscalationStale` instead of silently dropping
+   * a history entry.
+   */
+  setEscalationState(
+    id: string,
+    state: unknown,
+    opts?: { status?: TicketStatus; expectedUpdatedAt?: Date },
+  ): Promise<TicketRecord | null>;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,6 +130,7 @@ export function createDrizzleTicketStore(db: DrizzleClient): TicketStore {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
       closedAt: row.closedAt,
+      escalationState: row.escalationState,
     };
   }
 
@@ -202,6 +227,23 @@ export function createDrizzleTicketStore(db: DrizzleClient): TicketStore {
           closedAt: sql`now()`,
         })
         .where(eq(tickets.id, id))
+        .returning();
+      return row ? rowToRecord(row) : null;
+    },
+
+    async setEscalationState(id, state, opts) {
+      const set: Record<string, unknown> = { escalationState: state };
+      if (opts?.status !== undefined) set['status'] = opts.status;
+      // Optimistic concurrency: when the caller pinned a version,
+      // include it in the WHERE so a racing UPDATE invalidates ours
+      // (the .returning() comes back empty and we report null).
+      const whereClause = opts?.expectedUpdatedAt
+        ? and(eq(tickets.id, id), eq(tickets.updatedAt, opts.expectedUpdatedAt))
+        : eq(tickets.id, id);
+      const [row] = await db
+        .update(tickets)
+        .set(set)
+        .where(whereClause)
         .returning();
       return row ? rowToRecord(row) : null;
     },

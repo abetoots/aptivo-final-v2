@@ -1447,6 +1447,28 @@ export const getTicketSlaService = lazy(() => {
   });
 });
 
+export const getTicketEscalationService = lazy(() => {
+  // S17-CT-3: ticket escalation service — wraps the per-priority
+  // tier chain over the existing tickets store. Audit emission
+  // through the same getAuditService bridge the ticket service
+  // uses so a Result.err on emit lands in appLog as
+  // ticket_audit_emit_failed (consistent with CT-1).
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createTicketEscalationService } = require('./case-tracking/ticket-escalation.js') as typeof import('./case-tracking/ticket-escalation.js');
+  const auditService = getAuditService();
+  return createTicketEscalationService({
+    store: getTicketStore(),
+    emitAudit: async (input) => {
+      const r = await auditService.emit(input);
+      if (!r.ok) appLog.warn('ticket_audit_emit_failed', { action: input.action });
+    },
+    logger: { warn: (event, ctx) => appLog.warn(event, ctx) },
+    // notifications: deferred to S18 — CT-3 ships the service contract
+    // and audit emission. Tier-change notifications wire in alongside
+    // FA3-02 budget notifications as a single notification-adapter pass.
+  });
+});
+
 export const getTicketService = lazy(() => {
   // import lazily to avoid pulling case-tracking into every services
   // consumer at module load

@@ -14,6 +14,7 @@
 
 import {
   index,
+  jsonb,
   pgEnum,
   pgTable,
   text,
@@ -71,6 +72,12 @@ export const tickets = pgTable(
     // populated by the soft-close path; queryable for SLA-honoured-after
     // analytics in CT-4.
     closedAt: timestamp('closed_at', { withTimezone: true }),
+    // S17-CT-3: escalation state. Null until the first advance() —
+    // see TicketEscalationState in the case-tracking service for the
+    // shape (currentTier, chain, history). JSONB so the chain
+    // definition can grow per-priority without schema churn; the
+    // service is the only writer.
+    escalationState: jsonb('escalation_state'),
   },
   (table) => ({
     // hot-path filters from /api/tickets list
