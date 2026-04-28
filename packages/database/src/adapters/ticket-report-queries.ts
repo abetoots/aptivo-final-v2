@@ -22,7 +22,7 @@
  * service layer can add windowing.
  */
 
-import { sql, and, eq, gte, inArray, isNotNull } from 'drizzle-orm';
+import { sql, and, eq, gte, isNotNull } from 'drizzle-orm';
 import type { DrizzleClient } from './types.js';
 import { tickets } from '../schema/tickets.js';
 import type { TicketPriority } from './ticket-store-drizzle.js';
@@ -119,7 +119,10 @@ export function createTicketReportQueries(db: DrizzleClient): TicketReportQuerie
           count: sql<number>`count(*)::int`,
         })
         .from(tickets)
-        .where(inArray(tickets.status, OPEN_STATUSES as unknown as string[]))
+        // sql template — drizzle's `inArray` overload doesn't accept
+        // PgEnumColumn directly, so we hand-roll the IN clause.
+        // OPEN_STATUSES is a const string[] of literals; safe to inline.
+        .where(sql`${tickets.status} in ('open', 'in_progress', 'escalated')`)
         .groupBy(tickets.priority);
       return rows.map((r: { priority: TicketPriority; count: number | null }) => ({
         priority: r.priority,

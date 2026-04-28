@@ -79,7 +79,7 @@ All tests pass. The 4 pre-existing typecheck errors in `packages/database` (hitl
 
 ## 6. Enablement Gates (what must be true to flip production flags)
 
-> **Status update (2026-04-28)**: Gates #2-#6 are **CLEARED** in Sprint 17. Closure detail per gate is below; cross-sprint roll-up in [sprint-17-delivery-review.md §6](./sprint-17-delivery-review.md#6-enablement-gates--final-status-closes-s16-6). Only Gate #1 (Replicate procurement) remains open as an external finance/procurement track.
+> **Status update (2026-04-28)**: Gates #4 + #5 are cleanly **CLEARED** in S17. Gates #2 + #3 shipped a **contract layer** in S17-B1 but the production paths (workflow → LLM gateway actor stamping) carry to S18. Gate #6 is **CLEARED for single-instance deploys**; multi-instance horizontal scaling carries to S18 (Upstash list+polling is single-consumer by design). Closure detail per gate below; full audit + production-flip implications in [sprint-17-delivery-review.md §6](./sprint-17-delivery-review.md#6-enablement-gates--final-status-closes-s16-6). Gate #1 (Replicate procurement) remains an external finance/procurement track.
 
 The sprint is **ready for staging release** but **production enablement of Epic 2 features requires five gates** to clear, in addition to the `ml-injection-classifier` / `anomaly-blocking` / `ws-server-enabled` flag flips:
 
@@ -88,8 +88,8 @@ The sprint is **ready for staging release** but **production enablement of Epic 
 | # | Gate | Current state | Owner |
 |---|---|---|---|
 | 1 | **Replicate procurement** — vendor credentials + model hosting | Blocked on finance/procurement | Senior |
-| 2 | **Anomaly-gate aggregate-key alignment** — gateway passes `domain` but audit rows use `resource_type='candidate'` etc. | ✅ **CLEARED in S17-B1** (`ecb4792`) — per-domain action whitelist binding in `services.ts`; integration test asserts non-zero aggregate against real audit rows | S17 implementation |
-| 3 | **Request→actor plumbing** — `CompletionRequest` carries no user context, so `resolveActor` returns undefined | ✅ **CLEARED in S17-B1** (`ecb4792`) — `CompletionRequest` widened with `actor`; `GatewayDeps.resolveActor` bound to JWT-extracted user/department; `llm_usage_logs.departmentId` populated on every authenticated request | S17 implementation |
+| 2 | **Anomaly-gate aggregate-key alignment** — gateway passes `domain` but audit rows use `resource_type='candidate'` etc. | ⚠ **CONTRACT-LAYER CLEARED in S17-B1** (`ecb4792`) — per-domain action whitelist binding, anomaly-scope-key formatter, aggregate query parameterized. Production query filters `WHERE user_id = $actor` but workflow callsites still emit `actor.type='system'` (null `user_id`). Production closure carries to S18 alongside Epic 5 workflow→user actor propagation. | S17 contract / S18 production |
+| 3 | **Request→actor plumbing** — `CompletionRequest` carries no user context, so `resolveActor` returns undefined | ⚠ **CONTRACT-LAYER CLEARED in S17-B1** (`ecb4792`) — `CompletionRequest.actor` widened; `requireLlmContext` middleware created. No production path consumes the middleware (no `/api/llm/complete` HTTP route exists; Inngest workflow callsites don't stamp `request.actor`). Production closure carries to S18. | S17 contract / S18 production |
 | 4 | **FeatureFlagService sync-peek** — ML + anomaly `isEnabled` is env-var-gated because FlagService is async; gate flips don't route through the registry | ✅ **CLEARED in S17-B2** (`03b19d0`) — `peekEnabled(key, defaultValue)` reads in-process cache; safety gates rebound from env-var checks to `peekEnabled`; async `isEnabled` unchanged | S17 architectural work |
 | 5 | **Real anomaly baseline job** — S16 ships a placeholder constant `{mean:10, stdDev:3, sampleSize:100}`; needs historical aggregation from real audit events | ✅ **CLEARED in S17-B3** (`ea986f4`) — scheduled Inngest cron aggregates audit window into `anomaly_baselines` table; `services.ts` baseline lookup reads real rows, fail-open when no row exists; window-lockstep race fixed in `221c523` | S17 OBS track |
 
@@ -97,9 +97,9 @@ The sprint is **ready for staging release** but **production enablement of Epic 
 
 | # | Gate | Current state | Owner |
 |---|---|---|---|
-| 6 | **Inngest → Redis publisher path** for `apps/ws-server` | ✅ **CLEARED in S17-WS-PUB** (`f57d03c`) — `ws-event-publisher` Inngest function publishes to `ws:<topic>`; ws-server `event-bridge` subscribes; dedupe by `eventId`; integration test asserts end-to-end fan-out | S17 implementation |
+| 6 | **Inngest → Redis publisher path** for `apps/ws-server` | ⚠ **CLEARED for single-instance in S17-WS-PUB** (`f57d03c`) — `ws-event-publisher` Inngest function publishes EventFrame envelopes to `ws:events` Redis list; ws-server polls via batched RPOP; dedupe by `eventId`. Upstash REST has no persistent SUBSCRIBE so list+polling is the FIFO substitute, but **multi-instance horizontal scaling is broken by design** (single-consumer per item). Multi-instance work carries to S18. | S17 single-instance / S18 multi-instance |
 
-Per the wrap review: **~8-10 SP of Epic 2 blocker work for S17** (items 2-5; #1 is calendar). Epic 3 gate #6 is separate and can ship in S17 or S18 depending on Phase 3.5 UI-F readiness needs. **S17 actual: 12 SP total across all 5 gates (B1: 5, B2: 2, B3: 2, B4: 1, WS-PUB: 2). All shipped.**
+Per the wrap review: **~8-10 SP of Epic 2 blocker work for S17** (items 2-5; #1 is calendar). Epic 3 gate #6 is separate and can ship in S17 or S18 depending on Phase 3.5 UI-F readiness needs. **S17 actual: 12 SP total across all 5 gates (B1: 5, B2: 2, B3: 2, B4: 1, WS-PUB: 2). Engineering shipped; Gates #2/#3 production paths + Gate #6 multi-instance scaling carry to S18.**
 
 ## 7. Deferred / Carry-Forward to Sprint 17
 

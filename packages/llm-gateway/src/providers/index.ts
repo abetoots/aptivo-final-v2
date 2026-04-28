@@ -11,6 +11,7 @@ export type {
   FinishReason,
   Domain,
   ContentPart,
+  ActorContext,
 } from './types.js';
 export { isRetryableError } from './types.js';
 export { OpenAIProvider } from './openai-provider.js';

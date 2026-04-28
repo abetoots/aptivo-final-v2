@@ -24,6 +24,7 @@ export type {
   TokenCount,
   FinishReason,
   Domain,
+  ActorContext,
 } from './providers/index.js';
 export { isRetryableError, OpenAIProvider, AnthropicProvider } from './providers/index.js';
 export type { OpenAIClient } from './providers/index.js';

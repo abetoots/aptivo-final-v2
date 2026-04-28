@@ -1,8 +1,8 @@
 # Sprint 17 Delivery Review
 
 **Date**: 2026-04-28
-**Status**: **READY FOR PRODUCTION FLAG FLIPS** — all 5 S17-implementation enablement gates from S16 cleared (see §6); only Gate #1 (Replicate procurement, calendar item) remains
-**Multi-model reviews**: 9 ([per-task][b1][b2][b3][b4][wp][c1][c2][c3][c4] + [plan][pl])
+**Status**: **EPIC 4 PRODUCTION-READY**; safety-stack contract layer shipped but **production flag flips for `ml-injection-classifier` + `anomaly-blocking` remain conditional** on S18 actor-propagation work (see §6 for nuance); ws-server flip conditional on Railway staging verification + single-instance acceptance
+**Multi-model reviews**: 10 docs (9 per-task + 1 plan: [b1][b2][b3][b4][wp][c1][c2][c3][c4] + [plan][pl])
 **Phase**: Phase 3 Sprint 3 of 4 (S16-S18 + S19 contingency) — per [phase-3-roadmap.md](./phase-3-roadmap.md)
 
 [pl]: ./S17_PLAN_MULTI_REVIEW.md
@@ -26,19 +26,21 @@ Plan committed at **23 SP / 9 tasks** with two-round multi-model sign-off (Codex
 
 ## 2. Completion Summary
 
+Per-task `New Tests` column lists the count cited in each task's multi-review doc. Sprint-cumulative end-suite totals are in §3 (verified via `pnpm test --run` end of sprint).
+
 | Task | SP | Commit | New Tests | Status | Closes |
 |------|---:|--------|----------:|--------|---|
-| **S17-B1** — Merged actor / departmentId / aggregate-key stream | 5 | `ecb4792` | ~12 | ✅ | Gates #2 + #3 |
+| **S17-B1** — Merged actor / departmentId / aggregate-key stream | 5 | `ecb4792` | (see review) | ✅ contract layer | Gates #2 + #3 contract layer (production paths carry to S18) |
 | **S17-B2** — `FeatureFlagService.peekEnabled` | 2 | `03b19d0` | 9 | ✅ | Gate #4 |
-| **S17-B4** — `ml_classifier_timeout` SLO alert + `console.warn` migration | 1 | `8bbaa43` | ~14 | ✅ | Wrap-review silent-fallback gap |
-| **S17-B3** — Real anomaly baseline job + `anomaly_baselines` table | 2 | `ea986f4` | ~18 | ✅ | Gate #5 |
-| **(retroactive Codex review fix)** — B2/B3/B4 follow-ups | — | `221c523` | +25 | ✅ | Window-lockstep race; cold-start comment accuracy |
-| **S17-WS-PUB** — Inngest → Redis publisher + ws-server subscriber | 2 | `f57d03c` | 14 | ✅ | Gate #6 |
-| **S17-CT-1** — Ticket CRUD API + RBAC seed | 3 | `58b3a3c` | 25 | ✅ | Epic 4 foundation |
-| **S17-CT-2** — Ticket SLA engine + `slo-ticket-sla-at-risk` evaluator | 3 | `a3b29c2` | 21 | ✅ | Epic 4 |
+| **S17-B4** — `ml_classifier_timeout` SLO alert + `console.warn` migration | 1 | `8bbaa43` | (see review) | ✅ | Wrap-review silent-fallback gap |
+| **S17-B3** — Real anomaly baseline job + `anomaly_baselines` table | 2 | `ea986f4` | (see review) | ✅ | Gate #5 |
+| **(retroactive Codex review fix)** — B2/B3/B4 follow-ups | — | `221c523` | +25 (safety-inference-counter) | ✅ | Window-lockstep race; cold-start comment accuracy |
+| **S17-WS-PUB** — Inngest → Redis publisher + ws-server subscriber | 2 | `f57d03c` | (see review) | ✅ single-instance | Gate #6 (multi-instance scaling carry-forward — list+polling is single-consumer by design) |
+| **S17-CT-1** — Ticket CRUD API + RBAC seed | 3 | `58b3a3c` | 31 | ✅ | Epic 4 foundation |
+| **S17-CT-2** — Ticket SLA engine + `slo-ticket-sla-at-risk` evaluator | 3 | `a3b29c2` | 30 | ✅ | Epic 4 |
 | **S17-CT-3** — Ticket escalation service + escalate route | 3 | `8cd121e` | 31 | ✅ | Epic 4 |
 | **S17-CT-4** — Ticket reporting + `GET /api/tickets/reports` | 2 | `d70b6bd` | 22 | ✅ | Epic 4 completion |
-| **Total** | **23** | — | **~191** | **9 / 9** | All 5 S17 gates + Epic 4 |
+| **Total** | **23** | — | (sprint Δ in §3) | **9 / 9** | Gates #4, #5, #6 (single-instance) closed; Gates #2/#3 contract layer + Epic 4 |
 
 **Sprint total**: 10 commits spanning 85 files, +10,232 / -140 lines.
 
@@ -56,7 +58,13 @@ The retroactive Codex review (`221c523`) is called out separately because it's t
 | `@aptivo/audit` | 67 | unchanged |
 | **Reported total (in-scope for S17 surfaces)** | **2,434** | **+148 net new across packages** |
 
-All tests pass. Pre-existing typecheck residuals (Sprint 9/10/15) unchanged: `packages/database/src/adapters/hitl-store-drizzle.ts:220` (changes_requested enum), `packages/database/src/pool-config.ts:37` (PoolOptions undefined), `apps/web/tests/s9-id2-04-webauthn.test.ts` + `s9-id2-07-auth-failure-matrix.test.ts` + `s9-id2-11-integration.test.ts` (NextRequest cast + NODE_ENV reassign + WebAuthnError shape). Confirmed unchanged against `main@d70b6bd`.
+All tests pass. Typecheck has the pre-existing Sprint 9/10/15 residuals (`hitl-store-drizzle.ts:220` changes_requested enum, `pool-config.ts:37` PoolOptions undefined, `s9-id2-04-webauthn.test.ts` + `s9-id2-07-auth-failure-matrix.test.ts` + `s9-id2-11-integration.test.ts`).
+
+**Two new typecheck errors introduced and fixed during the doc-cascade pass** (commit `60c5b57`+):
+- `packages/database/src/adapters/ticket-report-queries.ts:122` — Drizzle `inArray` overload mismatch on `PgEnumColumn`. Introduced when CT-4 cleanup applied Gemini's "use idiomatic `inArray`" suggestion. Reverted to the SQL-template form; safe (literal status values, no user input). Committed in the post-delivery-audit fix.
+- `apps/web/src/lib/middleware/require-llm-context.ts:25` — `ActorContext` type was used but not exported from the `@aptivo/llm-gateway` package barrel (`providers/index.ts` and the package root `index.ts`). Added to both barrels.
+
+Both were caught by the post-delivery-review Codex audit, NOT during the per-task review cycles. Lesson: spot-checks like `pnpm typecheck | grep <changed-file>` miss errors when a different package compiles your changed file. Run full-tree typecheck in delivery review going forward.
 
 ## 4. FRD / Epic Coverage
 
@@ -91,36 +99,49 @@ All tests pass. Pre-existing typecheck residuals (Sprint 9/10/15) unchanged: `pa
 
 ## 6. Enablement Gates — Final Status (closes [S16 §6](./sprint-16-delivery-review.md#6-enablement-gates-what-must-be-true-to-flip-production-flags))
 
-The five S17-implementation gates carried from Sprint 16 are now **CLEARED**. Gate #1 (Replicate procurement) is a calendar/finance item, not engineering work; reported separately.
+Per the per-task multi-reviews, the gates are in mixed states. **The contract layer / observability / single-instance machinery is shipped**, but the Gate #2/#3 production paths still depend on workflow→user actor propagation that ships in S18 alongside Epic 5. Honest framing per task:
 
 ### Epic 2 (LLM Safety v2)
 
 | # | Gate | Sprint 17 closure | Status |
 |---|---|---|---|
-| 1 | **Replicate procurement** — vendor credentials + model hosting | Calendar item (no S17 engineering work). External finance/procurement track. | **NOT CLOSED** — separate from gates #2-#5; flip of `ml-injection-classifier` requires it. Engineering otherwise unblocked. |
-| 2 | **Anomaly-gate aggregate-key alignment** | B1 (`ecb4792`): per-domain action whitelist binding in `services.ts`; gateway passes `request.domain` as resourceType WITH the matching `actions` array; integration test asserts non-zero aggregate against real audit rows. | ✅ **CLEARED** |
-| 3 | **Request→actor plumbing** | B1 (`ecb4792`): `CompletionRequest` widened with `actor`; `GatewayDeps.resolveActor` bound to JWT-extracted user/department; `llm_usage_logs.departmentId` populated on every authenticated request. | ✅ **CLEARED** |
+| 1 | **Replicate procurement** — vendor credentials + model hosting | Calendar item (no S17 engineering work). External finance/procurement track. | **NOT CLOSED** — flip of `ml-injection-classifier` requires it. |
+| 2 | **Anomaly-gate aggregate-key alignment** | B1 (`ecb4792`): contract layer — per-domain action whitelist binding, anomaly-scope-key formatter, aggregate query consumes new `actions` parameter. | ⚠ **CONTRACT-LAYER CLEARED**. Per [B1 review §15-21](./S17_B1_MULTI_REVIEW.md): aggregate query filters `WHERE user_id = $actor`, but the LLM gateway's only callers today are background Inngest workflow steps that emit `actor.type='system'` (so `user_id` is null). Production closure requires workflow→user actor propagation — **carries to S18 alongside Epic 5**. |
+| 3 | **Request→actor plumbing** | B1 (`ecb4792`): `CompletionRequest.actor` widened; `requireLlmContext` middleware created; `llm_usage_logs.departmentId` populated when actor is supplied. | ⚠ **CONTRACT-LAYER CLEARED**. Per [B1 review §15-21](./S17_B1_MULTI_REVIEW.md): no production path consumes `requireLlmContext` because there's no `/api/llm/complete` HTTP route — workflow callsites still call the gateway without `request.actor`. **Carries to S18**. |
 | 4 | **FeatureFlagService sync-peek** | B2 (`03b19d0`): `peekEnabled(key, defaultValue)` reads in-process cache; safety gates in `services.ts` rebound from env-var checks to `peekEnabled`. Async `isEnabled` unchanged. | ✅ **CLEARED** |
-| 5 | **Real anomaly baseline job** | B3 (`ea986f4`): scheduled Inngest cron aggregates audit window into `anomaly_baselines` table; `services.ts` baseline lookup reads real rows; fail-open when no row exists. Window-lockstep race fixed in `221c523`. | ✅ **CLEARED** |
+| 5 | **Real anomaly baseline job** | B3 (`ea986f4`): scheduled Inngest cron aggregates audit window into `anomaly_baselines` table; `services.ts` baseline lookup reads real rows; fail-open when no row exists. Window-lockstep race fixed in `221c523`. | ✅ **CLEARED** (operational meaningfulness conditional on Gate #2/#3 actor flow) |
 
 ### Epic 3 (WebSocket Server)
 
 | # | Gate | Sprint 17 closure | Status |
 |---|---|---|---|
-| 6 | **Inngest → Redis publisher path** | WS-PUB (`f57d03c`): `ws-event-publisher` Inngest function subscribes to `workflow.step.*` + `hitl.*` and publishes to `ws:<topic>`; `apps/ws-server/src/event-bridge.ts` subscribes; dedupe by `eventId`; integration test asserts end-to-end fan-out. | ✅ **CLEARED** |
+| 6 | **Inngest → Redis publisher path** | WS-PUB (`f57d03c`): `ws-event-publisher` Inngest function publishes EventFrame envelopes to a Redis list (`ws:events`); `apps/ws-server` polls via batched RPOP; dedupe by `eventId` in a bounded ring; integration test asserts end-to-end fan-out. | ⚠ **CLEARED for single-instance deploys**. Per [WS-PUB review](./S17_WS_PUB_MULTI_REVIEW.md): Upstash REST has no persistent SUBSCRIBE; list+polling provides FIFO over HTTP but **multi-instance horizontal scaling is broken by design** — list semantics are single-consumer per item. **Multi-instance carry-forward to S18**. |
 
-**Net result**: 5 of 6 carried gates cleared in S17 implementation. Gate #1 (Replicate) remains open as an external blocker; engineering deliverables for Epic 2 are otherwise production-flippable.
+**Net result**: Gates #4 + #5 (B2 + B3) are cleanly closed. Gates #2 + #3 (B1) shipped the contract layer but the production paths (Inngest workflow callsites) carry to S18. Gate #6 is closed for single-instance deploys; multi-instance scaling is an S18 carry-forward. Gate #1 (Replicate) remains an external blocker.
+
+**What this means for production flag flips** (from §10 below):
+- `peekEnabled` infrastructure → ready
+- `anomaly_baselines` table + cron → ready, but baseline values are only operationally meaningful once Gate #2/#3 production flow lands in S18
+- `anomaly-blocking` flip → **NOT recommended** until S18 wires actor stamping into workflow callsites
+- `ml-injection-classifier` flip → blocked on Gate #1 (Replicate procurement) regardless
+- `ws-server-enabled` flip → ready for single-instance staging deploy; multi-instance work is S18
 
 ## 7. Deferred / Carry-Forward to Sprint 18
 
-**Must-do in S18** (Epic 5 + observation):
-- Epic 5 Crypto live-trading workflow (~5 SP) — depends on Epic 2 staging observation (one full sprint of `ml-injection-classifier` + `anomaly-blocking` running on real traffic)
+**Operational closure of S17 contract layer (must-do before flag flips)**:
+- **Workflow → user actor propagation** — wire Inngest workflow steps to stamp `request.actor` (user/department) on every LLM gateway call, so Gate #2/#3 audit-side filters actually match. Without this, B1's contract layer is unobserved in production.
+- **`requireLlmContext` middleware adoption** — there's no production path consuming the middleware today (no `/api/llm/complete` HTTP route exists). Either expose an HTTP entry that uses it or wire it into the workflow-step LLM helper.
+- **HR PII bulk-read / export audit instrumentation** — anomaly gate's bulk-access detector relies on these audit events being emitted; LLM3-04 review noted the emit sites are TBD.
+- **ws-server multi-instance scaling** — replace the Upstash list+polling bridge with a stream-based fan-out (Redis Streams or an alternative pub/sub) so horizontal scaling is supported. Required before scaling beyond one ws-server instance.
+
+**Epic 5 (must-do in S18)**:
+- Epic 5 Crypto live-trading workflow (~5 SP) — depends on the actor-propagation work above; co-sequence
 - Epic 5 HR onboarding workflow (~4 SP)
 - MOD-02 interface contract validation (~3 SP)
 - FA3-02 budget notifications + HITL escalation merged (~3 SP)
-- `verifyJwt` consolidation — ws-server has parallel impl from S16 WFE3-02; cleanup task
 
-**Nice-to-have in S18**:
+**Cleanup track**:
+- `verifyJwt` consolidation — ws-server has parallel impl from S16 WFE3-02
 - HITL `approval-sla-service` real implementation (CT-2 found the plan AC pointed at the wrong file; requires `policyType` plumbing through `hitl_requests`)
 - `UsageRecord` cross-package interface consolidation into `@aptivo/types` (B1 deferred — only field-level coherence required)
 - Per-tenant escalation chain config table (CT-3 currently uses const map)
@@ -165,18 +186,18 @@ All findings fixed pre-commit with regression tests that lock the behavior chang
 
 ## 10. Release Decision
 
-**READY FOR PRODUCTION FLAG FLIPS** — pending operational sign-off + Replicate procurement (Gate #1).
+**Epic 4 (Case Tracking) is production-ready.** The Epic 2/3 flag flips remain conditional — the contract layer shipped but production-path closure carries to S18 (Gate #2/#3 actor propagation; Gate #6 multi-instance scaling).
 
-- Safe to deploy `apps/web` to staging AND production with Epic 4 (Case Tracking) API surfaces active.
-- Safe to flip `ws-server-enabled` in production after WS-PUB Railway staging verification (calendar/ops task).
-- Safe to flip `anomaly-blocking` in production once a one-sprint observation window has passed against the real `anomaly_baselines` table (recommend S18 enablement).
-- Safe to flip `ml-injection-classifier` in production once Replicate procurement (Gate #1) closes — engineering is otherwise unblocked.
+- Safe to deploy `apps/web` to staging AND production with **Epic 4 (Case Tracking) API surfaces active**. RBAC-guarded, audit-emitting, SLA-tracked, escalation-enabled, reporting-exposed. No flag flip needed.
+- Safe to deploy `apps/ws-server` to staging as a **single instance** after Railway provisioning. Multi-instance horizontal scaling is broken by design (Upstash list+polling is single-consumer); flipping `ws-server-enabled` in production should be gated on either (a) explicit single-instance acceptance, or (b) the S18 multi-instance scaling work.
+- **DO NOT flip** `anomaly-blocking` in production yet — B3's baseline table + B1's aggregate-key filter need Inngest workflow callsites to stamp `request.actor` first (S18). Without that, the `WHERE user_id = $actor` filter matches zero rows and the gate is silently inert. Recommended: wait one sprint after S18 actor-propagation lands, then observe before flipping.
+- **DO NOT flip** `ml-injection-classifier` in production until Replicate procurement (Gate #1) closes. Engineering otherwise ready.
 
 **Production GO/NO-GO**:
-- **Epic 4 Case Tracking**: GO. RBAC-guarded, audit-emitting, SLA-tracked, escalation-enabled, reporting-exposed. No flag flip needed.
-- **Epic 2 ML classifier flip**: NO-GO until Gate #1 (Replicate). Engineering DONE.
-- **Epic 2 anomaly blocking flip**: GO from engineering; recommend ops wait one sprint for baseline-table population + observation.
-- **Epic 3 ws-server flip**: GO from engineering; pending Railway staging verification.
+- **Epic 4 Case Tracking**: ✅ **GO**.
+- **Epic 2 ML classifier flip**: NO-GO until Gate #1 (Replicate procurement). Engineering DONE.
+- **Epic 2 anomaly-blocking flip**: NO-GO until S18 actor-propagation observation. B1 contract layer + B3 baseline are necessary but not sufficient.
+- **Epic 3 `ws-server-enabled` flip**: GO from engineering, **single-instance only**, pending Railway staging verification.
 
 ## 11. Velocity + Process Notes
 
@@ -185,10 +206,12 @@ All findings fixed pre-commit with regression tests that lock the behavior chang
 - **Real Codex MCP availability**: degraded for B1-B4 (routing issue at the time) → caught in mid-sprint correction (`221c523`) → stable for all CT-* tasks. Persistent memory captured the workflow preference for honest attribution.
 - **TDD discipline**: test-first on the unit layer for every task; service + route-integration tests added alongside their supporting code. Strong adherence except for two CT-3 fixes that required test updates after implementation (off-by-one + race).
 - **Plan deviations** (all documented in per-task reviews):
-  - B4 absorbed only 3 `console.warn` migrations (not 7 as originally planned — plan was wrong on the count; grep-verified)
-  - CT-2 found the plan's `approval-sla-service` stub-replacement path was wrong (HITL stub lives in `services.ts:994`, requires `policyType` plumbing — out of CT-2 scope; documented as separate concern)
-  - CT-3 abandoned the plan's `wrap packages/hitl-gateway sequential-chain` AC — that primitive models approve/reject decisions for HITL, wrong shape for tier responsibility transfer; both reviewers endorsed
-  - CT-4 placed reporting in a new `TicketReportService` instead of `metric-service.ts` (per plan AC) — that file is the SLO cron's metric provider; admin analytics over 30/90 day ranges have different semantics; both reviewers endorsed
+  - **B1 narrowed to contract-layer closure of Gates #2/#3** rather than full production closure — both reviewers caught that audit-side filters won't match until workflow callsites stamp `request.actor`. Production paths carry to S18; per-task review documents this explicitly.
+  - **B4 absorbed only 3 `console.warn` migrations** (not 7 as originally planned — plan was wrong on the count; grep-verified). Migration is **production callsites only**; test-fixture `console.warn` left as-is.
+  - **WS-PUB shipped Redis list + polling, not pub/sub**: Upstash REST has no persistent SUBSCRIBE; the alternative produces FIFO over HTTP but is **single-consumer per item**, breaking multi-instance horizontal scaling. Documented as carry-forward.
+  - **CT-2 found the plan's `approval-sla-service` stub-replacement path was wrong** (HITL stub lives in `services.ts:994`, requires `policyType` plumbing — out of CT-2 scope; documented as separate concern)
+  - **CT-3 abandoned the plan's `wrap packages/hitl-gateway sequential-chain` AC** — that primitive models approve/reject decisions for HITL, wrong shape for tier responsibility transfer; both reviewers endorsed
+  - **CT-4 placed reporting in a new `TicketReportService` instead of `metric-service.ts`** (per plan AC) — that file is the SLO cron's metric provider; admin analytics over 30/90 day ranges have different semantics; both reviewers endorsed
 - **Mid-sprint correction lesson**: when reviewer attribution drifts (B-tasks shipped with Gemini-only sign-off because Codex MCP was unreachable at the time), retroactive review on merged commits is acceptable and worthwhile — the lockstep race in B3 would have been a production correctness bug. The persistent-memory entry now ensures this doesn't recur.
 
 ---
@@ -211,10 +234,15 @@ af7cb4a docs(sprint-17): plan + multi-model review (two-round sign-off)
 
 ## Appendix B — S18 Recommended Starting Order
 
-1. **Epic 5 Crypto live-trading workflow** (~5 SP) — depends on Epic 2 staging observation; start with the workflow scaffold while the observation window runs in parallel.
-2. **Epic 5 HR onboarding workflow** (~4 SP) — independent of Crypto; can run in parallel with #1.
-3. **MOD-02 interface contract validation** (~3 SP) — interface boundary work, can start mid-sprint when domain workflows surface concrete contract needs.
-4. **FA3-02 budget notifications + HITL escalation merged** (~3 SP) — pairs with the notification-adapter wiring for ticket escalation (CT-3 carry-forward).
-5. **Cleanup track** (~2-3 SP, parallel): `verifyJwt` consolidation; `UsageRecord` interface consolidation into `@aptivo/types`; ticket escalation notification adapter wiring.
+Critical insight from the post-delivery review: Epic 2 production flag flips depend on operational closure of S17's contract layer. Front-loading that unlocks Crypto live-trading observability AND HR PII bulk-read tracking — both of which Epic 5 needs.
+
+1. **Workflow → user actor propagation** (~3 SP) — wire Inngest workflow steps to stamp `request.actor` on LLM gateway calls; adopt `requireLlmContext` middleware (or its workflow-step equivalent). Closes the Gate #2/#3 production path that B1's contract layer requires.
+2. **HR PII bulk-read / export audit instrumentation** (~1 SP) — emit the audit events the anomaly gate's bulk-access detector needs. Cheap, parallelisable with #1.
+3. **ws-server multi-instance scaling** (~3 SP) — replace Upstash list+polling with stream-based fan-out (Redis Streams or alternative pub/sub). Required before scaling beyond one ws-server instance.
+4. **Epic 5 Crypto live-trading workflow** (~5 SP) — sequenced AFTER #1 so the workflow's LLM steps emit complete audit context from day one. Observation window for `anomaly-blocking` can run in parallel.
+5. **Epic 5 HR onboarding workflow** (~4 SP) — independent of Crypto; can run in parallel with #4.
+6. **MOD-02 interface contract validation** (~3 SP) — interface boundary work, can start mid-sprint when domain workflows surface concrete contract needs.
+7. **FA3-02 budget notifications + HITL escalation merged** (~3 SP) — pairs with the notification-adapter wiring for ticket escalation (CT-3 carry-forward).
+8. **Cleanup track** (~2-3 SP, parallel): `verifyJwt` consolidation; `UsageRecord` interface consolidation into `@aptivo/types`; ticket escalation notification adapter wiring; HITL `approval-sla-service` real implementation.
 
 Cross-sprint DoD remains in force: OpenAPI bumped per route; Drizzle migrations generated + reversible; event schemas to `@aptivo/types`; safe-logger DI everywhere; RFC 7807 errors; admin writes audit-emitting + rate-limited; ≥80% test coverage on new code; no S17 regressions; per-task multi-model reviews under `S18_*_MULTI_REVIEW.md`.
