@@ -106,6 +106,15 @@ export type {
   TicketSlaConfigRecord as DrizzleTicketSlaConfigRecord,
 } from './ticket-sla-config-store-drizzle.js';
 
+// S17-CT-4: ticket reporting aggregation queries
+export { createTicketReportQueries } from './ticket-report-queries.js';
+export type {
+  TicketReportQueries as DrizzleTicketReportQueries,
+  PriorityCount,
+  PriorityResolutionRow,
+  PriorityComplianceRow,
+} from './ticket-report-queries.js';
+
 // hitl persistence (P1.5-01)
 export {
   createDrizzleHitlRequestStore,

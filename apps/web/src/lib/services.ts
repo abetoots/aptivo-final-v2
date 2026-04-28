@@ -183,6 +183,7 @@ import {
   createDrizzleAnomalyBaselineStore,
   createDrizzleTicketStore,
   createDrizzleTicketSlaConfigStore,
+  createTicketReportQueries,
 } from '@aptivo/database/adapters';
 import { createAdminRateLimit, type AdminRateLimit, type RateLimitRedis } from './security/admin-rate-limit.js';
 
@@ -1444,6 +1445,24 @@ export const getTicketSlaService = lazy(() => {
   return createTicketSlaService({
     slaConfigStore: getTicketSlaConfigStore(),
     ticketStore: getTicketStore(),
+  });
+});
+
+export const getTicketReportQueries = lazy(() =>
+  createTicketReportQueries(
+    db() as unknown as Parameters<typeof createTicketReportQueries>[0],
+  ),
+);
+
+export const getTicketReportService = lazy(() => {
+  // S17-CT-4: ticket reporting service. Lazy-imported to keep the
+  // dashboard-only path off the cold-load surface for routes that
+  // never call /api/tickets/reports.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createTicketReportService } = require('./case-tracking/ticket-report-service.js') as typeof import('./case-tracking/ticket-report-service.js');
+  return createTicketReportService({
+    queries: getTicketReportQueries(),
+    slaConfigStore: getTicketSlaConfigStore(),
   });
 });
 

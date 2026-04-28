@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: Aptivo API
-  version: 1.2.2
+  version: 1.2.3
   description: |
     Aptivo platform API. Bootstrapped in Sprint 16 as the canonical contract
     for Phase 3.5 UI consumption. Only endpoints added or touched in Sprint 16+
@@ -622,6 +622,53 @@ paths:
             application/problem+json:
               schema: { $ref: '#/components/schemas/ProblemDetail' }
 
+  /api/tickets/reports:
+    get:
+      summary: Case-tracking reporting metrics (S17-CT-4)
+      description: |
+        Returns three sub-reports keyed by ticket priority over a
+        caller-chosen window (default 30 days; values outside
+        [1, 365] are rejected with 400 problem+json, NOT clamped):
+
+          - openByPriority — current open/in_progress/escalated counts
+          - resolution     — average minutes from createdAt → closedAt
+          - slaCompliance  — fraction closed inside the priority's
+            configured SLA window
+
+        Read-only; requires `platform/tickets.read`. No audit emission,
+        no rate-limit (pure aggregation, cheap).
+      tags: [tickets]
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: range
+          schema: { type: string, example: "30d" }
+          description: |
+            Window length in days. Accepts plain integers ("30") or
+            integer + "d" suffix ("30d"). Defaults to 30. Must fall
+            in [1, 365]. Out-of-range or malformed values are
+            rejected with a 400 problem+json (NOT silently clamped).
+      responses:
+        '200':
+          description: Reporting payload
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: '#/components/schemas/TicketReport' }
+        '400':
+          description: Invalid range
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetail' }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
   /api/workflows/validate:
     post:
       summary: Validate a draft workflow body (shape + graph) without persisting
@@ -895,6 +942,118 @@ components:
           type: array
           items: { $ref: '#/components/schemas/TicketEscalationHistoryEntry' }
         isAtTopTier: { type: boolean }
+
+    TicketReport:
+      description: Reporting payload for /api/tickets/reports (S17-CT-4)
+      type: object
+      required: [windowDays, windowStart, windowEnd, openByPriority, openTotal, resolution, slaCompliance]
+      properties:
+        windowDays: { type: integer, minimum: 1, maximum: 365 }
+        windowStart: { type: string, format: date-time }
+        windowEnd: { type: string, format: date-time }
+        openTotal: { type: integer, minimum: 0 }
+        openByPriority: { $ref: '#/components/schemas/TicketReportPriorityCounts' }
+        resolution:
+          type: object
+          required: [totalClosed, avgResolutionMinutes, byPriority]
+          properties:
+            totalClosed: { type: integer, minimum: 0 }
+            avgResolutionMinutes:
+              type: integer
+              nullable: true
+              description: Null when totalClosed=0
+            byPriority: { $ref: '#/components/schemas/TicketReportResolutionByPriority' }
+        slaCompliance:
+          type: object
+          required: [totalClosed, withinSlaCount, evaluatedClosed, compliancePct, unconfiguredPriorities, byPriority]
+          properties:
+            totalClosed:
+              type: integer
+              minimum: 0
+              description: |
+                All closures in the window across every priority —
+                honest denominator for "how many tickets did we close".
+            withinSlaCount:
+              type: integer
+              minimum: 0
+              description: |
+                Closures that met SLA. Counted only over priorities
+                that have a configured SLA threshold.
+            evaluatedClosed:
+              type: integer
+              minimum: 0
+              description: |
+                Subset of totalClosed where an SLA threshold was
+                applicable. compliancePct denominator. Always ≤ totalClosed.
+            compliancePct:
+              type: number
+              nullable: true
+              minimum: 0
+              maximum: 1
+              description: |
+                withinSlaCount / evaluatedClosed, rounded to 4dp.
+                Null when evaluatedClosed=0 (nothing in the window
+                had a config) — distinct from "0% met SLA".
+            unconfiguredPriorities:
+              type: array
+              description: |
+                Priorities that contributed to totalClosed but were
+                excluded from the rate (no SLA config row). Surface in
+                dashboards so ops sees the config gap.
+              items: { $ref: '#/components/schemas/TicketPriority' }
+            byPriority: { $ref: '#/components/schemas/TicketReportComplianceByPriority' }
+
+    TicketReportPriorityCounts:
+      type: object
+      required: [critical, high, medium, low]
+      properties:
+        critical: { type: integer, minimum: 0 }
+        high: { type: integer, minimum: 0 }
+        medium: { type: integer, minimum: 0 }
+        low: { type: integer, minimum: 0 }
+
+    TicketReportResolutionByPriority:
+      type: object
+      required: [critical, high, medium, low]
+      properties:
+        critical: { $ref: '#/components/schemas/TicketReportResolutionEntry' }
+        high: { $ref: '#/components/schemas/TicketReportResolutionEntry' }
+        medium: { $ref: '#/components/schemas/TicketReportResolutionEntry' }
+        low: { $ref: '#/components/schemas/TicketReportResolutionEntry' }
+
+    TicketReportComplianceByPriority:
+      type: object
+      required: [critical, high, medium, low]
+      properties:
+        critical: { $ref: '#/components/schemas/TicketReportComplianceEntry' }
+        high: { $ref: '#/components/schemas/TicketReportComplianceEntry' }
+        medium: { $ref: '#/components/schemas/TicketReportComplianceEntry' }
+        low: { $ref: '#/components/schemas/TicketReportComplianceEntry' }
+
+    TicketPriority:
+      type: string
+      enum: [critical, high, medium, low]
+
+    TicketReportResolutionEntry:
+      type: object
+      required: [totalClosed, avgResolutionMinutes]
+      properties:
+        totalClosed: { type: integer, minimum: 0 }
+        avgResolutionMinutes:
+          type: integer
+          nullable: true
+
+    TicketReportComplianceEntry:
+      type: object
+      required: [totalClosed, withinSlaCount, compliancePct]
+      properties:
+        totalClosed: { type: integer, minimum: 0 }
+        withinSlaCount: { type: integer, minimum: 0 }
+        compliancePct:
+          type: number
+          nullable: true
+          minimum: 0
+          maximum: 1
 
     ProblemDetail:
       description: RFC 7807 Problem Details response
