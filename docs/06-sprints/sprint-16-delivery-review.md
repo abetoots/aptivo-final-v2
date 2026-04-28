@@ -79,6 +79,8 @@ All tests pass. The 4 pre-existing typecheck errors in `packages/database` (hitl
 
 ## 6. Enablement Gates (what must be true to flip production flags)
 
+> **Status update (2026-04-28)**: Gates #2-#6 are **CLEARED** in Sprint 17. Closure detail per gate is below; cross-sprint roll-up in [sprint-17-delivery-review.md §6](./sprint-17-delivery-review.md#6-enablement-gates--final-status-closes-s16-6). Only Gate #1 (Replicate procurement) remains open as an external finance/procurement track.
+
 The sprint is **ready for staging release** but **production enablement of Epic 2 features requires five gates** to clear, in addition to the `ml-injection-classifier` / `anomaly-blocking` / `ws-server-enabled` flag flips:
 
 ### Epic 2 (LLM Safety v2) production enablement gates
@@ -86,18 +88,18 @@ The sprint is **ready for staging release** but **production enablement of Epic 
 | # | Gate | Current state | Owner |
 |---|---|---|---|
 | 1 | **Replicate procurement** — vendor credentials + model hosting | Blocked on finance/procurement | Senior |
-| 2 | **Anomaly-gate aggregate-key alignment** — gateway passes `domain` but audit rows use `resource_type='candidate'` etc. | Known latent bug; documented in code + multi-review | S17 implementation |
-| 3 | **Request→actor plumbing** — `CompletionRequest` carries no user context, so `resolveActor` returns undefined | Not implemented; blocks anomaly gate AND department-ID stamping (merged stream) | S17 implementation |
-| 4 | **FeatureFlagService sync-peek** — ML + anomaly `isEnabled` is env-var-gated because FlagService is async; gate flips don't route through the registry | Documented in ADD §14.5 residual risk; S17 architectural decision | S17 architectural work |
-| 5 | **Real anomaly baseline job** — S16 ships a placeholder constant `{mean:10, stdDev:3, sampleSize:100}`; needs historical aggregation from real audit events | Not implemented; flipping `ANOMALY_BLOCKING_ENABLED=true` with the placeholder would produce arbitrary false positives/negatives | S17 OBS track |
+| 2 | **Anomaly-gate aggregate-key alignment** — gateway passes `domain` but audit rows use `resource_type='candidate'` etc. | ✅ **CLEARED in S17-B1** (`ecb4792`) — per-domain action whitelist binding in `services.ts`; integration test asserts non-zero aggregate against real audit rows | S17 implementation |
+| 3 | **Request→actor plumbing** — `CompletionRequest` carries no user context, so `resolveActor` returns undefined | ✅ **CLEARED in S17-B1** (`ecb4792`) — `CompletionRequest` widened with `actor`; `GatewayDeps.resolveActor` bound to JWT-extracted user/department; `llm_usage_logs.departmentId` populated on every authenticated request | S17 implementation |
+| 4 | **FeatureFlagService sync-peek** — ML + anomaly `isEnabled` is env-var-gated because FlagService is async; gate flips don't route through the registry | ✅ **CLEARED in S17-B2** (`03b19d0`) — `peekEnabled(key, defaultValue)` reads in-process cache; safety gates rebound from env-var checks to `peekEnabled`; async `isEnabled` unchanged | S17 architectural work |
+| 5 | **Real anomaly baseline job** — S16 ships a placeholder constant `{mean:10, stdDev:3, sampleSize:100}`; needs historical aggregation from real audit events | ✅ **CLEARED in S17-B3** (`ea986f4`) — scheduled Inngest cron aggregates audit window into `anomaly_baselines` table; `services.ts` baseline lookup reads real rows, fail-open when no row exists; window-lockstep race fixed in `221c523` | S17 OBS track |
 
 ### Epic 3 (WebSocket) production enablement gate (separate)
 
 | # | Gate | Current state | Owner |
 |---|---|---|---|
-| 6 | **Inngest → Redis publisher path** for `apps/ws-server` | In-process bridge only in S16; `ws-server-enabled` flag must stay off in production until publisher ships | S17 implementation |
+| 6 | **Inngest → Redis publisher path** for `apps/ws-server` | ✅ **CLEARED in S17-WS-PUB** (`f57d03c`) — `ws-event-publisher` Inngest function publishes to `ws:<topic>`; ws-server `event-bridge` subscribes; dedupe by `eventId`; integration test asserts end-to-end fan-out | S17 implementation |
 
-Per the wrap review: **~8-10 SP of Epic 2 blocker work for S17** (items 2-5; #1 is calendar). Epic 3 gate #6 is separate and can ship in S17 or S18 depending on Phase 3.5 UI-F readiness needs.
+Per the wrap review: **~8-10 SP of Epic 2 blocker work for S17** (items 2-5; #1 is calendar). Epic 3 gate #6 is separate and can ship in S17 or S18 depending on Phase 3.5 UI-F readiness needs. **S17 actual: 12 SP total across all 5 gates (B1: 5, B2: 2, B3: 2, B4: 1, WS-PUB: 2). All shipped.**
 
 ## 7. Deferred / Carry-Forward to Sprint 17
 
