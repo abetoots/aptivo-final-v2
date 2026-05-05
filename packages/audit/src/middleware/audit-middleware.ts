@@ -8,6 +8,7 @@
  * Failures are non-blocking — logged but never interrupt the request.
  */
 
+import type { ActorType } from '@aptivo/types';
 import type { AuditService, AuditEventInput } from '../types.js';
 import { mapHttpAction, AUDIT_ACTIONS } from './action-mapper.js';
 
@@ -18,7 +19,7 @@ import { mapHttpAction, AUDIT_ACTIONS } from './action-mapper.js';
 export interface RequestContext {
   method: string;
   route?: string;
-  actor: { id: string; type: 'user' | 'system' | 'workflow' };
+  actor: { id: string; type: ActorType };
   resource: { type: string; id: string };
   ipAddress?: string;
   userAgent?: string;

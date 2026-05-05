@@ -5,14 +5,14 @@
  * @guidelines §2.1 (Result types, tagged union errors)
  */
 
-import type { Result } from '@aptivo/types';
+import type { ActorType, Result } from '@aptivo/types';
 
 // ---------------------------------------------------------------------------
 // audit event input
 // ---------------------------------------------------------------------------
 
 export interface AuditEventInput {
-  actor: { id: string; type: 'user' | 'system' | 'workflow' };
+  actor: { id: string; type: ActorType };
   action: string;
   resource: { type: string; id: string };
   domain?: string;

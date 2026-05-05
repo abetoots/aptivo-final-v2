@@ -8,12 +8,13 @@
  */
 
 import { z } from 'zod';
+import { ACTOR_TYPES } from '@aptivo/types';
 
 export const AUDIT_EVENT_SCHEMAS = {
   'audit/event.published': z.object({
     actor: z.object({
       id: z.string().min(1),
-      type: z.enum(['user', 'system', 'workflow']),
+      type: z.enum(ACTOR_TYPES),
     }),
     action: z.string().min(1),
     resource: z.object({
