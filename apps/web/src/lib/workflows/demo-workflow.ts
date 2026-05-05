@@ -24,6 +24,13 @@ import {
 } from '../services.js';
 import { createRequest } from '@aptivo/hitl-gateway';
 import type { AuditEventInput } from '@aptivo/audit';
+// S18-A1: workflow LLM callsites must stamp `actor` so audit_logs.user_id
+// (only set when actor.type='user' per audit-service.ts:61) is populated
+// and the anomaly aggregate's `WHERE user_id = $actor` clause matches.
+// Importing through the wrapper makes actor a required parameter; bare
+// `gateway.complete(` is also blocked by the CI grep gate (S18-A1).
+import { completeWorkflowRequest } from '../llm/complete-workflow-request.js';
+import { resolveWorkflowActor } from '../llm/resolve-workflow-actor.js';
 
 // ---------------------------------------------------------------------------
 // workflow result types
@@ -100,8 +107,9 @@ export const demoWorkflowFn = inngest.createFunction(
     const llmResult: LlmStepResult = await step.run('llm-analyze', async () => {
       try {
         const gateway = getLlmGateway();
-        const result = await gateway.complete(
-          {
+        const result = await completeWorkflowRequest({
+          gateway,
+          request: {
             model: 'gpt-4o',
             messages: [
               { role: 'system', content: 'Analyze the following input and provide a brief summary.' },
@@ -109,8 +117,9 @@ export const demoWorkflowFn = inngest.createFunction(
             ],
             domain: 'core',
           },
-          { userId: requestedBy },
-        );
+          actor: resolveWorkflowActor({ requestedBy: { userId: requestedBy } }),
+          options: { userId: requestedBy },
+        });
 
         if (!result.ok) {
           return { success: false, error: `${result.error._tag}` };

@@ -16,6 +16,11 @@ import {
   getApplicationStore,
 } from '../services.js';
 import type { AuditEventInput } from '@aptivo/audit';
+// S18-A1: workflow LLM callsites stamp actor through the wrapper. Note:
+// `hr/application.received` is an external trigger (resume submission
+// webhook, recruiter portal) — no acting user, so the resume-parse step
+// honestly passes `actor: undefined`.
+import { completeWorkflowRequest } from '../llm/complete-workflow-request.js';
 
 // ---------------------------------------------------------------------------
 // result types
@@ -54,8 +59,13 @@ export const candidateFlowFn = inngest.createFunction(
     const parseResult = await step.run('parse-resume', async () => {
       try {
         const gateway = getLlmGateway();
-        const result = await gateway.complete(
-          {
+        // S18-A1: external trigger; no initiating user. `actor.type='system'`
+        // on the audit emit side is honest. Until S18-B2 lands the HR
+        // onboarding workflow + employee-portal endpoints (which will
+        // carry `requestedBy`), this step has no user to attribute to.
+        const result = await completeWorkflowRequest({
+          gateway,
+          request: {
             model: 'gpt-4o',
             messages: [
               {
@@ -70,8 +80,9 @@ export const candidateFlowFn = inngest.createFunction(
             ],
             domain: 'hr',
           },
-          { userId: 'system' },
-        );
+          actor: undefined,
+          options: { userId: 'system' },
+        });
 
         if (!result.ok) {
           return { success: false as const, error: result.error._tag };

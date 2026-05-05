@@ -16,6 +16,14 @@ import {
   getAuditService,
 } from '../services.js';
 import type { AuditEventInput } from '@aptivo/audit';
+// S18-A1: workflow LLM callsites stamp actor through the wrapper. Both
+// pre-HITL steps (draft + compliance-check) attribute to `requestedBy`
+// — the HR person who initiated the contract approval. The pre-existing
+// inconsistency (line 76 was `userId: requestedBy`, line 126 was
+// `userId: 'system'`) is corrected here: both calls reference the same
+// initiating user.
+import { completeWorkflowRequest } from '../llm/complete-workflow-request.js';
+import { resolveWorkflowActor } from '../llm/resolve-workflow-actor.js';
 
 // ---------------------------------------------------------------------------
 // result types
@@ -57,8 +65,9 @@ export const contractApprovalFn = inngest.createFunction(
     const draftResult = await step.run('draft-contract', async () => {
       try {
         const gateway = getLlmGateway();
-        const result = await gateway.complete(
-          {
+        const result = await completeWorkflowRequest({
+          gateway,
+          request: {
             model: 'gpt-4o',
             messages: [
               {
@@ -73,8 +82,9 @@ export const contractApprovalFn = inngest.createFunction(
             ],
             domain: 'hr',
           },
-          { userId: requestedBy },
-        );
+          actor: resolveWorkflowActor({ requestedBy: { userId: requestedBy } }),
+          options: { userId: requestedBy },
+        });
 
         if (!result.ok) {
           return { success: false as const, error: result.error._tag };
@@ -107,8 +117,12 @@ export const contractApprovalFn = inngest.createFunction(
     const complianceResult = await step.run('compliance-check', async () => {
       try {
         const gateway = getLlmGateway();
-        const result = await gateway.complete(
-          {
+        // S18-A1: still pre-HITL; same `requestedBy` actor as draft step.
+        // Pre-S18 this passed `userId: 'system'` for rate-limit purposes
+        // and lacked actor stamping entirely — corrected here.
+        const result = await completeWorkflowRequest({
+          gateway,
+          request: {
             model: 'gpt-4o',
             messages: [
               {
@@ -123,8 +137,9 @@ export const contractApprovalFn = inngest.createFunction(
             ],
             domain: 'hr',
           },
-          { userId: 'system' },
-        );
+          actor: resolveWorkflowActor({ requestedBy: { userId: requestedBy } }),
+          options: { userId: requestedBy },
+        });
 
         if (!result.ok) {
           return { success: false as const, error: result.error._tag };

@@ -19,6 +19,13 @@ import {
 } from '../services.js';
 import { createRequest } from '@aptivo/hitl-gateway';
 import type { AuditEventInput } from '@aptivo/audit';
+// S18-A1: workflow LLM callsites stamp actor through the wrapper. Note:
+// `crypto/signal.created` is an external trigger (signal generator,
+// HTTP route) — there's no acting user before HITL approval, so the
+// pre-HITL LLM analyze step honestly passes `actor: undefined`. The
+// post-HITL audit emit attributes to the approver in S18-A1's audit-
+// emitter slice (separate commit).
+import { completeWorkflowRequest } from '../llm/complete-workflow-request.js';
 
 // ---------------------------------------------------------------------------
 // workflow result types
@@ -71,8 +78,14 @@ export const paperTradeFn = inngest.createFunction(
     const llmResult = await step.run('llm-analyze', async () => {
       try {
         const gateway = getLlmGateway();
-        const result = await gateway.complete(
-          {
+        // S18-A1: actor is undefined here because `crypto/signal.created`
+        // is an external trigger (no initiating user). `actor.type='system'`
+        // is honest on the audit emit side — don't fabricate a synthetic
+        // user just to fill the column. Post-HITL steps attribute to the
+        // approver separately.
+        const result = await completeWorkflowRequest({
+          gateway,
+          request: {
             model: 'gpt-4o',
             messages: [
               {
@@ -86,8 +99,9 @@ export const paperTradeFn = inngest.createFunction(
             ],
             domain: 'crypto',
           },
-          { userId: 'system' },
-        );
+          actor: undefined,
+          options: { userId: 'system' },
+        });
 
         if (!result.ok) {
           return { success: false as const, error: result.error._tag };
