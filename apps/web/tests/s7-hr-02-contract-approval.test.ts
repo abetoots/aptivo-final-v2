@@ -503,6 +503,7 @@ describe('S7-HR-02: Contract Approval Workflow', () => {
               data: {
                 requestId: 'hitl-req-1',
                 decision: 'approved',
+                approverId: 'reviewer-1',
                 domain: 'hr',
               },
             }),
@@ -513,9 +514,12 @@ describe('S7-HR-02: Contract Approval Workflow', () => {
       await engine.execute();
 
       expect(mockAuditService.emit).toHaveBeenCalledTimes(1);
+      // S18-A1: post-HITL emit attributes to the reviewer (decisionData.approverId)
+      // — audit_logs.user_id is only populated when actor.type==='user', so
+      // this is what makes the anomaly aggregate match in production.
       expect(mockAuditService.emit).toHaveBeenCalledWith(
         expect.objectContaining({
-          actor: { id: 'system', type: 'workflow' },
+          actor: { id: 'reviewer-1', type: 'user' },
           action: 'hr.contract.finalized',
           resource: { type: 'contract', id: 'contract-001' },
           domain: 'hr',
@@ -524,6 +528,37 @@ describe('S7-HR-02: Contract Approval Workflow', () => {
             positionId: 'pos-001',
             status: 'signed',
           },
+        }),
+      );
+    });
+
+    // S18-A1: graceful fallback when the decision event lacks approverId
+    // — honest unknown attribution rather than fabricating a synthetic
+    // 'workflow' label that lies about provenance.
+    it('falls back to system actor when approverId is missing from decision payload', async () => {
+      const engine = engineFor(contractApprovalFn, {
+        events: triggerEvent(),
+        steps: [
+          {
+            id: 'wait-for-contract-decision',
+            handler: () => ({
+              name: 'hr/contract.decision.submitted',
+              data: {
+                requestId: 'hitl-req-1',
+                decision: 'approved',
+                domain: 'hr',
+              },
+            }),
+          },
+        ],
+      });
+
+      await engine.execute();
+
+      expect(mockAuditService.emit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actor: { id: 'system', type: 'system' },
+          action: 'hr.contract.finalized',
         }),
       );
     });

@@ -329,7 +329,17 @@ export const paperTradeFn = inngest.createFunction(
       return { status: 'expired', signalId };
     }
 
-    const decisionData = decision.data as { requestId: string; decision: string; reason?: string; comment?: string };
+    // S18-A1: approverId carried on the `hitl/decision.recorded` event
+    // (single-approver and quorum-met cases both populate it; see
+    // packages/hitl-gateway/src/workflow/event-schemas.ts). Used below to
+    // attribute downstream audit emits to the human approver.
+    const decisionData = decision.data as {
+      requestId: string;
+      decision: string;
+      reason?: string;
+      comment?: string;
+      approverId?: string;
+    };
 
     // handle request_changes — re-submission loop (HITL2-07)
     if (decisionData.decision === 'request_changes') {
@@ -419,9 +429,17 @@ export const paperTradeFn = inngest.createFunction(
     }
 
     // step 6: audit-trail — record trade lifecycle
+    // S18-A1: post-HITL emit attributes to the approver (the human in
+    // the loop whose decision authorized this trade). Falls back to
+    // `system` if approverId is missing — honest about the unknown
+    // rather than fabricating a synthetic 'workflow' actor that would
+    // also produce NULL audit_logs.user_id but lie about provenance.
+    const tradeActor = decisionData.approverId
+      ? { id: decisionData.approverId, type: 'user' as const }
+      : { id: 'system', type: 'system' as const };
     await step.run('audit-trail', () =>
       emitAudit({
-        actor: { id: 'system', type: 'workflow' },
+        actor: tradeActor,
         action: 'crypto.trade.paper-executed',
         resource: { type: 'trade-execution', id: tradeResult.tradeId },
         domain: 'crypto',

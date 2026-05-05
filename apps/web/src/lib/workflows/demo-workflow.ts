@@ -134,7 +134,7 @@ export const demoWorkflowFn = inngest.createFunction(
       // record audit for failure and exit
       await step.run('audit-llm-failure', () =>
         emitAudit({
-          actor: { id: requestedBy, type: 'workflow' },
+          actor: { id: requestedBy, type: 'user' },
           action: 'demo.llm.failed',
           resource: { type: 'demo-workflow', id: 'int-01' },
           metadata: { error: llmResult.error },
@@ -185,7 +185,7 @@ export const demoWorkflowFn = inngest.createFunction(
     if (!hitlResult.success) {
       await step.run('audit-hitl-failure', () =>
         emitAudit({
-          actor: { id: requestedBy, type: 'workflow' },
+          actor: { id: requestedBy, type: 'user' },
           action: 'demo.hitl.failed',
           resource: { type: 'demo-workflow', id: 'int-01' },
           metadata: { error: hitlResult.error },
@@ -235,7 +235,7 @@ export const demoWorkflowFn = inngest.createFunction(
     if (!mcpResult.success) {
       await step.run('audit-mcp-failure', () =>
         emitAudit({
-          actor: { id: requestedBy, type: 'workflow' },
+          actor: { id: requestedBy, type: 'user' },
           action: 'demo.mcp.failed',
           resource: { type: 'demo-workflow', id: 'int-01' },
           metadata: { error: mcpResult.error, serverId: mcpServerId, toolName: mcpToolName },
@@ -265,7 +265,7 @@ export const demoWorkflowFn = inngest.createFunction(
     if (!storageResult.success) {
       await step.run('audit-storage-failure', () =>
         emitAudit({
-          actor: { id: requestedBy, type: 'workflow' },
+          actor: { id: requestedBy, type: 'user' },
           action: 'demo.storage.failed',
           resource: { type: 'demo-workflow', id: 'int-01' },
           metadata: { error: storageResult.error },
@@ -277,7 +277,7 @@ export const demoWorkflowFn = inngest.createFunction(
     // step 6: audit-trail — record full workflow completion
     const auditResult: AuditStepResult = await step.run('audit-trail', () =>
       emitAudit({
-        actor: { id: requestedBy, type: 'workflow' },
+        actor: { id: requestedBy, type: 'user' },
         action: 'demo.workflow.completed',
         resource: { type: 'demo-workflow', id: 'int-01' },
         metadata: {

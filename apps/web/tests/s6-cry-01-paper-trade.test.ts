@@ -609,8 +609,10 @@ describe('S6-CRY-01: Crypto Paper Trading Workflow', () => {
       expect(auditCalls.length).toBeGreaterThanOrEqual(1);
 
       const lastAuditCall = auditCalls[auditCalls.length - 1]![0];
+      // S18-A1: post-HITL audit attributes to the approver (decisionData.approverId)
+      // so audit_logs.user_id is populated and the anomaly aggregate matches.
       expect(lastAuditCall).toMatchObject({
-        actor: { id: 'system', type: 'workflow' },
+        actor: { id: 'trader-1', type: 'user' },
         action: 'crypto.trade.paper-executed',
         resource: { type: 'trade-execution', id: 'trade-1' },
         domain: 'crypto',

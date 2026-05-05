@@ -285,10 +285,14 @@ export const contractApprovalFn = inngest.createFunction(
       return { status: 'expired', contractId: draftResult.contractId, candidateId };
     }
 
+    // S18-A1: approverId is carried on `hitl/decision.recorded`
+    // (packages/hitl-gateway/src/workflow/event-schemas.ts) — extended
+    // here so the post-HITL audit emit attributes to the human reviewer.
     const decisionData = decision.data as {
       requestId: string;
       decision: 'approved' | 'rejected' | 'request_changes';
       reviewerNotes?: string;
+      approverId?: string;
     };
 
     // handle request_changes — re-submission loop (HITL2-07)
@@ -339,9 +343,14 @@ export const contractApprovalFn = inngest.createFunction(
     });
 
     // step 6: audit-trail — record contract finalization
+    // S18-A1: post-HITL emit attributes to the approver where known;
+    // falls back to `system` honestly when approverId is missing.
+    const finalizeActor = decisionData.approverId
+      ? { id: decisionData.approverId, type: 'user' as const }
+      : { id: 'system', type: 'system' as const };
     await step.run('audit-trail', () =>
       emitAudit({
-        actor: { id: 'system', type: 'workflow' },
+        actor: finalizeActor,
         action: 'hr.contract.finalized',
         resource: { type: 'contract', id: draftResult.contractId },
         domain: 'hr',
