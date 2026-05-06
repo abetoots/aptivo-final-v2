@@ -121,8 +121,30 @@ export function decideExit(
  * Compute realized PnL in USD given the position size and entry/exit
  * prices. Returns a string for precision parity with NUMERIC columns.
  *
- * Long:  pnl = sizeUsd * (exit/entry - 1)
- * Short: pnl = sizeUsd * (entry/exit - 1)
+ * `sizeUsd` is the USD notional at entry — these are LINEAR
+ * USD-denominated positions. Both reviewers (Codex round-1 + Gemini
+ * round-1) flagged that the prior formula `size * (entry/exit - 1)`
+ * for shorts was inverse-contract math (coin-margined, where size is
+ * denominated in the base asset). For linear contracts, the symmetric
+ * pair is:
+ *
+ *   long:  pnl = sizeUsd * (exit / entry - 1)
+ *   short: pnl = sizeUsd * (1 - exit / entry)
+ *
+ * Worked example to lock the difference: short $1000 @ entry=3000,
+ * exit=1500 (50% drop).
+ *   inverse (wrong): 1000 * (3000/1500 - 1) = 1000 * 1     = $1000
+ *   linear (correct): 1000 * (1 - 1500/3000) = 1000 * 0.5  = $500
+ *
+ * The inverse formula over-reports gains and under-reports losses
+ * non-linearly; would have led to incorrect daily-loss-circuit-breaker
+ * thresholds and reporting drift. Tests in computePnl() lock the
+ * corrected math.
+ *
+ * Fees are NOT subtracted here — exchange-specific fee rates aren't
+ * yet in the adapter contract. Tracked as a Low carry-forward in
+ * S18_B1_MULTI_REVIEW.md; fee subtraction lands when real venue impls
+ * arrive in S20+.
  */
 export function computePnl(
   position: Pick<CryptoPositionRecord, 'direction' | 'entryPrice' | 'sizeUsd'>,
@@ -136,7 +158,7 @@ export function computePnl(
     return '0.00';
   }
 
-  const pct = position.direction === 'long' ? exit / entry - 1 : entry / exit - 1;
+  const pct = position.direction === 'long' ? exit / entry - 1 : 1 - exit / entry;
   return (size * pct).toFixed(2);
 }
 
@@ -215,14 +237,30 @@ export function createPositionMonitorFn(
         if (!decision.close) continue;
 
         const closed = await step.run(`close-position-${position.id}`, async () => {
-          // exit order: opposite side of entry
+          // exit order: opposite side of entry, MARKET order (no limit
+          // price). Round-1 multi-model review (Codex HIGH) caught
+          // that the prior `limitPrice: decision.fillPrice` made SL
+          // exits unfillable on gap-throughs — a long-position SL
+          // becomes a sell-LIMIT above the current market on a
+          // gap-down, sitting unfilled while the losing position
+          // remains open. Market orders guarantee fill (subject to
+          // venue liquidity) at the cost of slippage; for a
+          // client-side-stop monitor that has already observed the
+          // threshold cross, that's the correct trade-off. The actual
+          // fill price returned by the adapter populates exitPrice
+          // and feeds into computePnl.
+          //
+          // Real venue impls supporting server-side stop-market
+          // primitives could push the stop to the venue directly for
+          // lower-latency exit; the contract leaves the OrderType
+          // open for that future widening.
           const exitSide = position.direction === 'long' ? 'sell' : 'buy';
           const exitResult = await deps.exchangeMcp.executeOrder({
             exchange: position.exchange,
             symbol: position.token,
             side: exitSide,
             sizeUsd: position.sizeUsd,
-            limitPrice: decision.fillPrice,
+            // intentionally no limitPrice — market order semantics
             clientOrderId: `exit-${position.id}-${decision.reason}`,
           });
 

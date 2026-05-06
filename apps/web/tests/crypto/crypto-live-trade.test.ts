@@ -191,6 +191,48 @@ describe('S18-B1: crypto live-trade workflow', () => {
     );
   });
 
+  it('rejects with band-invalid before LLM cost when SL/TP band is malformed for a long', async () => {
+    // Round-1 review fix: prevents fat-finger swaps from reaching HITL
+    // long invariant: slPrice < tpPrice
+    const engine = engineFor({
+      events: triggerEvent({ slPrice: '3100.00', tpPrice: '2950.00' }),
+    });
+
+    const { result } = await engine.execute();
+
+    expect(result).toMatchObject({
+      status: 'rejected',
+      reason: expect.stringContaining('malformed SL/TP band'),
+    });
+    expect(mockLlmGateway.complete).not.toHaveBeenCalled();
+    expect(mockAuditService.emit).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'crypto.trade.live-band-invalid' }),
+    );
+  });
+
+  it('rejects with band-invalid for a short with swapped SL/TP', async () => {
+    // short invariant: tpPrice < slPrice (TP is below entry, SL above)
+    // 'tpPrice: 3100, slPrice: 2950' violates this
+    const engine = engineFor({
+      events: triggerEvent({ direction: 'short', slPrice: '2950.00', tpPrice: '3100.00' }),
+    });
+
+    const { result } = await engine.execute();
+
+    expect(result).toMatchObject({ status: 'rejected', reason: expect.stringContaining('malformed') });
+    expect(mockLlmGateway.complete).not.toHaveBeenCalled();
+  });
+
+  it('rejects with band-invalid on NaN inputs', async () => {
+    const engine = engineFor({
+      events: triggerEvent({ slPrice: 'not-a-number', tpPrice: '3100.00' }),
+    });
+
+    const { result } = await engine.execute();
+
+    expect(result).toMatchObject({ status: 'rejected', reason: expect.stringContaining('malformed') });
+  });
+
   it('errors out when the LLM analyze step fails', async () => {
     mockLlmGateway.complete.mockResolvedValueOnce(
       Result.err({ _tag: 'BudgetExceeded' as const, message: 'budget' }),
@@ -437,7 +479,14 @@ describe('S18-B1: crypto live-trade workflow', () => {
     );
   });
 
-  it('fallback executedBy to requester when decision payload lacks approverId', async () => {
+  it('fails closed (orphan-then-reconcile) when decision payload lacks approverId post-HITL', async () => {
+    // Round-1 multi-model review fix: previously the workflow fell
+    // back to requestedBy. That was an accountability hole — a live
+    // venue fill could be attributed to someone who didn't approve it.
+    // The corrected behaviour: emit an `execution-orphaned` audit
+    // and exit `execution-failed`. The venue order already filled
+    // (per the in-memory exchange MCP), so operations reconciles via
+    // the deterministic clientOrderId.
     const engine = engineFor({
       events: triggerEvent(),
       steps: [
@@ -449,7 +498,7 @@ describe('S18-B1: crypto live-trade workflow', () => {
               requestId: 'hitl-req-1',
               decision: 'approved',
               decidedAt: '2026-04-29T12:00:00Z',
-              // approverId omitted — should fall back to requestedBy
+              // approverId omitted — fail closed
             },
           }),
         },
@@ -458,16 +507,25 @@ describe('S18-B1: crypto live-trade workflow', () => {
 
     const { result } = await engine.execute();
 
-    expect(result).toMatchObject({ status: 'executed' });
-    // executedBy falls back to requestedBy when approverId absent
-    expect(mockPositionStore.create).toHaveBeenCalledWith(
-      expect.objectContaining({ executedBy: REQUESTED_BY }),
-    );
-    // final audit attributes to the fallback executedBy with type='user'
+    expect(result).toMatchObject({
+      status: 'execution-failed',
+      reason: 'missing-approver-id-post-execution',
+    });
+    // CRITICAL: no position record created — the venue fill is orphaned
+    // pending operations reconciliation
+    expect(mockPositionStore.create).not.toHaveBeenCalled();
+    // signal NOT flipped to executed (correctly reflects the failed
+    // record-keeping; ops can re-drive after manual reconcile)
+    expect(mockSignalStore.updateStatus).not.toHaveBeenCalled();
+    // orphan audit emitted with reconciliation hint (clientOrderId)
     expect(mockAuditService.emit).toHaveBeenCalledWith(
       expect.objectContaining({
-        actor: { id: REQUESTED_BY, type: 'user' },
-        action: 'crypto.trade.live-executed',
+        actor: { id: 'system', type: 'system' },
+        action: 'crypto.trade.live-execution-orphaned',
+        metadata: expect.objectContaining({
+          clientOrderId: `live-${SIGNAL_ID}`,
+          orderId: 'order-1',
+        }),
       }),
     );
   });

@@ -118,14 +118,26 @@ describe('S18-B1: computePnl (pure)', () => {
     expect(computePnl(pos, '2950.00')).toBe('-16.67');
   });
 
-  it('short position with profit (price drops)', () => {
+  it('short position with profit (price drops) — linear formula', () => {
+    // size * (1 - exit/entry) = 1000 * (1 - 2950/3000) = 1000 * 0.01666 = 16.67
+    // (Previously asserted 16.95 — that was the inverse-contract formula
+    // for coin-margined positions, which is wrong for USD-denominated
+    // positions. Fixed in round-2 review.)
     const pos = { direction: 'short' as const, entryPrice: '3000.00', sizeUsd: '1000.00' };
-    expect(computePnl(pos, '2950.00')).toBe('16.95');
+    expect(computePnl(pos, '2950.00')).toBe('16.67');
   });
 
-  it('short position with loss (price rises)', () => {
+  it('short position with loss (price rises) — linear formula', () => {
+    // size * (1 - exit/entry) = 1000 * (1 - 3100/3000) = 1000 * -0.0333 = -33.33
     const pos = { direction: 'short' as const, entryPrice: '3000.00', sizeUsd: '1000.00' };
-    expect(computePnl(pos, '3100.00')).toBe('-32.26');
+    expect(computePnl(pos, '3100.00')).toBe('-33.33');
+  });
+
+  it('short position with 50% price drop returns linear (not inverse) PnL', () => {
+    // Worked example from the multi-review: previously over-reported as
+    // $1000 (inverse-contract result); correct linear result is $500.
+    const pos = { direction: 'short' as const, entryPrice: '3000.00', sizeUsd: '1000.00' };
+    expect(computePnl(pos, '1500.00')).toBe('500.00');
   });
 
   it('zero PnL when exit equals entry', () => {
@@ -266,16 +278,19 @@ describe('S18-B1: position monitor cron — orchestration', () => {
 
     expect(result).toMatchObject({ evaluated: 1, closed: 1 });
 
-    // exit order placed with sell side + the threshold price
+    // exit order placed with sell side, MARKET order (no limitPrice).
+    // Round-1 multi-model fix: dropping limitPrice avoids the SL
+    // gap-fill bug where a sell-limit above market would sit unfilled.
     expect(mockMcp.executeOrder).toHaveBeenCalledWith(
       expect.objectContaining({
         side: 'sell',
         symbol: 'ETH',
         sizeUsd: '1000.00',
-        limitPrice: '3100.00',
         clientOrderId: 'exit-pos-1-tp',
       }),
     );
+    const exitCall = mockMcp.executeOrder.mock.calls[0]![0];
+    expect(exitCall).not.toHaveProperty('limitPrice');
 
     // store.close called with computed PnL
     expect(mockStore.close).toHaveBeenCalledWith(
@@ -324,14 +339,16 @@ describe('S18-B1: position monitor cron — orchestration', () => {
     const { result } = await buildEngine().execute();
 
     expect(result).toMatchObject({ closed: 1 });
-    // short exit order is buy-side
+    // short exit order is buy-side, market order (no limitPrice)
     expect(mockMcp.executeOrder).toHaveBeenCalledWith(
-      expect.objectContaining({ side: 'buy', limitPrice: '2950.00' }),
+      expect.objectContaining({ side: 'buy' }),
     );
-    // PnL for short: (3000/2950 - 1) * 1000 = 16.95
+    const exitCall = mockMcp.executeOrder.mock.calls[0]![0];
+    expect(exitCall).not.toHaveProperty('limitPrice');
+    // PnL for short (linear): (1 - 2950/3000) * 1000 = 16.67
     expect(mockStore.close).toHaveBeenCalledWith(
       'pos-1',
-      expect.objectContaining({ pnlUsd: '16.95', exitReason: 'tp' }),
+      expect.objectContaining({ pnlUsd: '16.67', exitReason: 'tp' }),
     );
   });
 

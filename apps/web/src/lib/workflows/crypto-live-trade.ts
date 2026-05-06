@@ -128,6 +128,33 @@ export const liveTradeFn = inngest.createFunction(
       return { status: 'live-flag-missing', signalId };
     }
 
+    // step 0.5: SL/TP band validation — round-1 multi-model review
+    // (Codex MEDIUM + Gemini MEDIUM): a fat-finger swap of slPrice
+    // and tpPrice would let an obviously-malformed order reach HITL,
+    // where a distracted approver could let it through. Validating
+    // the band here rejects mathematical impossibilities before any
+    // cost is incurred. The band invariant:
+    //   long:  slPrice < tpPrice (else position is "stop above
+    //          target", which exits with reason='sl' on entry)
+    //   short: tpPrice < slPrice (mirror)
+    // Numbers parsed once; failure surfaces a structured rejection.
+    const slNum = parseFloat(slPrice);
+    const tpNum = parseFloat(tpPrice);
+    const bandValid = direction === 'long' ? slNum < tpNum : tpNum < slNum;
+    if (Number.isNaN(slNum) || Number.isNaN(tpNum) || !bandValid) {
+      const reason = `malformed SL/TP band: direction=${direction}, slPrice=${slPrice}, tpPrice=${tpPrice}`;
+      await step.run('audit-band-invalid', () =>
+        emitAudit({
+          actor: { id: requestedBy, type: 'user' },
+          action: 'crypto.trade.live-band-invalid',
+          resource: { type: 'trade-signal', id: signalId },
+          domain: 'crypto',
+          metadata: { reason, token, direction, departmentId, slPrice, tpPrice },
+        }),
+      );
+      return { status: 'rejected', signalId, reason };
+    }
+
     // step 1: llm-analyze — same shape as paper-trade analysis but
     // attributed to the user via the typed wrapper (S18-A1).
     const llmResult = await step.run('llm-analyze', async () => {
@@ -412,15 +439,45 @@ export const liveTradeFn = inngest.createFunction(
     // step 7: record the position. executedBy carries the approver's
     // userId so the position-close audit (in the monitor cron) and
     // any downstream reporting attribute correctly.
+    //
+    // Round-1 multi-model review (Codex HIGH + Gemini HIGH): the
+    // prior fallback `decisionData.approverId ?? requestedBy` was an
+    // accountability hole. Live-trade attribution must be absolute —
+    // a missing approverId means the gateway emitted an incomplete
+    // decision and we should NOT proceed with the trade record. Fail
+    // closed: the entry already filled at the venue, so we emit a
+    // failure audit and exit `execution-failed`. Operations can
+    // reconcile manually via the orphan venue order — `clientOrderId`
+    // = `live-${signalId}` provides the dedupe key.
+    if (!decisionData.approverId) {
+      await step.run('audit-missing-approver-id', () =>
+        emitAudit({
+          actor: { id: 'system', type: 'system' },
+          action: 'crypto.trade.live-execution-orphaned',
+          resource: { type: 'trade-signal', id: signalId },
+          domain: 'crypto',
+          metadata: {
+            reason: 'decision payload missing approverId; live execution succeeded at the venue but the position was NOT recorded. Reconcile via clientOrderId.',
+            clientOrderId: `live-${signalId}`,
+            orderId: execResult.fill.orderId,
+            fillPrice: execResult.fill.fillPrice,
+            token,
+            direction,
+            departmentId,
+            exchange,
+          },
+        }),
+      );
+      return {
+        status: 'execution-failed',
+        signalId,
+        reason: 'missing-approver-id-post-execution',
+      };
+    }
+
     const positionResult = await step.run('store-position', async () => {
       const positionStore = getCryptoPositionStore();
-      // S18-A1 cross-step actor mutation: the HITL approver is the
-      // user-of-record from this point forward. If approverId is
-      // unexpectedly absent (decision payload lacks it; should not
-      // happen on the gateway-emit path) fall back to the original
-      // requester so the position has SOME executed_by to satisfy the
-      // schema's NOT NULL constraint.
-      const executedBy = decisionData.approverId ?? requestedBy;
+      const executedBy = decisionData.approverId!;
       const { id } = await positionStore.create({
         signalId,
         departmentId,

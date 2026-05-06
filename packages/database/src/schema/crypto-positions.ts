@@ -116,8 +116,13 @@ export const cryptoPositions = pgTable(
     // without raw SQL; a regular btree on closed_at is acceptable
     // since the open set is small (10s, not 100k+).
     index('crypto_positions_open_idx').on(table.closedAt),
-    // daily-loss circuit breaker filters by department within a UTC day
-    index('crypto_positions_dept_opened_idx').on(table.departmentId, table.openedAt),
+    // daily-loss circuit breaker filters by `(departmentId, closedAt)`
+    // since `findClosedSince` uses `WHERE department_id = $1 AND
+    // closed_at >= $2`. Round-1 multi-model review (Codex MEDIUM)
+    // caught that the prior `(departmentId, openedAt)` index didn't
+    // serve this query — the optimizer would scan rather than seek
+    // under load.
+    index('crypto_positions_dept_closed_idx').on(table.departmentId, table.closedAt),
     // monitor cron groups by token for batch price lookup
     index('crypto_positions_token_idx').on(table.token),
   ],

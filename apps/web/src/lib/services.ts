@@ -938,25 +938,58 @@ export const getCryptoPositionStore = lazy(() =>
   createDrizzleCryptoPositionStore(db() as unknown as Parameters<typeof createDrizzleCryptoPositionStore>[0]),
 );
 
+/**
+ * S18-B1 (round-1 review fix, Codex HIGH): live-trading is gated by
+ * the `CRYPTO_LIVE_TRADE_ENABLED` env var. When this flag is true,
+ * production code MUST NOT bind the in-memory adapter or the
+ * null-threshold breaker — both are safe-by-construction in their
+ * disabled states (in-memory rejects unknown symbols; null threshold
+ * allows everything), but the COMBINATION is dangerous: a deploy that
+ * forgets to swap one of them silently disables FR-CRYPTO-RISK-002 on
+ * a real venue. This guard surfaces that misconfiguration loudly at
+ * startup rather than letting losses accrue silently.
+ */
+function isLiveTradeEnabled(): boolean {
+  return process.env.CRYPTO_LIVE_TRADE_ENABLED === 'true';
+}
+
 // S18-B1: daily-loss circuit breaker (FR-CRYPTO-RISK-002). Threshold
-// lookup placeholder — returns null today (no limit configured). A
-// per-department config table or env-derived map can replace this once
-// the admin route lands. The breaker handles null cleanly (allowed).
-export const getDailyLossCircuitBreaker = lazy(() =>
-  createDailyLossCircuitBreaker({
+// lookup is a no-op placeholder today — returns null which the breaker
+// reads as "no limit configured" and allows. A per-department config
+// table or env-derived map replaces this when the admin route lands
+// (S19+). When live trading is enabled the placeholder must be
+// swapped to a real lookup; the guard below trips if not.
+export const getDailyLossCircuitBreaker = lazy(() => {
+  const getThresholdUsd = async (_deptId: string): Promise<string | null> => null;
+  if (isLiveTradeEnabled()) {
+    throw new Error(
+      'CRYPTO_LIVE_TRADE_ENABLED=true but getThresholdUsd is the placeholder ' +
+      'returning null — FR-CRYPTO-RISK-002 would be silently disabled. ' +
+      'Wire a real per-department threshold lookup before flipping the live-trade flag.',
+    );
+  }
+  return createDailyLossCircuitBreaker({
     positionStore: getCryptoPositionStore(),
-    getThresholdUsd: async () => null, // S19+: load from per-dept config
-  }),
-);
+    getThresholdUsd,
+  });
+});
 
 // S18-B1: exchange MCP adapter — in-memory impl by default per
-// AD-S18-4. Real venue impls land post-S18; the binding here is what
-// production deploys swap when those impls ship.
-export const getExchangeMcpAdapter = lazy(() =>
-  createInMemoryExchangeMcp({
+// AD-S18-4. When live trading is enabled, production must bind a real
+// venue adapter; this guard fails loudly at first use rather than
+// letting `SymbolNotFound` masquerade as a venue rejection.
+export const getExchangeMcpAdapter = lazy(() => {
+  if (isLiveTradeEnabled()) {
+    throw new Error(
+      'CRYPTO_LIVE_TRADE_ENABLED=true but the exchange adapter binding ' +
+      'is still the in-memory impl. Swap to a real venue MCP adapter ' +
+      '(Binance, Coinbase, etc.) before flipping the live-trade flag.',
+    );
+  }
+  return createInMemoryExchangeMcp({
     seedPrices: {}, // empty — production swaps for the real adapter
-  }),
-);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // hr domain stores (S6-INF-HR)

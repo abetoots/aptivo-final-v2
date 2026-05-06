@@ -52,11 +52,33 @@ export interface ExecuteOrderInput {
   readonly sizeUsd: string;
   /**
    * Optional limit price as a string (preserved precision). When
-   * absent the adapter places a market order; in-memory impl returns
+   * absent the adapter places a MARKET order; in-memory impl returns
    * a deterministic fill computed from the current price walk.
+   * Real venue impls must place a market order at the venue when this
+   * field is omitted.
    */
   readonly limitPrice?: string;
-  /** idempotency key — workflow step IDs are a good source */
+  /**
+   * **Idempotency key — REQUIRED.** Real venue implementations MUST
+   * dedupe by this key: a duplicate `executeOrder` call with the same
+   * `clientOrderId` returns the original fill metadata rather than
+   * placing a second order. This is the primary defense against
+   * Inngest cron retries, workflow replays, or operator-driven
+   * re-runs producing duplicate venue orders. Round-1 multi-model
+   * review (Codex HIGH) flagged this as a financial-harm risk:
+   * without enforced dedupe, a transient failure between order fill
+   * and `positionStore.create` could result in two filled positions.
+   *
+   * Workflow conventions:
+   *   - Entry: `live-${signalId}` (deterministic, replay-safe)
+   *   - Exit:  `exit-${positionId}-${reason}` (positionId stable;
+   *            reason is 'sl'/'tp'/'manual', so a re-trigger of the
+   *            same exit reason on the same position dedupes)
+   *
+   * In-memory impl behaviour: the impl tracks `clientOrderId` calls
+   * and returns the original fill on a duplicate. See test:
+   * "duplicate clientOrderId returns the original fill (idempotency)".
+   */
   readonly clientOrderId: string;
 }
 
@@ -154,6 +176,10 @@ export function createInMemoryExchangeMcp(opts: InMemoryExchangeMcpOpts): Exchan
   // call counters per symbol for deterministic drift
   const callCounts = new Map<string, number>();
   let orderSeq = 0;
+  // round-1 review fix: dedupe executeOrder by clientOrderId so the
+  // in-memory impl honours the contract's idempotency requirement.
+  // Real venue impls must do the equivalent at the venue level.
+  const filledByClientId = new Map<string, ExecuteOrderResult>();
 
   const now = opts.now ?? (() => new Date());
 
@@ -188,7 +214,13 @@ export function createInMemoryExchangeMcp(opts: InMemoryExchangeMcpOpts): Exchan
 
   return {
     async executeOrder(input) {
-      // allowlist check first — simulates unsupported markets
+      // dedupe by clientOrderId BEFORE any side effects — replay-safe
+      const existing = filledByClientId.get(input.clientOrderId);
+      if (existing) {
+        return Result.ok(existing);
+      }
+
+      // allowlist check — simulates unsupported markets
       if (opts.executableSymbols && !opts.executableSymbols.includes(input.symbol)) {
         return Result.err({
           _tag: 'SymbolNotFound',
@@ -217,12 +249,14 @@ export function createInMemoryExchangeMcp(opts: InMemoryExchangeMcpOpts): Exchan
       }
 
       orderSeq += 1;
-      return Result.ok({
+      const fill: ExecuteOrderResult = {
         orderId: `inmem-order-${orderSeq}`,
         fillPrice,
         filledUsd: input.sizeUsd,
         filledAt: now().toISOString(),
-      });
+      };
+      filledByClientId.set(input.clientOrderId, fill);
+      return Result.ok(fill);
     },
 
     async getCurrentPrice(symbol) {

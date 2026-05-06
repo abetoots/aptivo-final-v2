@@ -283,6 +283,61 @@ describe('S18-B1: createInMemoryExchangeMcp — order execution', () => {
     }
   });
 
+  it('duplicate clientOrderId returns the original fill (idempotency contract)', async () => {
+    // Round-1 multi-model review fix (Codex HIGH): the contract now
+    // requires venue impls to dedupe by clientOrderId. The in-memory
+    // impl honours the same semantic so workflow + cron retry paths
+    // can't produce duplicate venue orders.
+    const adapter = createInMemoryExchangeMcp({
+      seedPrices: { ETH: { price: '3000.00000000' } },
+      now: FROZEN_CLOCK,
+    });
+
+    const first = await adapter.executeOrder({
+      exchange: 'in-memory',
+      symbol: 'ETH',
+      side: 'buy',
+      sizeUsd: '1000.00',
+      clientOrderId: 'dedupe-key-1',
+    });
+    const replay = await adapter.executeOrder({
+      exchange: 'in-memory',
+      symbol: 'ETH',
+      side: 'buy',
+      sizeUsd: '1000.00',
+      clientOrderId: 'dedupe-key-1', // same key → original fill
+    });
+
+    if (!first.ok || !replay.ok) throw new Error('expected both ok');
+    expect(replay.value).toEqual(first.value);
+    expect(replay.value.orderId).toBe(first.value.orderId);
+  });
+
+  it('different clientOrderIds produce different orders (negative case)', async () => {
+    const adapter = createInMemoryExchangeMcp({
+      seedPrices: { ETH: { price: '3000.00000000' } },
+    });
+
+    const a = await adapter.executeOrder({
+      exchange: 'in-memory',
+      symbol: 'ETH',
+      side: 'buy',
+      sizeUsd: '100',
+      clientOrderId: 'key-a',
+    });
+    const b = await adapter.executeOrder({
+      exchange: 'in-memory',
+      symbol: 'ETH',
+      side: 'buy',
+      sizeUsd: '100',
+      clientOrderId: 'key-b',
+    });
+
+    if (a.ok && b.ok) {
+      expect(a.value.orderId).not.toBe(b.value.orderId);
+    }
+  });
+
   it('orderId monotonically increments per adapter instance', async () => {
     const adapter = createInMemoryExchangeMcp({
       seedPrices: { ETH: { price: '3000.00000000' } },
