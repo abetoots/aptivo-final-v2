@@ -195,6 +195,40 @@ describe('S18-B1: createDrizzleCryptoPositionStore', () => {
     });
   });
 
+  describe('findClosedSince', () => {
+    it('returns rows for the given dept that closed at or after the window start', async () => {
+      const closedRow = {
+        ...SAMPLE_OPEN_ROW,
+        id: 'pos-closed-1',
+        exitPrice: '3050.00000000',
+        pnlUsd: '-50.00',
+        exitReason: 'sl',
+        closedAt: new Date('2026-04-29T11:00:00Z'),
+      };
+      db = createMockDb({ selectRows: [closedRow] });
+      const store = createDrizzleCryptoPositionStore(db as never);
+
+      const result = await store.findClosedSince(
+        'dept-1',
+        new Date('2026-04-29T00:00:00Z'),
+      );
+
+      expect(result).toHaveLength(1);
+      expect(result[0]!.id).toBe('pos-closed-1');
+      expect(result[0]!.pnlUsd).toBe('-50.00');
+      expect(db.select).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns empty list when no closed positions match the window', async () => {
+      db = createMockDb({ selectRows: [] });
+      const store = createDrizzleCryptoPositionStore(db as never);
+
+      const result = await store.findClosedSince('dept-1', new Date());
+
+      expect(result).toEqual([]);
+    });
+  });
+
   describe('close', () => {
     it('updates the position with exit metadata and exitReason=tp', async () => {
       const store = createDrizzleCryptoPositionStore(db as never);

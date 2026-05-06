@@ -18,7 +18,7 @@
  * acceptable (e.g. SL/TP comparisons in the cron).
  */
 
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, gte, isNotNull, isNull } from 'drizzle-orm';
 import type { DrizzleClient } from './types.js';
 import { cryptoPositions } from '../schema/crypto-positions.js';
 
@@ -61,6 +61,19 @@ export interface CryptoPositionStore {
    * count which is small in practice.
    */
   findOpen(): Promise<CryptoPositionRecord[]>;
+
+  /**
+   * Fetch positions for `departmentId` that closed at or after `since`.
+   * Used by the daily-loss circuit breaker (FR-CRYPTO-RISK-002) to sum
+   * realized losses within the current UTC day. The
+   * `(department_id, opened_at)` composite index supports this scan
+   * efficiently when the time window is short.
+   *
+   * Returns only closed positions (closedAt >= since); open positions
+   * carry no realized pnl and are excluded by the WHERE clause rather
+   * than filtered client-side.
+   */
+  findClosedSince(departmentId: string, since: Date): Promise<CryptoPositionRecord[]>;
 
   /**
    * Atomically transition an open position to closed. Idempotent on a
@@ -156,6 +169,20 @@ export function createDrizzleCryptoPositionStore(db: DrizzleClient): CryptoPosit
         .select()
         .from(cryptoPositions)
         .where(isNull(cryptoPositions.closedAt));
+      return rows.map(rowToRecord);
+    },
+
+    async findClosedSince(departmentId, since) {
+      const rows = await db
+        .select()
+        .from(cryptoPositions)
+        .where(
+          and(
+            eq(cryptoPositions.departmentId, departmentId),
+            isNotNull(cryptoPositions.closedAt),
+            gte(cryptoPositions.closedAt, since),
+          ),
+        );
       return rows.map(rowToRecord);
     },
 
