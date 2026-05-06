@@ -21,11 +21,14 @@ import { createWsEventPublisherFunctions } from '../../../lib/inngest/functions/
 import { log as appLog } from '../../../lib/logging/safe-logger';
 import { demoWorkflowFn } from '../../../lib/workflows/demo-workflow';
 import { paperTradeFn } from '../../../lib/workflows/crypto-paper-trade';
+import { liveTradeFn } from '../../../lib/workflows/crypto-live-trade';
 import { securityScanFn } from '../../../lib/workflows/crypto-security-scan';
 import { candidateFlowFn } from '../../../lib/workflows/hr-candidate-flow';
 import { interviewSchedulingFn } from '../../../lib/workflows/hr-interview-scheduling';
 import { contractApprovalFn } from '../../../lib/workflows/hr-contract-approval';
 import { createSloCronFunction } from '../../../lib/observability/slo-cron';
+import { createPositionMonitorFn } from '../../../lib/jobs/crypto-position-monitor';
+import { getCryptoPositionStore, getExchangeMcpAdapter, getAuditService } from '../../../lib/services';
 import { AUDIT_EVENT_NAME } from '@aptivo/audit/async';
 import { DATA_DELETION_EVENT } from '@aptivo/mcp-layer/workflows';
 
@@ -99,8 +102,31 @@ const wsPublisherFunctions = (() => {
   });
 })();
 
-// domain workflow functions (S6-CRY-01, S6-HR-01)
-const domainFunctions = [paperTradeFn, securityScanFn, candidateFlowFn, interviewSchedulingFn, contractApprovalFn];
+// S18-B1: position monitor cron — closes live positions on SL/TP
+// cross. Runs every minute by default; the schedule is configurable
+// for environments that support sub-minute Inngest cron syntax.
+const positionMonitorFn = createPositionMonitorFn(
+  inngest,
+  {
+    positionStore: getCryptoPositionStore(),
+    exchangeMcp: getExchangeMcpAdapter(),
+    emitAudit: async (input) => {
+      const audit = getAuditService();
+      await audit.emit(input);
+    },
+  },
+);
+
+// domain workflow functions (S6-CRY-01, S6-HR-01, S18-B1)
+const domainFunctions = [
+  paperTradeFn,
+  liveTradeFn,
+  securityScanFn,
+  candidateFlowFn,
+  interviewSchedulingFn,
+  contractApprovalFn,
+  positionMonitorFn,
+];
 
 const platformFunctions = [
   processAudit,
