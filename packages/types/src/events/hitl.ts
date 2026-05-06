@@ -35,13 +35,23 @@
 import type { ActorType } from '../actor.js';
 
 /**
- * The three decision outcomes a HITL approver can produce.
+ * Decision outcomes a HITL approver can produce.
  *
- * - `'approved'`: action authorized; downstream workflow steps proceed.
- * - `'rejected'`: action denied; workflow terminates with rejected status.
- * - `'request_changes'`: approver wants amendments before re-deciding;
- *   workflow loops back through a re-submission step.
+ * Note: the gateway-level `hitl/decision.recorded` event ONLY carries
+ * the binary outcomes — `'approved'` and `'rejected'`. When an approver
+ * picks `'request_changes'` the gateway routes that through a different
+ * event (`hitl/changes.requested`); see
+ * packages/hitl-gateway/src/decision/decision-service.ts:236. Per-domain
+ * wrapper events (e.g. `hr/contract.decision.submitted`) MAY include
+ * `'request_changes'` because their producers handle the
+ * change-request loop in-domain rather than splitting the routing.
+ *
+ * The two unions below capture that distinction so consumers don't
+ * silently accept impossible values for the gateway channel.
  */
+export const HITL_TERMINAL_DECISION_VALUES = ['approved', 'rejected'] as const;
+export type HitlTerminalDecision = (typeof HITL_TERMINAL_DECISION_VALUES)[number];
+
 export const HITL_DECISION_VALUES = ['approved', 'rejected', 'request_changes'] as const;
 export type HitlDecision = (typeof HITL_DECISION_VALUES)[number];
 
@@ -80,6 +90,29 @@ export interface HitlDecisionPayload {
   readonly comment?: string;
   readonly decidedAt?: string;
   readonly domain?: string;
+}
+
+/**
+ * Narrow payload for the gateway-level `hitl/decision.recorded` event.
+ * Distinct type from {@link HitlDecisionPayload} because the gateway
+ * NEVER emits `'request_changes'` on this channel — that decision is
+ * routed to `hitl/changes.requested` (see
+ * packages/hitl-gateway/src/decision/decision-service.ts:236). Per-domain
+ * wrapper events use the wider {@link HitlDecisionPayload} when their
+ * producers handle the change-request loop in-domain.
+ *
+ * Codex round-1 review caught the original over-widening: registering
+ * `hitl/decision.recorded` with `HitlDecisionPayload` falsely advertised
+ * `'request_changes'` as a possible decision value on a channel that
+ * cannot carry it. This narrower variant restores the contract.
+ */
+export interface HitlDecisionRecorded {
+  readonly requestId: string;
+  readonly decision: HitlTerminalDecision;
+  readonly approverId?: string;
+  readonly decidedAt?: string;
+  /** w3c traceparent — preserved for cross-boundary trace propagation */
+  readonly traceparent?: string;
 }
 
 /**

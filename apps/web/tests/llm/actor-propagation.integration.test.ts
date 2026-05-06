@@ -127,14 +127,16 @@ function createInMemoryAuditStore(): AuditStore & {
 
 // ---------------------------------------------------------------------------
 // mocks — wire the real audit service over the in-memory store, mock
-// the rest of services.ts to keep the test scope tight
+// the rest of services.ts to keep the test scope tight.
+//
+// Test isolation: the store reference is mutable so beforeEach can swap
+// it for a fresh instance — module-scope singletons would leak rows
+// across tests and let later assertions pass on prior-test state
+// (Codex round-1 review caught this).
 // ---------------------------------------------------------------------------
 
-const auditStore = createInMemoryAuditStore();
-const realAuditService = createAuditService({
-  store: auditStore,
-  masking: DEFAULT_MASKING_CONFIG,
-});
+let auditStore: ReturnType<typeof createInMemoryAuditStore>;
+let realAuditService: ReturnType<typeof createAuditService>;
 
 const mockContractStore = {
   create: vi.fn(),
@@ -160,6 +162,7 @@ vi.mock('../../src/lib/services', () => ({
   getHitlService: () => mockHitlService,
   getHitlMultiApproverService: () => null,
   getNotificationService: () => mockNotificationService,
+  // closure over the mutable binding so beforeEach swaps propagate
   getAuditService: () => realAuditService,
 }));
 
@@ -235,6 +238,20 @@ const compliancePassResponse = () =>
 
 describe('S18-A1: actor propagation end-to-end', () => {
   beforeEach(() => {
+    // fresh in-memory audit store + service per test — prevents inserts
+    // from leaking across tests (Codex/Gemini round-1 caught the
+    // module-scoped singleton hazard)
+    auditStore = createInMemoryAuditStore();
+    realAuditService = createAuditService({
+      store: auditStore,
+      masking: DEFAULT_MASKING_CONFIG,
+    });
+
+    // mock fixtures need to be reset too: vi.fn() reuses the same
+    // function instance across tests, so .mockResolvedValueOnce calls
+    // queue up unless cleared
+    vi.clearAllMocks();
+
     mockContractStore.create.mockResolvedValue({ id: 'contract-int-001' });
     mockContractStore.updateStatus.mockResolvedValue(undefined);
     mockLlmGateway.complete
@@ -318,7 +335,9 @@ describe('S18-A1: actor propagation end-to-end', () => {
       windowMs: 60_000,
     });
 
-    expect(aggregate.count).toBeGreaterThanOrEqual(1);
+    // exactly 1 row inserted by the workflow's audit-trail step (the
+    // store is fresh per test, so no leakage from prior tests).
+    expect(aggregate.count).toBe(1);
     expect(aggregate.actor).toBe(APPROVER_ID);
   });
 

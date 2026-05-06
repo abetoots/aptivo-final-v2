@@ -9,10 +9,14 @@ import { Inngest, EventSchemas, NonRetriableError } from 'inngest';
 import { z } from 'zod/v3';
 import { AUDIT_EVENT_NAME } from '@aptivo/audit/async';
 import { DATA_DELETION_EVENT } from '@aptivo/mcp-layer/workflows';
-// S18-A1: shared HITL decision payload type — replaces ad-hoc `as`
-// casts in workflow files. Including approverId in the schema means
-// step.waitForEvent infers it directly; consumers no longer cast.
-import type { HitlDecisionPayload } from '@aptivo/types';
+// S18-A1: shared HITL decision payload types — replaces ad-hoc `as`
+// casts in workflow files. Two variants: the narrow `HitlDecisionRecorded`
+// for the gateway-level event (no `request_changes` — routed to a
+// separate event by the gateway) and the wider `HitlDecisionPayload`
+// for per-domain wrappers that handle the change-request loop
+// in-domain. Including approverId in the schema means step.waitForEvent
+// infers it directly; consumers no longer cast.
+import type { HitlDecisionPayload, HitlDecisionRecorded } from '@aptivo/types';
 
 // -- spike event schemas (backward compatibility) --
 
@@ -272,10 +276,10 @@ type HitlV2Events = {
   };
   // S18-A1: gateway-level decision event (single-approver and quorum-met
   // emit through this name per packages/hitl-gateway/src/decision/*).
-  // Registered here so workflows that step.waitForEvent on it get the
-  // typed payload back, eliminating the inline `as` cast.
+  // Uses the NARROW HitlDecisionRecorded type — gateway routes
+  // 'request_changes' to `hitl/changes.requested`, never to this channel.
   'hitl/decision.recorded': {
-    data: HitlDecisionPayload;
+    data: HitlDecisionRecorded;
   };
 };
 

@@ -40,17 +40,27 @@ import { resolve, join } from 'path';
 const WORKFLOW_DIR = resolve(__dirname, '../src/lib/workflows');
 
 /**
- * The pattern that triggers a violation. Doc comments naming the
- * pattern (e.g. "blocked by the CI grep gate") get matched too if the
- * gate isn't careful — we filter those out by requiring an immediately
- * preceding `await ` or non-comment context.
+ * The pattern that triggers a violation.
  *
- * Approach: match `gateway.complete(` (or `.complete(` on a variable
- * holding the gateway result), then exclude lines that are inside a
- * comment block. Robust enough for the codebase shape and easy to
- * audit.
+ * Widened from the original `\bgateway\.complete\s*\(` to a generic
+ * `\.complete\s*\(` match (Codex/Gemini round-1 review caught that the
+ * narrower regex would have missed `llm.complete(`, `client.complete(`,
+ * `someGateway.complete(`, destructured `complete()` calls renamed via
+ * intermediate variables, etc.).
+ *
+ * Inside `apps/web/src/lib/workflows/*` non-test paths there is no
+ * legitimate `.complete(` call — the only LLM-gateway-shaped call
+ * should go through `completeWorkflowRequest` (which lives in
+ * `apps/web/src/lib/llm/`, outside the scanned scope). Widening to
+ * any `.complete(` is therefore safe; if a future case legitimately
+ * needs an exception, document it inline with a comment that this gate
+ * will recognise via the comment-stripping pass below.
+ *
+ * Note: the helper's own name `completeWorkflowRequest` does NOT match
+ * the regex because there is no preceding dot — it's called as a
+ * free function imported from `../llm/complete-workflow-request.js`.
  */
-const VIOLATION_REGEX = /\bgateway\.complete\s*\(/;
+const VIOLATION_REGEX = /\.\s*complete\s*\(/;
 
 // ---------------------------------------------------------------------------
 // helpers
@@ -138,7 +148,7 @@ function findViolations(file: string): Violation[] {
 // ---------------------------------------------------------------------------
 
 describe('S18-A1: workflow gateway-call lint', () => {
-  it('no bare gateway.complete( in apps/web/src/lib/workflows/* — use completeWorkflowRequest', () => {
+  it('no bare .complete( call in apps/web/src/lib/workflows/* — use completeWorkflowRequest', () => {
     const files = listSourceFiles(WORKFLOW_DIR);
     expect(files.length).toBeGreaterThan(0); // sanity: gate is actually scanning
 
@@ -153,7 +163,7 @@ describe('S18-A1: workflow gateway-call lint', () => {
         .join('\n');
       throw new Error(
         [
-          `Found ${allViolations.length} bare gateway.complete( call(s) in workflow files:`,
+          `Found ${allViolations.length} bare .complete( call(s) in workflow files:`,
           summary,
           '',
           'Per AD-S18-1, workflow LLM callsites must go through the typed wrapper:',
@@ -161,7 +171,7 @@ describe('S18-A1: workflow gateway-call lint', () => {
           '  const result = await completeWorkflowRequest({ gateway, request, actor, options });',
           '',
           'If no acting user is in scope (genuinely external trigger), pass `actor: undefined`',
-          'with an inline comment explaining why — that is reviewable; bare gateway.complete is not.',
+          'with an inline comment explaining why — that is reviewable; bare .complete is not.',
         ].join('\n'),
       );
     }

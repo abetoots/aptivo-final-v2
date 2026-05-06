@@ -229,9 +229,15 @@ export const candidateFlowFn = inngest.createFunction(
     });
 
     // step 6: audit-trail — record application intake
+    // S18-A1: actor.type='system' aligns with the centralized taxonomy
+    // in @aptivo/types/actor.ts — `hr/application.received` is an
+    // external trigger (resume submission webhook, recruiter portal),
+    // not internal maintenance work, so 'system' is the honest label.
+    // Both 'system' and the prior 'workflow' produce NULL user_id, but
+    // the provenance string lands accurately in audit_logs.actor_type.
     await step.run('audit-trail', () =>
       emitAudit({
-        actor: { id: 'system', type: 'workflow' },
+        actor: { id: 'system', type: 'system' },
         action: 'hr.application.received',
         resource: { type: 'application', id: recordResult.applicationId },
         domain: 'hr',

@@ -54,8 +54,19 @@ export type { ActorType } from './actor.js';
 // `as` casts across the workflow tree (3 sites at last count) with one
 // canonical shape; `approverId` is what the audit-emitter migration
 // uses to populate audit_logs.user_id.
-export { HITL_DECISION_VALUES } from './events/hitl.js';
-export type { HitlDecision, HitlDecisionPayload } from './events/hitl.js';
+//
+// Two variants: the narrow `HitlDecisionRecorded` for the gateway-level
+// `hitl/decision.recorded` event (binary approved|rejected only, since
+// 'request_changes' routes to a separate event), and the wider
+// `HitlDecisionPayload` for per-domain wrapper events that handle
+// change-requests in-domain.
+export { HITL_DECISION_VALUES, HITL_TERMINAL_DECISION_VALUES } from './events/hitl.js';
+export type {
+  HitlDecision,
+  HitlTerminalDecision,
+  HitlDecisionPayload,
+  HitlDecisionRecorded,
+} from './events/hitl.js';
 
 // Auth types (ID2-02: shared across OIDC + SAML adapters)
 export { ClaimMappingSchema, SamlAssertionSchema } from './auth.js';

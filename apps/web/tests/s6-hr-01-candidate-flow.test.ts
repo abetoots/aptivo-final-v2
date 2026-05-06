@@ -457,7 +457,10 @@ describe('S6-HR-01: Candidate Application Workflow', () => {
       expect(mockAuditService.emit).toHaveBeenCalledTimes(1);
       expect(mockAuditService.emit).toHaveBeenCalledWith(
         expect.objectContaining({
-          actor: { id: 'system', type: 'workflow' },
+          // S18-A1: 'system' aligns with the centralized taxonomy —
+          // external trigger (resume submission webhook), not internal
+          // maintenance work. Same NULL user_id outcome as 'workflow'.
+          actor: { id: 'system', type: 'system' },
           action: 'hr.application.received',
           resource: { type: 'application', id: 'app-aud' },
           domain: 'hr',

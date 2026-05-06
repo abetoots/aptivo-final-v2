@@ -36,7 +36,6 @@ export type PaperTradeResult =
   | { status: 'rejected'; signalId: string; reason: string }
   | { status: 'expired'; signalId: string }
   | { status: 'risk-rejected'; signalId: string; reason: string }
-  | { status: 'changes-requested'; signalId: string; comment: string }
   | { status: 'error'; step: string; error: string };
 
 // ---------------------------------------------------------------------------
@@ -334,25 +333,13 @@ export const paperTradeFn = inngest.createFunction(
     // comment/decidedAt are all typed without a cast.
     const decisionData = decision.data;
 
-    // handle request_changes — re-submission loop (HITL2-07)
-    if (decisionData.decision === 'request_changes') {
-      await step.run('emit-changes-requested', async () => {
-        await inngest.send({
-          name: 'hitl/changes.requested',
-          data: {
-            requestId: hitlResult.requestId,
-            approverId: 'reviewer',
-            comment: decisionData.comment ?? decisionData.reason ?? 'changes requested',
-            retryCount: 1,
-          },
-        });
-      });
-      return {
-        status: 'changes-requested',
-        signalId,
-        comment: decisionData.comment ?? decisionData.reason ?? 'changes requested',
-      };
-    }
+    // S18-A1: removed the previous `request_changes` branch — it was
+    // unreachable through this channel. The gateway routes
+    // 'request_changes' decisions through `hitl/changes.requested` (see
+    // packages/hitl-gateway/src/decision/decision-service.ts:236), so
+    // `hitl/decision.recorded` only carries 'approved' | 'rejected'.
+    // The narrowed HitlDecisionRecorded type makes that explicit.
+    // (Codex round-1 review identified the dead branch.)
 
     if (decisionData.decision === 'rejected') {
       await step.run('reject-by-human', async () => {
