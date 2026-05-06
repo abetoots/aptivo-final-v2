@@ -115,6 +115,14 @@ export type {
   PriorityComplianceRow,
 } from './ticket-report-queries.js';
 
+// S18-B1: crypto live-trade position store (Epic 5 Crypto live-trade)
+export { createDrizzleCryptoPositionStore } from './crypto-position-store-drizzle.js';
+export type {
+  CryptoPositionStore as DrizzleCryptoPositionStore,
+  CryptoPositionRecord as DrizzleCryptoPositionRecord,
+  PositionExitReason,
+} from './crypto-position-store-drizzle.js';
+
 // hitl persistence (P1.5-01)
 export {
   createDrizzleHitlRequestStore,

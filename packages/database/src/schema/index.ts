@@ -65,3 +65,9 @@ export { tickets, ticketStatusEnum, ticketPriorityEnum } from './tickets.js';
 
 // S17-CT-2: per-priority SLA window configs (4 default rows).
 export { ticketSlaConfigs } from './ticket-sla-configs.js';
+
+// S18-B1: crypto live-trade position lifecycle (Epic 5). Distinct
+// from `tradeExecutions` because it carries SL/TP prices the monitor
+// cron polls against; `executedBy` carries the HITL approver's
+// userId for S18-A1 audit attribution.
+export { cryptoPositions } from './crypto-positions.js';
