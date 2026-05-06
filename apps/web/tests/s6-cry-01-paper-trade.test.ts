@@ -368,6 +368,11 @@ describe('S6-CRY-01: Crypto Paper Trading Workflow', () => {
   // 5. HITL rejection → rejected with reason
   // -------------------------------------------------------------------------
   describe('HITL rejection', () => {
+    // S18-A1: the production HitlDecisionRecorded payload (per
+    // packages/hitl-gateway/src/workflow/event-schemas.ts:40) carries
+    // only requestId/decision/approverId/decidedAt/traceparent — no
+    // free-form rejection reason. The fixture mirrors that shape; the
+    // workflow surfaces a fixed 'rejected by approver' message.
     it('returns rejected status and updates signal when decision is rejected', async () => {
       const engine = engineFor(paperTradeFn, {
         events: triggerEvent(),
@@ -379,7 +384,6 @@ describe('S6-CRY-01: Crypto Paper Trading Workflow', () => {
               data: {
                 requestId: 'hitl-req-1',
                 decision: 'rejected',
-                reason: 'Market conditions unfavorable',
                 approverId: 'trader-1',
                 decidedAt: '2026-03-11T11:00:00Z',
               },
@@ -393,7 +397,7 @@ describe('S6-CRY-01: Crypto Paper Trading Workflow', () => {
       expect(result).toMatchObject({
         status: 'rejected',
         signalId: 'signal-1',
-        reason: 'Market conditions unfavorable',
+        reason: 'rejected by approver',
       });
 
       // signal updated to rejected

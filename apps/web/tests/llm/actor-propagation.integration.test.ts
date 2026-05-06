@@ -1,37 +1,54 @@
 /**
- * S18-A1: end-to-end actor propagation integration test.
+ * S18-A1: actor-propagation mechanism test (end-to-end through the
+ * real audit service over an in-memory store).
  *
- * Proves the load-bearing claim from sprint-18-plan §3.A1:
- * after this commit chain (foundation → wrapper migration → audit-emitter
- * migration → CI grep gate), running a HITL-approved workflow populates
- * `audit_logs.user_id` with the approver's id, and the anomaly gate's
- * aggregate query (`WHERE user_id = $actor`) returns a non-zero count
- * for that user. Pre-S18 both surfaces returned NULL/zero, leaving the
- * gate inert in production.
+ * Verifies the in-process mechanism that closes Gates #2/#3 — given a
+ * decision event whose payload carries `approverId`, the
+ * contract-approval workflow's audit emit goes through the real
+ * `createAuditService` and lands a row whose `user_id` is populated;
+ * the anomaly-gate aggregate (`WHERE user_id = $actor`) then matches
+ * a non-zero count for that user. Pre-S18 the workflow used
+ * `actor.type='workflow'`/`'system'` so user_id was always NULL and
+ * the aggregate returned zero on workflow traffic.
  *
  * Test shape:
  *   1. Wire a real `createAuditService` (NOT a mock) over an in-memory
- *      `AuditStore` that mirrors the production semantics — the same
- *      audit-service.ts:61 mapping (`userId = type==='user' ? id : null`)
- *      runs.
+ *      `AuditStore` that mirrors the production WHERE clause from
+ *      audit-store-drizzle.ts:145 — the same audit-service.ts:61
+ *      mapping (`userId = type==='user' ? id : null`) runs.
  *   2. Drive the contract-approval workflow through `InngestTestEngine`,
- *      injecting a HITL decision payload with `approverId`.
- *   3. Inspect the inserted records: at least one has
+ *      INJECTING a synthetic `hr/contract.decision.submitted` event with
+ *      `approverId` populated. (Synthetic injection is the documented
+ *      InngestTestEngine technique for unit/integration testing.)
+ *   3. Inspect the inserted records: post-HITL row has
  *      `userId === '<approver>'` AND `actorType === 'user'`.
  *   4. Run `aggregateAccessPattern({ actor: '<approver>', ... })`
- *      against the same store; assert `count >= 1`. This is the
- *      anomaly-gate scope check — without S18-A1, the count was zero
- *      because all workflow audit emits used `actor.type='workflow'`.
+ *      against the same store; assert exactly `count === 1` per fresh
+ *      per-test store.
  *
- * What this test does NOT cover (intentional scope):
- *   - The full anomaly-gate decision (block/allow). That logic is
- *     tested at the gate-component level; here we prove the input
- *     channel — the audit aggregate — now returns non-zero counts on
- *     workflow traffic.
- *   - The `actor.type='system'` fallback path on missing approverId
- *     (s7-hr-02-contract-approval.test.ts has a dedicated test).
- *   - Pre-HITL emits (the contract-approval workflow has no pre-HITL
- *     emit; the post-HITL `audit-trail` is the relevant site).
+ * SCOPE LIMITATIONS (honest framing — not failures):
+ *
+ *   - The HR-specific event `hr/contract.decision.submitted` has no
+ *     production emitter today (Codex round-1 review caught this; see
+ *     S18_A1_MULTI_REVIEW.md). The real HITL gateway emits
+ *     `hitl/decision.recorded`; nothing bridges that to the HR-domain
+ *     wrapper. So the contract-approval workflow may not be reachable
+ *     end-to-end from real HITL traffic until a bridge lands (likely
+ *     in B2 HR onboarding or a later HR sprint). This test still
+ *     proves the *mechanism* — actor.type → user_id mapping +
+ *     aggregate filter — works correctly when the decision payload
+ *     arrives with `approverId`.
+ *
+ *   - Block/allow decisions of the anomaly gate are not exercised; the
+ *     gate-component tests cover that. Here we prove the input channel
+ *     (the audit aggregate) is non-zero, which was the load-bearing
+ *     gap.
+ *
+ *   - `actor.type='system'` fallback path on missing approverId is
+ *     tested in s7-hr-02-contract-approval.test.ts.
+ *
+ *   - The contract-approval workflow has no pre-HITL emit; the
+ *     post-HITL `audit-trail` is the only emit site.
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';

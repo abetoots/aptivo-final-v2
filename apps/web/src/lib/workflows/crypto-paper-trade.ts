@@ -328,9 +328,12 @@ export const paperTradeFn = inngest.createFunction(
       return { status: 'expired', signalId };
     }
 
-    // S18-A1: shape inferred from the inngest.ts schema — `hitl/decision.recorded`
-    // is now registered as `HitlDecisionPayload`, so approverId/reason/
-    // comment/decidedAt are all typed without a cast.
+    // S18-A1: shape inferred from the inngest.ts schema —
+    // `hitl/decision.recorded` is registered with the NARROW
+    // HitlDecisionRecorded type (no request_changes; gateway routes
+    // that decision through a separate event). Available fields:
+    // requestId, decision: 'approved' | 'rejected', approverId?,
+    // decidedAt?, traceparent?.
     const decisionData = decision.data;
 
     // S18-A1: removed the previous `request_changes` branch — it was
@@ -346,10 +349,15 @@ export const paperTradeFn = inngest.createFunction(
         const signalStore = getCryptoTradeSignalStore();
         await signalStore.updateStatus(signalId, 'rejected');
       });
+      // S18-A1: HitlDecisionRecorded carries no rejection-rationale field;
+      // the prior `decisionData.reason ?? 'rejected by approver'` always
+      // hit the fallback. Keep the literal so the reason field on the
+      // result type stays populated (downstream consumers expect a
+      // non-empty string).
       return {
         status: 'rejected',
         signalId,
-        reason: decisionData.reason ?? 'rejected by approver',
+        reason: 'rejected by approver',
       };
     }
 
