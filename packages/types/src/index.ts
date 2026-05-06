@@ -50,6 +50,13 @@ export type { EventEnvelope } from './schemas/event-envelope.js';
 export { ACTOR_TYPES } from './actor.js';
 export type { ActorType } from './actor.js';
 
+// S18-A1: centralized HITL decision-event payload — replaces ad-hoc
+// `as` casts across the workflow tree (3 sites at last count) with one
+// canonical shape; `approverId` is what the audit-emitter migration
+// uses to populate audit_logs.user_id.
+export { HITL_DECISION_VALUES } from './events/hitl.js';
+export type { HitlDecision, HitlDecisionPayload } from './events/hitl.js';
+
 // Auth types (ID2-02: shared across OIDC + SAML adapters)
 export { ClaimMappingSchema, SamlAssertionSchema } from './auth.js';
 export type {

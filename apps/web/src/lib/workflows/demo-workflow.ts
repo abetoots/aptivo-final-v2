@@ -205,7 +205,8 @@ export const demoWorkflowFn = inngest.createFunction(
       return { status: 'expired', requestId: hitlResult.requestId! };
     }
 
-    const decisionData = decision.data as { requestId: string; decision: string; reason?: string };
+    // S18-A1: shape inferred from inngest.ts (HitlDecisionPayload).
+    const decisionData = decision.data;
 
     if (decisionData.decision === 'rejected') {
       return {

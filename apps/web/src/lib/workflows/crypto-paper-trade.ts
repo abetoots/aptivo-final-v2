@@ -329,17 +329,10 @@ export const paperTradeFn = inngest.createFunction(
       return { status: 'expired', signalId };
     }
 
-    // S18-A1: approverId carried on the `hitl/decision.recorded` event
-    // (single-approver and quorum-met cases both populate it; see
-    // packages/hitl-gateway/src/workflow/event-schemas.ts). Used below to
-    // attribute downstream audit emits to the human approver.
-    const decisionData = decision.data as {
-      requestId: string;
-      decision: string;
-      reason?: string;
-      comment?: string;
-      approverId?: string;
-    };
+    // S18-A1: shape inferred from the inngest.ts schema — `hitl/decision.recorded`
+    // is now registered as `HitlDecisionPayload`, so approverId/reason/
+    // comment/decidedAt are all typed without a cast.
+    const decisionData = decision.data;
 
     // handle request_changes — re-submission loop (HITL2-07)
     if (decisionData.decision === 'request_changes') {

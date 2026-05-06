@@ -285,15 +285,11 @@ export const contractApprovalFn = inngest.createFunction(
       return { status: 'expired', contractId: draftResult.contractId, candidateId };
     }
 
-    // S18-A1: approverId is carried on `hitl/decision.recorded`
-    // (packages/hitl-gateway/src/workflow/event-schemas.ts) — extended
-    // here so the post-HITL audit emit attributes to the human reviewer.
-    const decisionData = decision.data as {
-      requestId: string;
-      decision: 'approved' | 'rejected' | 'request_changes';
-      reviewerNotes?: string;
-      approverId?: string;
-    };
+    // S18-A1: shape inferred from the inngest.ts schema — the data
+    // matches @aptivo/types HitlDecisionPayload (approverId carried on
+    // the event since the schema was tightened to include it). Audit
+    // emit below uses approverId for actor attribution.
+    const decisionData = decision.data;
 
     // handle request_changes — re-submission loop (HITL2-07)
     if (decisionData.decision === 'request_changes') {
