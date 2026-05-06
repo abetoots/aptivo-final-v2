@@ -24,6 +24,7 @@ import {
   createDrizzleSecurityReportStore,
   createDrizzleContractStore,
   createDrizzlePositionStore,
+  createDrizzleCryptoPositionStore,
   createMetricQueries,
   createDrizzleAdminStore,
   createDrizzleLlmUsageStore,
@@ -37,6 +38,9 @@ import {
 
 // token blacklist
 import { createTokenBlacklistService } from './auth/token-blacklist.js';
+// S18-B1: crypto live-trade infrastructure
+import { createDailyLossCircuitBreaker } from './crypto/daily-loss-circuit-breaker.js';
+import { createInMemoryExchangeMcp } from './crypto/exchange-mcp-adapter.js';
 import type { RedisClient } from './auth/token-blacklist.js';
 
 // session limits (ID2-05)
@@ -926,6 +930,32 @@ export const getCryptoTradeSignalStore = lazy(() =>
 
 export const getCryptoExecutionStore = lazy(() =>
   createDrizzleTradeExecutionStore(db() as unknown as Parameters<typeof createDrizzleTradeExecutionStore>[0]),
+);
+
+// S18-B1: live-trade position store (separate from tradeExecutions —
+// carries SL/TP prices the monitor cron polls; see schema docs).
+export const getCryptoPositionStore = lazy(() =>
+  createDrizzleCryptoPositionStore(db() as unknown as Parameters<typeof createDrizzleCryptoPositionStore>[0]),
+);
+
+// S18-B1: daily-loss circuit breaker (FR-CRYPTO-RISK-002). Threshold
+// lookup placeholder — returns null today (no limit configured). A
+// per-department config table or env-derived map can replace this once
+// the admin route lands. The breaker handles null cleanly (allowed).
+export const getDailyLossCircuitBreaker = lazy(() =>
+  createDailyLossCircuitBreaker({
+    positionStore: getCryptoPositionStore(),
+    getThresholdUsd: async () => null, // S19+: load from per-dept config
+  }),
+);
+
+// S18-B1: exchange MCP adapter — in-memory impl by default per
+// AD-S18-4. Real venue impls land post-S18; the binding here is what
+// production deploys swap when those impls ship.
+export const getExchangeMcpAdapter = lazy(() =>
+  createInMemoryExchangeMcp({
+    seedPrices: {}, // empty — production swaps for the real adapter
+  }),
 );
 
 // ---------------------------------------------------------------------------

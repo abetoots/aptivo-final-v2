@@ -121,6 +121,23 @@ type CryptoEvents = {
       domain: 'crypto';
     };
   };
+  // S18-B1: live-trade trigger — distinct from `crypto/signal.created`
+  // which routes to the paper-trade workflow. The `live: true` flag is
+  // a defensive opt-in; the workflow rejects anything missing it.
+  'crypto/live-trade.requested': {
+    data: {
+      signalId: string;
+      token: string;
+      direction: 'long' | 'short';
+      departmentId: string;
+      sizeUsd: string;
+      slPrice: string;
+      tpPrice: string;
+      requestedBy: string;
+      live: true;
+      exchange: string;
+    };
+  };
 };
 
 // -- S6-INF-HR HR domain event schemas --
