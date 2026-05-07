@@ -227,6 +227,9 @@ importers:
 
   packages/budget:
     dependencies:
+      '@aptivo/notifications':
+        specifier: workspace:*
+        version: link:../notifications
       '@aptivo/types':
         specifier: workspace:*
         version: link:../types

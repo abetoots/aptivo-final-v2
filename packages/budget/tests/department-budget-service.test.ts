@@ -269,3 +269,174 @@ describe('FA3-01: getSpendReport + binary coverageLevel signal', () => {
     expect(result.error._tag).toBe('DepartmentNotFound');
   });
 });
+
+// ---------------------------------------------------------------------------
+// S18-B3: threshold-crossing callbacks
+// ---------------------------------------------------------------------------
+
+describe('S18-B3: checkBudget threshold callbacks', () => {
+  async function setup(opts: {
+    spendUsd: number;
+    limitUsd: number;
+    warningThreshold?: number;
+    blockOnExceed?: boolean;
+  }) {
+    const store = createMemoryStore();
+    const onWarningCrossed = vi.fn(async () => undefined);
+    const onExceeded = vi.fn(async () => undefined);
+    const svc = createDepartmentBudgetService({
+      store,
+      onWarningCrossed,
+      onExceeded,
+    });
+    const dept = await svc.createDepartment({ name: 'D', ownerUserId: 'u' });
+    if (!dept.ok) throw new Error('setup failed');
+    await svc.setBudget(dept.value.id, {
+      monthlyLimitUsd: opts.limitUsd,
+      warningThreshold: opts.warningThreshold ?? 0.8,
+      blockOnExceed: opts.blockOnExceed ?? true,
+      notifyOnWarning: true,
+    });
+    store._setSpend(dept.value.id, { totalUsd: opts.spendUsd, rowCount: 5, unstampedRowCount: 0 });
+    return { svc, deptId: dept.value.id, onWarningCrossed, onExceeded };
+  }
+
+  // utility: wait for fire-and-forget callbacks to settle (they use
+  // void deps.onX(...).catch(...); a microtask flush is enough)
+  const flush = () => new Promise((r) => setImmediate(r));
+
+  it('fires onWarningCrossed with PROJECTED spend (post-this-request) when threshold crossed', async () => {
+    // post-R1: callback receives projected (800) not pre-request spend (500).
+    // Earlier draft passed spend.totalUsd which made messages misleading
+    // ("spent $500" when actually crossing into 80% with this request).
+    const { svc, deptId, onWarningCrossed, onExceeded } = await setup({
+      spendUsd: 500,
+      limitUsd: 1000,
+      warningThreshold: 0.8,
+    });
+
+    const result = await svc.checkBudget(deptId, 300); // 500+300=800 = warning
+    await flush();
+
+    expect(result.ok).toBe(true);
+    expect(onWarningCrossed).toHaveBeenCalledTimes(1);
+    expect(onWarningCrossed).toHaveBeenCalledWith(expect.objectContaining({
+      deptId,
+      deptName: 'D',
+      currentSpendUsd: 800, // POST-request value (Codex R1 fix)
+      limitUsd: 1000,
+    }));
+    expect(onExceeded).not.toHaveBeenCalled();
+  });
+
+  it('fires onExceeded ONLY when projected spend strictly exceeds the limit (not at exact cap)', async () => {
+    // post-R1: exact-cap (projected === limit) does NOT fire onExceeded
+    // because the verdict only blocks at projected > limit. Earlier
+    // draft used >= and would fire EXCEEDED notification + HITL chain
+    // for requests that were actually allowed (Codex R1 finding).
+    const { svc, deptId, onExceeded } = await setup({
+      spendUsd: 800,
+      limitUsd: 1000,
+    });
+
+    // 800 + 200 = 1000 = limit exactly → NOT exceeded
+    const exact = await svc.checkBudget(deptId, 200);
+    await flush();
+    expect(exact.ok).toBe(true);
+    expect(onExceeded).not.toHaveBeenCalled();
+
+    // 800 + 300 = 1100 > 1000 → exceeded
+    const over = await svc.checkBudget(deptId, 300, { requestedBy: { userId: 'user-7' } });
+    await flush();
+    expect(over.ok).toBe(false);
+    if (over.ok) return;
+    expect(over.error._tag).toBe('MonthlyBudgetExceeded');
+    expect(onExceeded).toHaveBeenCalledTimes(1);
+    expect(onExceeded).toHaveBeenCalledWith(expect.objectContaining({
+      deptId,
+      currentSpendUsd: 1100, // POST-request projected value
+      limitUsd: 1000,
+      requestedBy: { userId: 'user-7' },
+    }));
+  });
+
+  it('does NOT fire onWarningCrossed when notifyOnWarning is false (Codex R1: flag was ignored)', async () => {
+    const store = createMemoryStore();
+    const onWarningCrossed = vi.fn(async () => undefined);
+    const svc = createDepartmentBudgetService({ store, onWarningCrossed });
+    const dept = await svc.createDepartment({ name: 'D', ownerUserId: 'u' });
+    if (!dept.ok) throw new Error('setup failed');
+    await svc.setBudget(dept.value.id, {
+      monthlyLimitUsd: 1000,
+      warningThreshold: 0.8,
+      blockOnExceed: false,
+      notifyOnWarning: false, // explicit opt-out
+    });
+    store._setSpend(dept.value.id, { totalUsd: 850, rowCount: 1, unstampedRowCount: 0 });
+
+    const result = await svc.checkBudget(dept.value.id, 0);
+    await flush();
+    expect(result.ok).toBe(true);
+    expect(onWarningCrossed).not.toHaveBeenCalled();
+  });
+
+  it('fires onWarningCrossed every call when the threshold is met (callback dedupe handles repeat suppression)', async () => {
+    // Per AD-S18-6: dedupe lives in the callback (BudgetDedupeStore),
+    // not in checkBudget. checkBudget fires the callback on every
+    // qualifying call; the callback's internal SET-NX-EX collapses
+    // to one notification per period.
+    const { svc, deptId, onWarningCrossed } = await setup({
+      spendUsd: 850,
+      limitUsd: 1000,
+    });
+
+    await svc.checkBudget(deptId, 0);
+    await svc.checkBudget(deptId, 0);
+    await svc.checkBudget(deptId, 0);
+    await flush();
+
+    expect(onWarningCrossed).toHaveBeenCalledTimes(3);
+  });
+
+  it('does NOT fire callbacks when projected spend is below the warning threshold', async () => {
+    const { svc, deptId, onWarningCrossed, onExceeded } = await setup({
+      spendUsd: 100,
+      limitUsd: 1000,
+    });
+
+    await svc.checkBudget(deptId, 50); // 150/1000 = 15%, below 80%
+    await flush();
+
+    expect(onWarningCrossed).not.toHaveBeenCalled();
+    expect(onExceeded).not.toHaveBeenCalled();
+  });
+
+  it('callback rejection is logged but does NOT block the budget verdict', async () => {
+    const store = createMemoryStore();
+    const warn = vi.fn();
+    const onWarningCrossed = vi.fn(async () => { throw new Error('notification adapter exploded'); });
+    const svc = createDepartmentBudgetService({
+      store,
+      onWarningCrossed,
+      logger: { debug: vi.fn(), info: vi.fn(), warn, error: vi.fn() },
+    });
+    const dept = await svc.createDepartment({ name: 'D', ownerUserId: 'u' });
+    if (!dept.ok) throw new Error('setup failed');
+    await svc.setBudget(dept.value.id, {
+      monthlyLimitUsd: 1000,
+      warningThreshold: 0.8,
+      blockOnExceed: false,
+      notifyOnWarning: true,
+    });
+    store._setSpend(dept.value.id, { totalUsd: 850, rowCount: 1, unstampedRowCount: 0 });
+
+    const result = await svc.checkBudget(dept.value.id, 0);
+    await flush();
+    // verdict is still emitted normally — fire-and-forget contract
+    expect(result.ok).toBe(true);
+    expect(warn).toHaveBeenCalledWith(
+      'department_budget_on_warning_failed',
+      expect.objectContaining({ departmentId: dept.value.id }),
+    );
+  });
+});

@@ -38,6 +38,29 @@ export interface DepartmentBudgetServiceDeps {
   readonly logger?: Logger;
   /** injectable clock for deterministic tests */
   readonly nowMs?: () => number;
+  /**
+   * S18-B3: optional side-effect callbacks invoked from `checkBudget`
+   * when a threshold is crossed. The callbacks are responsible for
+   * their own dedupe (via `BudgetDedupeStore`) so calling them on
+   * every `checkBudget` invocation is safe — only the first call
+   * within a period across the cluster fires the actual side-effect.
+   *
+   * Both default to no-op when omitted, preserving the pre-B3
+   * behaviour for callers that haven't wired notifications yet.
+   */
+  readonly onWarningCrossed?: (input: {
+    deptId: string;
+    deptName: string;
+    currentSpendUsd: number;
+    limitUsd: number;
+  }) => Promise<void>;
+  readonly onExceeded?: (input: {
+    deptId: string;
+    deptName: string;
+    currentSpendUsd: number;
+    limitUsd: number;
+    requestedBy?: { userId: string; departmentId?: string };
+  }) => Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,8 +81,21 @@ export interface DepartmentBudgetService {
    * remaining: 0 }` only when over the monthly limit AND block-on-exceed
    * is set. Callers must honour the return value — this function is
    * advisory unless the caller enforces at the point of spend.
+   *
+   * S18-B3: when projected spend crosses `warningThreshold` or
+   * `monthlyLimitUsd`, the corresponding `onWarningCrossed` /
+   * `onExceeded` callback (if configured) is fired in the background
+   * (fire-and-forget — the budget verdict does NOT block on the
+   * notification adapter). The callbacks dedupe internally via
+   * BudgetDedupeStore, so calling them on every threshold-overlapping
+   * checkBudget is safe — only the first call within a period across
+   * the cluster fires.
    */
-  checkBudget(departmentId: string, amountUsd: number): Promise<Result<{ allowed: boolean; remaining: number }, DepartmentBudgetError>>;
+  checkBudget(
+    departmentId: string,
+    amountUsd: number,
+    options?: { readonly requestedBy?: { readonly userId: string; readonly departmentId?: string } },
+  ): Promise<Result<{ allowed: boolean; remaining: number }, DepartmentBudgetError>>;
 
   getSpendReport(
     departmentId: string,
@@ -147,7 +183,7 @@ export function createDepartmentBudgetService(
       return Result.ok(config);
     },
 
-    async checkBudget(departmentId, amountUsd) {
+    async checkBudget(departmentId, amountUsd, options) {
       const dept = await deps.store.findDepartmentById(departmentId);
       if (!dept) return Result.err({ _tag: 'DepartmentNotFound', id: departmentId });
       const config = await deps.store.getBudget(departmentId);
@@ -161,6 +197,48 @@ export function createDepartmentBudgetService(
       });
       const projected = spend.totalUsd + amountUsd;
       const remaining = Math.max(0, config.monthlyLimitUsd - spend.totalUsd);
+
+      // S18-B3: threshold-crossing side-effects. Fire-and-forget so
+      // the notification/HITL pipeline doesn't block the budget
+      // verdict; both callbacks dedupe internally via Redis SET-NX-EX.
+      //
+      // Threshold semantics (post-R1 Codex review):
+      //   - warning notification fires at projected >= warningLimit
+      //     IFF config.notifyOnWarning is true (the flag was ignored).
+      //   - exceeded fires at projected > monthlyLimitUsd, matching
+      //     the blocking verdict below — exact-cap requests do NOT
+      //     trigger an EXCEEDED notification or HITL chain.
+      //   - currentSpendUsd in the message is `projected` (post-this-
+      //     request spend), so a 950 → 1050 crossing reads as
+      //     "spent $1050" not the misleading "$950".
+      const warningLimit = config.warningThreshold * config.monthlyLimitUsd;
+      if (projected >= warningLimit && config.notifyOnWarning && deps.onWarningCrossed) {
+        void deps.onWarningCrossed({
+          deptId: departmentId,
+          deptName: dept.name,
+          currentSpendUsd: projected,
+          limitUsd: config.monthlyLimitUsd,
+        }).catch((cause) => {
+          deps.logger?.warn?.('department_budget_on_warning_failed', {
+            departmentId,
+            cause: cause instanceof Error ? cause.message : String(cause),
+          });
+        });
+      }
+      if (projected > config.monthlyLimitUsd && deps.onExceeded) {
+        void deps.onExceeded({
+          deptId: departmentId,
+          deptName: dept.name,
+          currentSpendUsd: projected,
+          limitUsd: config.monthlyLimitUsd,
+          requestedBy: options?.requestedBy,
+        }).catch((cause) => {
+          deps.logger?.warn?.('department_budget_on_exceeded_failed', {
+            departmentId,
+            cause: cause instanceof Error ? cause.message : String(cause),
+          });
+        });
+      }
 
       if (projected > config.monthlyLimitUsd) {
         if (config.blockOnExceed) {

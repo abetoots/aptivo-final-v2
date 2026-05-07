@@ -179,10 +179,19 @@ import {
 } from '@aptivo/llm-gateway/safety';
 import { createAnomalyDetector, formatAnomalyScopeKey } from '@aptivo/audit';
 
-// FA3-01: department budgeting
+// FA3-01: department budgeting + S18-B3: budget threshold notifications + HITL escalation
 import {
   createDepartmentBudgetService,
+  createBudgetDedupeStore,
+  createBudgetNotificationService,
+  createBudgetHitlEscalation,
+  secondsUntilNextMonth,
   type DepartmentBudgetService,
+  type BudgetDedupeStore,
+  type BudgetDedupeRedis,
+  type BudgetNotificationService,
+  type BudgetHitlEscalationService,
+  type TriggerBudgetExceptionChain,
   type Logger as BudgetLogger,
 } from '@aptivo/budget';
 import {
@@ -1543,11 +1552,170 @@ const budgetLoggerBridge: BudgetLogger = {
   error: (msg, ctx) => appLog.error(msg, ctx),
 };
 
+// S18-B3: budget dedupe store wraps the session-Redis SET NX EX
+// primitive. AD-S18-6: the dedupe is GLOBAL across web replicas (not
+// per-instance like ws-server) so all workers converge on one
+// notification per (deptId, period, threshold). When session-Redis
+// isn't configured (local dev), `null` is returned and BOTH the
+// notification + escalation services upstream become null too — i.e.,
+// callbacks aren't wired and `checkBudget` skips firing them. The
+// budget verdict still works; threshold side-effects are silently
+// disabled until session-Redis is provisioned. This is the same
+// degradation mode as other Redis-backed features in dev.
+export const getBudgetDedupeStore = lazy((): BudgetDedupeStore | null => {
+  const sessionRedis = getSessionRedis();
+  if (!sessionRedis) return null;
+
+  // Adapter: Upstash REST client to BudgetDedupeRedis surface. Upstash's
+  // `set(key, value, { nx: true, ex: number })` returns 'OK' on success
+  // and null when NX fails — we map that to true/false.
+  const adapter: BudgetDedupeRedis = {
+    async set(key, value, options) {
+      const redis = sessionRedis as unknown as {
+        set: (k: string, v: string, opts: { nx?: boolean; ex?: number }) => Promise<unknown>;
+      };
+      const result = await redis.set(key, value, {
+        nx: options.onlyIfNotExists,
+        ex: options.expirySeconds,
+      });
+      return result === 'OK';
+    },
+    async del(key) {
+      const redis = sessionRedis as unknown as { del: (k: string) => Promise<number> };
+      return redis.del(key);
+    },
+  };
+
+  return createBudgetDedupeStore(adapter, {
+    // Production: TTL = remaining seconds in the current period so the
+    // key auto-expires precisely when the period rolls over.
+    resolveTtlSeconds: () => secondsUntilNextMonth(),
+    logger: { warn: (event, ctx) => appLog.warn(event, ctx) },
+  });
+});
+
+export const getBudgetNotificationService = lazy((): BudgetNotificationService | null => {
+  const dedupeStore = getBudgetDedupeStore();
+  if (!dedupeStore) return null;
+  return createBudgetNotificationService({
+    adapter: getNotificationAdapter(),
+    dedupeStore,
+    logger: {
+      warn: (event, ctx) => appLog.warn(event, ctx),
+      info: (event, ctx) => appLog.info(event, ctx),
+    },
+  });
+});
+
+// S18-B3: budget-exception HITL escalation — wires the in-package
+// service to the real hitl-gateway createRequest. Per AD-S18 plan
+// risk note: chain selection is fixed for S18 ('budget-exception'),
+// parameterizable via per-tenant config in Phase 3.5+. The approver
+// is loaded from BUDGET_EXCEPTION_APPROVER_USER_ID env (typically the
+// finance lead's user UUID); when unset, the service returns
+// ChainTriggerUnavailable on each call.
+export const getBudgetHitlEscalation = lazy((): BudgetHitlEscalationService | null => {
+  const dedupeStore = getBudgetDedupeStore();
+  if (!dedupeStore) return null;
+
+  const approverUserId = process.env.BUDGET_EXCEPTION_APPROVER_USER_ID;
+  const triggerChain: TriggerBudgetExceptionChain | null = approverUserId
+    ? async (input) => {
+        try {
+          const result = await getHitlService().createRequest({
+            workflowId: crypto.randomUUID(),
+            domain: 'finance',
+            actionType: 'budget.exception.requested',
+            summary: `Budget exception requested for ${input.deptName} ($${input.currentSpendUsd.toFixed(2)} of $${input.limitUsd.toFixed(2)} for ${input.period})`,
+            details: {
+              deptId: input.deptId,
+              deptName: input.deptName,
+              currentSpendUsd: input.currentSpendUsd,
+              limitUsd: input.limitUsd,
+              period: input.period,
+              requestedBy: input.requestedBy,
+            },
+            approverId: approverUserId,
+          });
+          if (!result.ok) {
+            return { ok: false as const, error: { cause: result.error } };
+          }
+          return { ok: true as const, value: { hitlRequestId: result.value.requestId } };
+        } catch (cause) {
+          return { ok: false as const, error: { cause } };
+        }
+      }
+    : null;
+
+  return createBudgetHitlEscalation({
+    triggerChain,
+    dedupeStore,
+    logger: {
+      warn: (event, ctx) => appLog.warn(event, ctx),
+      info: (event, ctx) => appLog.info(event, ctx),
+    },
+  });
+});
+
 export const getDepartmentBudgetService = lazy((): DepartmentBudgetService => {
   const store = createDrizzleDepartmentBudgetStore(
     db() as unknown as Parameters<typeof createDrizzleDepartmentBudgetStore>[0],
   );
-  return createDepartmentBudgetService({ store, logger: budgetLoggerBridge });
+
+  // S18-B3: optional threshold callbacks. Each is a no-op when the
+  // corresponding service isn't wired (test env / pre-Redis dev).
+  // The callbacks themselves dedupe internally so calling them on
+  // every qualifying checkBudget() is safe.
+  const notifSvc = getBudgetNotificationService();
+  const escalationSvc = getBudgetHitlEscalation();
+
+  return createDepartmentBudgetService({
+    store,
+    logger: budgetLoggerBridge,
+    onWarningCrossed: notifSvc
+      ? async ({ deptId, deptName, currentSpendUsd, limitUsd }) => {
+          const dept = await store.findDepartmentById(deptId);
+          if (!dept) return;
+          await notifSvc.notifyThresholdCrossing({
+            deptId,
+            deptName,
+            recipientId: dept.ownerUserId,
+            threshold: 'warning',
+            currentSpendUsd,
+            limitUsd,
+          });
+        }
+      : undefined,
+    onExceeded: notifSvc || escalationSvc
+      ? async ({ deptId, deptName, currentSpendUsd, limitUsd, requestedBy }) => {
+          // Fire BOTH the exceeded-notification and the HITL
+          // escalation chain. Each dedupes on its own key so
+          // running them in parallel is safe.
+          const dept = await store.findDepartmentById(deptId);
+          await Promise.all([
+            notifSvc && dept
+              ? notifSvc.notifyThresholdCrossing({
+                  deptId,
+                  deptName,
+                  recipientId: dept.ownerUserId,
+                  threshold: 'exceeded',
+                  currentSpendUsd,
+                  limitUsd,
+                })
+              : Promise.resolve(),
+            escalationSvc && requestedBy
+              ? escalationSvc.triggerOnExceeded({
+                  deptId,
+                  deptName,
+                  currentSpendUsd,
+                  limitUsd,
+                  requestedBy,
+                })
+              : Promise.resolve(),
+          ]);
+        }
+      : undefined,
+  });
 });
 
 export const getAdminRateLimit = lazy((): AdminRateLimit => {
