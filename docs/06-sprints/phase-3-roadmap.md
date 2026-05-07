@@ -138,14 +138,16 @@ Source: MOD-01 build recommendation
 | Sprint | Weeks | SP | Epics | Theme |
 |--------|-------|-----|-------|-------|
 | 15 ✅ | 1-2 | 26 | Epic 1 + Epic 2 start | "Go live" — production deployment + streaming content filter MVP (DELIVERED 2026-03-18) |
-| 16 | 3-4 | 15 | Epic 2 finish + Epic 3 backend | "Safety + protocol" — ML classifier + graph validation + WebSocket server |
-| 17 | 5-6 | 10 | Epic 4 | "Track the work (APIs)" — case tracking APIs + SLA engine + escalation logic + reporting queries |
-| 18 | 7-8 | 17 | Epic 5 + Epic 6 start | "Domain delivery" — crypto live trading + HR onboarding + MOD-02 contracts + first integrations |
-| 19 | 9-10 | 17 | Epic 6 finish + Epic 7 + Epic 8 | "Close Phase 3 backend" — remaining integrations + compliance APIs + FA-4 budgeting |
-| **Total (backend)** | **10 weeks** | **~85 SP** | **All 8 (API surfaces)** | |
+| 16 ✅ | 3-4 | 27 (planned 15) | Epic 2 finish + Epic 3 backend + Epic 8 core | "Safety + protocol + budgeting" — ML classifier + graph validation + WebSocket server + departments/budget service. DELIVERED 2026-04-13. 6 enablement gates carried to S17. |
+| 17 ✅ | 5-6 | 23 (planned 10) | Epic 4 + S16 gate clearance | "Case tracking + gate clearance" — ticket CRUD/SLA/escalation/reporting + Gates #4/#5 fully cleared, #2/#3 contract layer, #6 single-instance. DELIVERED 2026-04-28. |
+| 18 ✅ | 7-8 | 23 (planned 17) | Epic 5 + S17 carry-forward closure + Epic 8 residual + cleanup | **Reframed at kickoff (2026-04-28)** from original "domain delivery + integrations start" prediction. Delivered: workflow→user actor propagation (A1, closes S17 carry-forward); ws-server multi-instance via TCP Redis Streams (A2, design-closed pending TCP Redis provisioning); Crypto live-trade workflow (B1); HR onboarding + PII audit (B2); budget threshold notifications (B3); cleanup bundle (C1). DELIVERED 2026-05-07. |
+| 19 | 9-10 | ~17-20 | Epic 6 + HR-bridge + MOD-02 + cleanup | **"Close Phase 3 backend"** — Epic 6 Buy Integrations (Stripe/HubSpot/Asana/Toggl, ~11 SP); HR contract workflow `hr/contract.decision.submitted` event-bridge (~1-2 SP, A1 HIGH#1 carry-forward); MOD-02 interface contract validation (~3 SP, D3 cemented); engineering operational follow-ups (~3 SP). NOT contingency — genuine close-out. |
+| **Total (backend)** | **10 weeks** | **~110 SP delivered + ~17-20 SP planned** | **All 8 (API surfaces)** | |
 | Phase 3.5 follows | 12 weeks | **137 SP** | UI track | [phase-3.5-ui-roadmap.md](./phase-3.5-ui-roadmap.md) |
 
-> SP totals shifted from 127 → ~85 after UI descope. Sprint 15 delivered on original scope (before descope) so its 26 SP reflects actual Sprint 15 output including streaming filter MVP. Sprints 16-19 are lighter than originally planned; remaining capacity can be used for technical debt reduction, additional deferred items, or compressing Phase 3 to 4 sprints.
+> **SP totals updated post-S18 (2026-05-07)**: original Phase 3 estimate was ~85 SP backend (post UI descope). Actual delivery has been ~30% heavier than estimated per sprint — S16 came in at 27 SP (planned 15) after multi-review flagged 4 codebase gaps; S17 at 23 SP (planned 10) after Epic 4's full case-tracking surface was scoped in; S18 at 23 SP (planned 17) after S17 carry-forwards were absorbed. **Sprints 16-18 estimates were systematically under**; S19 estimate at 17-20 SP carries the same risk. Don't pre-fill S19 with stretch scope.
+
+> **S18 reframe note**: Original S18 prediction was "Epic 5 + Epic 6 start" (Domain delivery + first integrations). Actual S18 dropped Epic 6 entirely and absorbed S17 carry-forwards (A1 actor propagation + A2 ws-server multi-instance). Epic 6 carries to S19. The reframe was deliberate (per AD-S18-2 D3 + S18 plan multi-review at `docs/06-sprints/S18_PLAN_MULTI_REVIEW.md`).
 
 ---
 
@@ -206,11 +208,14 @@ Epic 8 (Budgeting) ─────────→ independent (reuses existing b
 | HA database cluster (DO Managed PostgreSQL) | DevOps | Sprint 15 |
 | Split Redis instances (Upstash) | DevOps | Sprint 15 |
 | SMTP credentials (SendGrid/Mailgun) | Admin | Sprint 15 |
-| Stripe Billing API key + test account | Finance | Sprint 18 |
-| HubSpot API key + sandbox | Sales | Sprint 18 |
-| Asana + Toggl API access | PM | Sprint 18 |
+| Stripe Billing API key + test account | Finance | Sprint 19 (was 18; shifted with Epic 6) |
+| HubSpot API key + sandbox | Sales | Sprint 19 (was 18; shifted with Epic 6) |
+| Asana + Toggl API access | PM | Sprint 19 (was 18; shifted with Epic 6) |
 | ML model hosting (Replicate/HuggingFace) | Senior | Sprint 15 |
-| Compliance policy sign-off (HR DPA/DOLE) | Legal | Sprint 18 |
+| Compliance policy sign-off (HR DPA/DOLE) | Legal | Sprint 19 (was 18; shifted with Epic 7) |
+| **TCP Redis (Railway-managed) provisioning** — required for `WS_TRANSPORT_MODE=streams` rollout per S18-A2 / ADD §1.2 / [runbook §17](../06-operations/01-runbook.md#17-ws-server-multi-instance-scaling-s18-a2) | DevOps | Sprint 19 (added post-S18) |
+| **`BUDGET_EXCEPTION_APPROVER_USER_ID` env var deployment** — required for B3 HITL escalation chain | Admin | Sprint 19 (added post-S18) |
+| **`TICKET_ESCALATION_RECIPIENT_ID` env var deployment** — required for C1c ticket-tier notifications | Admin | Sprint 19 (added post-S18) |
 
 ---
 
