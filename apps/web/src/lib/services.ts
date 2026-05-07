@@ -25,6 +25,7 @@ import {
   createDrizzleContractStore,
   createDrizzlePositionStore,
   createDrizzleCryptoPositionStore,
+  createDrizzleHrOnboardingStore,
   createMetricQueries,
   createDrizzleAdminStore,
   createDrizzleLlmUsageStore,
@@ -1005,6 +1006,11 @@ export const getApplicationStore = lazy(() =>
 
 export const getInterviewStore = lazy(() =>
   createDrizzleInterviewStore(db() as unknown as Parameters<typeof createDrizzleInterviewStore>[0]),
+);
+
+// S18-B2: HR onboarding state + task store (Epic 5)
+export const getHrOnboardingStore = lazy(() =>
+  createDrizzleHrOnboardingStore(db() as unknown as Parameters<typeof createDrizzleHrOnboardingStore>[0]),
 );
 
 // ---------------------------------------------------------------------------

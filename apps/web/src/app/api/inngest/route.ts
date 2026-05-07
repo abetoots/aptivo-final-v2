@@ -26,6 +26,7 @@ import { securityScanFn } from '../../../lib/workflows/crypto-security-scan';
 import { candidateFlowFn } from '../../../lib/workflows/hr-candidate-flow';
 import { interviewSchedulingFn } from '../../../lib/workflows/hr-interview-scheduling';
 import { contractApprovalFn } from '../../../lib/workflows/hr-contract-approval';
+import { onboardingFn } from '../../../lib/workflows/hr-onboarding';
 import { createSloCronFunction } from '../../../lib/observability/slo-cron';
 import { createPositionMonitorFn } from '../../../lib/jobs/crypto-position-monitor';
 import { getCryptoPositionStore, getExchangeMcpAdapter, getAuditService } from '../../../lib/services';
@@ -117,7 +118,7 @@ const positionMonitorFn = createPositionMonitorFn(
   },
 );
 
-// domain workflow functions (S6-CRY-01, S6-HR-01, S18-B1)
+// domain workflow functions (S6-CRY-01, S6-HR-01, S18-B1, S18-B2)
 const domainFunctions = [
   paperTradeFn,
   liveTradeFn,
@@ -125,6 +126,7 @@ const domainFunctions = [
   candidateFlowFn,
   interviewSchedulingFn,
   contractApprovalFn,
+  onboardingFn,
   positionMonitorFn,
 ];
 
