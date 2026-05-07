@@ -309,72 +309,91 @@ export const onboardingFn = inngest.createFunction(
       };
     }
 
-    const hitlResult = await step.run('hitl-request', async () => {
-      try {
-        const deps = getHitlRequestDeps();
-        const result = await createRequest(
-          {
-            workflowId: crypto.randomUUID(),
-            domain: 'hr',
-            actionType: 'onboarding-approval',
-            summary: `HR onboarding approval for candidate ${candidateId}`,
-            details: {
-              onboardingId: onboardingRow.id,
-              candidateId,
-              contractId,
-              managerId: managerResult.managerId,
+    // Round-2 multi-model review (Codex HIGH): a `manager_assigned`
+    // resumption needs to use the PERSISTED `hitlRequestId` instead
+    // of creating a duplicate HITL request. The schema stores
+    // hitlRequestId per the contract in hr-onboarding.ts; if the row
+    // already has one, skip createRequest and resume against it.
+    type HitlStepResult =
+      | { readonly success: true; readonly requestId: string }
+      | { readonly success: false; readonly error: string };
+    let hitlResult: HitlStepResult;
+    if (past('manager_assigned') && onboardingRow.hitlRequestId) {
+      // resumption path — use the existing HITL request, no duplicate
+      // createRequest call, no fresh notification fan-out
+      hitlResult = {
+        success: true,
+        requestId: onboardingRow.hitlRequestId,
+      };
+    } else {
+      hitlResult = await step.run('hitl-request', async () => {
+        try {
+          const deps = getHitlRequestDeps();
+          const result = await createRequest(
+            {
+              workflowId: crypto.randomUUID(),
+              domain: 'hr',
+              actionType: 'onboarding-approval',
+              summary: `HR onboarding approval for candidate ${candidateId}`,
+              details: {
+                onboardingId: onboardingRow.id,
+                candidateId,
+                contractId,
+                managerId: managerResult.managerId,
+              },
+              approverId: managerResult.managerId,
             },
-            approverId: managerResult.managerId,
-          },
-          deps,
-        );
+            deps,
+          );
 
-        if (!result.ok) {
+          if (!result.ok) {
+            return {
+              success: false as const,
+              error: `${result.error._tag}: ${result.error.message}`,
+            };
+          }
+
+          // notification — fire-and-forget
+          try {
+            const notif = getNotificationService();
+            await notif.send({
+              recipientId: managerResult.managerId,
+              channel: 'email',
+              templateSlug: 'hr-onboarding-approval',
+              variables: {
+                candidateId,
+                onboardingId: onboardingRow.id,
+                requestId: result.value.requestId,
+              },
+            });
+          } catch {
+            // notification failure is non-blocking
+          }
+
+          return { success: true as const, requestId: result.value.requestId };
+        } catch (err: unknown) {
           return {
             success: false as const,
-            error: `${result.error._tag}: ${result.error.message}`,
+            error: err instanceof Error ? err.message : String(err),
           };
         }
-
-        // notification — fire-and-forget
-        try {
-          const notif = getNotificationService();
-          await notif.send({
-            recipientId: managerResult.managerId,
-            channel: 'email',
-            templateSlug: 'hr-onboarding-approval',
-            variables: {
-              candidateId,
-              onboardingId: onboardingRow.id,
-              requestId: result.value.requestId,
-            },
-          });
-        } catch {
-          // notification failure is non-blocking
-        }
-
-        return { success: true as const, requestId: result.value.requestId };
-      } catch (err: unknown) {
-        return {
-          success: false as const,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
-    });
-
-    if (!hitlResult.success) {
-      const store = getHrOnboardingStore();
-      await store.recordStepFailure(onboardingRow.id, `hitl-request: ${hitlResult.error}`);
-      return { status: 'error', step: 'hitl-request', error: hitlResult.error };
-    }
-
-    // record the HITL request id on the row
-    await step.run('record-hitl-request-id', async () => {
-      const store = getHrOnboardingStore();
-      await store.transitionState(onboardingRow.id, 'manager_assigned', {
-        hitlRequestId: hitlResult.requestId,
       });
-    });
+
+      if (!hitlResult.success) {
+        const store = getHrOnboardingStore();
+        await store.recordStepFailure(onboardingRow.id, `hitl-request: ${hitlResult.error}`);
+        return { status: 'error', step: 'hitl-request', error: hitlResult.error };
+      }
+
+      // record the HITL request id on the row (only on first-pass —
+      // resumption keeps the existing id since we never overwrote it)
+      await step.run('record-hitl-request-id', async () => {
+        const store = getHrOnboardingStore();
+        await store.transitionState(onboardingRow.id, 'manager_assigned', {
+          hitlRequestId: hitlResult.success ? hitlResult.requestId : undefined,
+        });
+      });
+    }
 
     // step 5: wait for decision (72h — manual signoff window)
     const decision = await step.waitForEvent('wait-for-onboarding-decision', {

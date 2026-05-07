@@ -502,6 +502,48 @@ describe('S18-B2: HR onboarding workflow', () => {
       );
     });
 
+    it('resumption when manager_assigned + hitlRequestId persisted: NO new HITL request created', async () => {
+      // Round-2 multi-model review (Codex): a `manager_assigned` row
+      // with a persisted hitlRequestId should resume against that
+      // request — NOT create a duplicate HITL approval request that
+      // fans out a second notification and drifts the audit chain.
+      mockOnboardingStore.findOrCreate.mockResolvedValueOnce(
+        onboardingRow({
+          state: 'manager_assigned',
+          managerId: APPROVER_ID,
+          hitlRequestId: 'persisted-hitl-req-99',
+        }),
+      );
+
+      const engine = engineFor({
+        events: triggerEvent(),
+        steps: [
+          {
+            id: 'wait-for-onboarding-decision',
+            handler: () => ({
+              name: 'hitl/decision.recorded',
+              data: {
+                requestId: 'persisted-hitl-req-99',
+                decision: 'approved',
+                approverId: HITL_APPROVER,
+                decidedAt: '2026-04-29T13:00:00Z',
+              },
+            }),
+          },
+        ],
+      });
+
+      const { result } = await engine.execute();
+
+      expect(result).toMatchObject({ status: 'onboarded' });
+
+      // critical: createRequest NOT called on resumption
+      expect(vi.mocked(createRequest)).not.toHaveBeenCalled();
+
+      // notification NOT fanned out a second time on resumption
+      expect(mockNotificationService.send).not.toHaveBeenCalled();
+    });
+
     it('emit-started + audit-started are skipped on re-trigger of a non-pending row', async () => {
       // round-1 finding: the prior implementation emitted started
       // events BEFORE checking state, producing duplicate "started"
