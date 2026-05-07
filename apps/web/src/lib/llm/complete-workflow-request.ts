@@ -14,10 +14,15 @@
  *      Passing `undefined` is explicit and reviewable; forgetting the
  *      parameter is a compile error.
  *
- *   2. (CI gate) `scripts/lint-workflow-gateway-calls.sh` greps the
- *      workflow tree for naked `gateway.complete(` and fails the build
- *      on a hit. This catches drift if a contributor copies a non-
- *      workflow callsite into the workflow tree.
+ *   2. (CI gate) `apps/web/tests/s18-a1-workflow-gateway-call.doclint.test.ts`
+ *      runs as a vitest doclint test; greps the workflow tree for naked
+ *      `gateway.complete(` and fails on a hit. This catches drift if a
+ *      contributor copies a non-workflow callsite into the workflow tree.
+ *      (Earlier draft of this file mentioned a `scripts/lint-workflow-
+ *      gateway-calls.sh` shell script; that name was used in the plan
+ *      but the actual implementation landed as a vitest test for
+ *      consistency with the rest of the test harness — caught by the
+ *      S18 delivery-review multi-model audit.)
  *
  * Both locks are needed: the type-system gate prevents accidental
  * omissions in new code; the CI gate catches paste-from-elsewhere drift
