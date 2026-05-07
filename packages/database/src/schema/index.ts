@@ -71,3 +71,10 @@ export { ticketSlaConfigs } from './ticket-sla-configs.js';
 // cron polls against; `executedBy` carries the HITL approver's
 // userId for S18-A1 audit attribution.
 export { cryptoPositions } from './crypto-positions.js';
+
+// S18-B2: HR onboarding state + task checklist tables (Epic 5).
+// State machine (AD-S18-5): pending → docs_collected → manager_assigned
+// → approved → onboarded. unique(candidateId) blocks duplicate-trigger
+// ghosting; (onboardingId, slug) on tasks enforces idempotent re-runs
+// of the docs-collected step.
+export { hrOnboarding, hrOnboardingTasks } from './hr-onboarding.js';

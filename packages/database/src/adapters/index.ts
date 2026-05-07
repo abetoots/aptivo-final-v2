@@ -123,6 +123,17 @@ export type {
   PositionExitReason,
 } from './crypto-position-store-drizzle.js';
 
+// S18-B2: HR onboarding state + task store (Epic 5 HR onboarding)
+export { createDrizzleHrOnboardingStore } from './hr-onboarding-store-drizzle.js';
+export type {
+  HrOnboardingStore as DrizzleHrOnboardingStore,
+  OnboardingRecord as DrizzleOnboardingRecord,
+  OnboardingTaskRecord as DrizzleOnboardingTaskRecord,
+  OnboardingTaskDef,
+  OnboardingState,
+  OnboardingTaskStatus,
+} from './hr-onboarding-store-drizzle.js';
+
 // hitl persistence (P1.5-01)
 export {
   createDrizzleHitlRequestStore,
