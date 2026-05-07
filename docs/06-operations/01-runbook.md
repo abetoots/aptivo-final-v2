@@ -2125,6 +2125,96 @@ Signed: _________________________ Date: ___________
 
 ---
 
+## **17. ws-server Multi-Instance Scaling (S18-A2)**
+
+> **Status (S18 close)**: A2 ships with `WS_TRANSPORT_MODE=list` as the production default — single-instance ws-server using the existing Upstash REST list+polling path. The streams transport (TCP Redis + per-instance consumer groups) is fully scaffolded and tested in-memory; production rollout is blocked on TCP Redis provisioning (DevOps action). This section documents the cutover sequence so ops can flip flags atomically once provisioning lands.
+
+### 17.1 Architecture summary
+
+Per AD-S18-2 (sprint-18-plan §8): `apps/web` publishes `EventFrame` envelopes to TCP Redis Streams via `XADD ws:events MAXLEN ~ 50000`; each `apps/ws-server` instance creates its OWN consumer group (`ws-instance-<WS_INSTANCE_ID>`) and reads via `XREADGROUP`. Single XADD writes once; every consumer group reads it independently → broadcast fan-out (the load-bearing claim that S17 list+polling could not satisfy because RPOP is single-consumer per item).
+
+A shared Redis-SET dedupe ring (`SET ws:dedupe:<eventId> 1 NX EX 3600`) handles cross-transport dedupe during the `dual` cutover window: each instance subscribes to BOTH transports, the SET succeeds for the first writer and fails for the second, so each logical event fans out exactly once even when both transports deliver it.
+
+### 17.2 Required env vars (production)
+
+```
+# apps/web (publisher)
+WS_TRANSPORT_MODE=list|dual|streams        # default: list
+WS_REDIS_URL=https://...upstash.io         # legacy LPUSH path (Upstash REST)
+WS_REDIS_TOKEN=...                         # legacy LPUSH path
+WS_REDIS_TCP_URL=redis://user:pass@...     # streams path (TCP Redis)
+
+# apps/ws-server (subscriber)
+WS_TRANSPORT_MODE=list|dual|streams        # MUST match apps/web
+WS_REDIS_URL=...                           # legacy
+WS_REDIS_TOKEN=...                         # legacy
+WS_REDIS_TCP_URL=...                       # streams path
+WS_INSTANCE_ID=ws-prod-1                   # MUST be unique per process; missing → process exits
+WS_STREAM_NAME=ws:events                   # default
+```
+
+### 17.3 Cutover sequence (zero-downtime)
+
+The recommended cutover is **dual-write/dual-read for 24 hours**, then atomic flip to streams-only. This avoids the lost-events scenario where a publisher on streams emits to a subscriber still on list (or vice versa).
+
+**Day 0 (pre-cutover)**:
+- Verify TCP Redis instance is provisioned and reachable from both `apps/web` Inngest workers and all `apps/ws-server` instances
+- Set `WS_REDIS_TCP_URL` in both services' env (no functional change yet — `WS_TRANSPORT_MODE=list` still in effect)
+- Confirm `WS_INSTANCE_ID` is set and unique on every ws-server process. The bootstrap exits with a fatal error if missing — verify staging logs show no exits.
+
+**Day 1**: flip both services to `WS_TRANSPORT_MODE=dual` simultaneously (single deploy). Publishers start writing both LPUSH and XADD; subscribers start reading both. The Redis-SET dedupe ring guarantees each `eventId` fans out once.
+- Smoke test: publish a known event from `apps/web`; verify it's logged once per ws-server instance (fan-out works) AND only ONCE per instance (dedupe works).
+- Monitor: `XLEN ws:events` should track `LLEN ws:events` (both growing at the same rate).
+- Monitor: `ws_dedupe_store_failed` log occurrences — should be 0 in steady state.
+
+**Day 2-7**: observation window. Confirm no event-loss reports from clients. If any anomaly surfaces, roll back to `list` (atomic flip; subscribers re-pick events from the list path).
+
+**Day 8+**: flip both services to `WS_TRANSPORT_MODE=streams`. Publishers stop LPUSH; subscribers stop polling the list. The dedupe ring keeps running for ~1h (TTL) as residual list-side events drain.
+
+**Post-cutover**: drain remaining list entries (`LLEN ws:events` → 0). The legacy `redis-subscriber.ts` path stays in the codebase for back-compat with Upstash-only deployments (e.g., local dev, dev/staging stacks where TCP Redis isn't available).
+
+### 17.4 Lagged-consumer detection
+
+A consumer group whose cursor falls far behind the stream's tail indicates a slow or stuck instance.
+
+```
+# Stream length
+XLEN ws:events
+
+# Group lag (XINFO GROUPS returns last-delivered-id per group)
+XINFO GROUPS ws:events
+
+# Specific group's pending-and-undelivered count
+XINFO CONSUMERS ws:events ws-instance-<id>
+```
+
+If a group's `pel-count` (pending entry list) keeps growing or `last-delivered-id` lags far behind the stream tail, the corresponding ws-server instance is unhealthy — investigate via the standard ws-server health probe (port `WS_PORT`) and restart if needed.
+
+### 17.5 Orphaned consumer group cleanup
+
+When a ws-server instance terminates without ws-server's normal `stop()` path (OOM kill, container forced-restart, etc.), its consumer group remains in Redis. The group accumulates pending entries the instance will never claim. S19+ hardening adds a TTL-driven auto-cleanup; for S18 the procedure is manual.
+
+```bash
+# 1. Identify orphaned groups (group exists but no consumer is connected)
+redis-cli XINFO GROUPS ws:events
+
+# 2. For each orphaned group (consumers count == 0 AND last-delivered-id is stale)
+redis-cli XGROUP DESTROY ws:events ws-instance-<id>
+
+# 3. Verify cleanup
+redis-cli XINFO GROUPS ws:events
+```
+
+Cadence: ad-hoc (after a known crash) or weekly during the cutover window. Stable steady-state instances should rarely produce orphans.
+
+### 17.6 Rollback
+
+If the streams path produces unexpected behavior, **flip back to `WS_TRANSPORT_MODE=list`** in both services simultaneously. The list path is unchanged from S17; subscribers immediately resume RPOP polling against the existing Upstash list. The streams data on TCP Redis is harmless (XADD writes continue to succeed if mode=dual is restored later).
+
+If `WS_TRANSPORT_MODE=streams` is set without `WS_REDIS_TCP_URL`, both services log structured warnings and disable the affected publisher functions / streams subscriber — they DO NOT fall back to list silently. This is intentional: the operator should explicitly choose the transport.
+
+---
+
 ## **Revision History**
 
 | Version | Date       | Author                | Changes                                                                                                                                                                                                |
@@ -2135,5 +2225,6 @@ Signed: _________________________ Date: ___________
 | v2.1.0  | 2026-02-03 | Multi-Model Consensus | Aligned with ADD: replaced K8s with DigitalOcean App Platform, TBD environments, Build Once Deploy Many pipeline, added security scan status |
 | v2.5.0  | 2026-03-18 | Platform Migration    | Migrated all infrastructure references from DigitalOcean App Platform to Railway. DO account locked; Railway chosen via multi-model consensus. Config-only migration (no infrastructure was provisioned). |
 | v2.2.0  | 2026-03-04 | Documentation Review  | Fixed feature flag §2.4 to reflect Phase 1 compile-time constants; added playbooks (MCP circuit breaker, LLM failure/budget, File Storage/ClamAV, BullMQ stall, ClamAV ops); added §9 Rollback Procedures (app, DB migration, secret rotation, infrastructure, Inngest workflow, multi-component order); added §12 Vendor Escalation Contacts; added §13 DR Test Procedure; added §14 Regional SaaS Isolation Map; renumbered sections 10–11 |
+| v2.6.0  | 2026-05-07 | S18-A2                | Added §17 ws-server Multi-Instance Scaling: env-var matrix, zero-downtime cutover sequence (`list` → `dual` → `streams`), lagged-consumer detection via XINFO GROUPS, orphaned-group cleanup procedure, rollback policy. Streams transport scaffolded in S18 — production rollout blocked on TCP Redis provisioning. |
 | v2.3.0  | 2026-03-17 | Phase 2 Closure       | Added §15 Phase 2 Service Operations (notification failover, workflow CRUD, feature flags, consent, approval SLA, visual workflow builder) |
 | v2.4.0  | 2026-03-18 | Sprint 15 Deployment  | Added §16 Sprint 15 Production Deployment Checklist — 9-step human-actionable deployment gate with env vars, verification commands, and evidence requirements |

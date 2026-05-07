@@ -85,20 +85,68 @@ const anomalyBaselineBuilderFn = createAnomalyBaselineBuilder({
 // configured (e.g. local dev without Upstash), the functions are
 // skipped — workflow/HITL events still fire normally and Inngest
 // retries can be replayed once Redis is wired.
-const wsPublisherFunctions = (() => {
-  const redis = getJobsRedis();
-  if (!redis) {
+//
+// S18-A2: publisher mode is selected via WS_TRANSPORT_MODE env:
+//   - `list` (default; S17 back-compat): LPUSH only via Upstash REST
+//   - `streams`: XADD only via TCP Redis (WS_REDIS_TCP_URL required)
+//   - `dual`: writes both transports for the cutover window;
+//     subscribers dedupe by eventId via shared Redis SET ring
+//
+// Streams binding uses @aptivo/redis createTcpRedis with ioredis
+// (optionalDependency); falls back to disabling the streams path if
+// ioredis isn't installed and mode requires it.
+const wsPublisherFunctions = await (async () => {
+  const modeRaw = (process.env.WS_TRANSPORT_MODE ?? 'list').toLowerCase();
+  const mode = (modeRaw === 'list' || modeRaw === 'dual' || modeRaw === 'streams')
+    ? modeRaw
+    : 'list';
+
+  const listRedis = getJobsRedis();
+
+  // streams binding — only constructed when needed
+  let streamsRedis: Awaited<ReturnType<typeof import('@aptivo/redis').createTcpRedis>> | null = null;
+  if (mode === 'streams' || mode === 'dual') {
+    const tcpUrl = process.env.WS_REDIS_TCP_URL;
+    if (!tcpUrl) {
+      appLog.warn('ws_event_publisher_streams_disabled', {
+        reason: 'WS_TRANSPORT_MODE requires streams but WS_REDIS_TCP_URL is missing',
+        mode,
+      });
+    } else {
+      try {
+        const { createTcpRedis } = await import('@aptivo/redis');
+        streamsRedis = await createTcpRedis({
+          url: tcpUrl,
+          connectionName: 'aptivo-web-publisher',
+        });
+      } catch (cause) {
+        appLog.warn('ws_event_publisher_streams_init_failed', {
+          cause: cause instanceof Error ? cause.message : String(cause),
+        });
+      }
+    }
+  }
+
+  // disabled cases — log + skip the function registration entirely
+  const listOk = (mode === 'list' || mode === 'dual') ? !!listRedis : true;
+  const streamsOk = (mode === 'streams' || mode === 'dual') ? !!streamsRedis : true;
+  if (!listOk || !streamsOk) {
     appLog.info('ws_event_publisher_disabled', {
-      reason: 'jobs Redis not configured (UPSTASH_* env vars missing); WS fan-out is dark for this process',
+      reason: 'transport requirements not met for the configured WS_TRANSPORT_MODE',
+      mode,
+      listAvailable: !!listRedis,
+      streamsAvailable: !!streamsRedis,
     });
     return [] as ReturnType<typeof createWsEventPublisherFunctions>;
   }
+
   return createWsEventPublisherFunctions({
     inngest,
-    // @upstash/redis Redis client implements lpush; the project's
-    // RedisClient interface (auth-focused) doesn't declare it, so
-    // cast at the seam.
-    redis: redis as unknown as Parameters<typeof createWsEventPublisherFunctions>[0]['redis'],
+    mode: mode as 'list' | 'dual' | 'streams',
+    redis: listRedis
+      ? (listRedis as unknown as Parameters<typeof createWsEventPublisherFunctions>[0]['redis'])
+      : undefined,
+    streams: streamsRedis ?? undefined,
     logger: { warn: (event, ctx) => appLog.warn(event, ctx) },
   });
 })();
