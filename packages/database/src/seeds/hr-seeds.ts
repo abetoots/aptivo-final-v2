@@ -30,12 +30,18 @@ export const HR_PERMISSIONS = [
   { role: 'recruiter', permission: 'hr/contract.export' },
   { role: 'recruiter', permission: 'hr/employee.view' },
   { role: 'recruiter', permission: 'hr/employee.export' },
+  // S18-B2: onboarding read endpoint. Recruiter + hiring-manager can
+  // view onboarding state (admin tooling); the candidate themselves
+  // gets through via the requireConsent self-access exemption rather
+  // than a role-based grant.
+  { role: 'recruiter', permission: 'hr/onboarding.view' },
   // hiring-manager role
   { role: 'hiring-manager', permission: 'hr/candidate.view' },
   { role: 'hiring-manager', permission: 'hr/application.view' },
   { role: 'hiring-manager', permission: 'hr/interview.view' },
   { role: 'hiring-manager', permission: 'hr/offer.approve' },
   { role: 'hiring-manager', permission: 'hr/offer.view' },
+  { role: 'hiring-manager', permission: 'hr/onboarding.view' },
   // interviewer role
   { role: 'interviewer', permission: 'hr/candidate.view' },
   { role: 'interviewer', permission: 'hr/interview.view' },

@@ -184,23 +184,23 @@ describe('seedAllCrypto', () => {
 // ---------------------------------------------------------------------------
 
 describe('seedHrRoles', () => {
-  it('inserts all 23 hr role-permission pairs (was 18; +1 candidate.export, +4 contract+employee in S18-B2)', async () => {
+  it('inserts all 25 hr role-permission pairs (was 18; +6 export+contract+employee, +2 onboarding in S18-B2)', async () => {
     const db = createMockDb();
 
     const result = await seedHrRoles(db);
 
-    expect(result.insertedCount).toBe(23);
-    expect(db._insertedValues).toHaveLength(23);
-    expect(HR_PERMISSIONS).toHaveLength(23);
+    expect(result.insertedCount).toBe(25);
+    expect(db._insertedValues).toHaveLength(25);
+    expect(HR_PERMISSIONS).toHaveLength(25);
   });
 
-  it('inserts correct permissions for recruiter role (13 — +5 from S18-B2)', async () => {
+  it('inserts correct permissions for recruiter role (14 — +6 from S18-B2)', async () => {
     const db = createMockDb();
 
     await seedHrRoles(db);
 
     const recruiterPerms = db._insertedValues.filter((v) => v.role === 'recruiter');
-    expect(recruiterPerms).toHaveLength(13);
+    expect(recruiterPerms).toHaveLength(14);
 
     const permNames = recruiterPerms.map((v) => v.permission);
     expect(permNames).toContain('hr/candidate.create');
@@ -208,17 +208,18 @@ describe('seedHrRoles', () => {
     expect(permNames).toContain('hr/offer.create');
   });
 
-  it('inserts correct permissions for hiring-manager role', async () => {
+  it('inserts correct permissions for hiring-manager role (6 — +1 hr/onboarding.view in S18-B2)', async () => {
     const db = createMockDb();
 
     await seedHrRoles(db);
 
     const hmPerms = db._insertedValues.filter((v) => v.role === 'hiring-manager');
-    expect(hmPerms).toHaveLength(5);
+    expect(hmPerms).toHaveLength(6);
 
     const permNames = hmPerms.map((v) => v.permission);
     expect(permNames).toContain('hr/offer.approve');
     expect(permNames).toContain('hr/offer.view');
+    expect(permNames).toContain('hr/onboarding.view');
   });
 
   it('inserts correct permissions for interviewer role', async () => {
@@ -300,10 +301,10 @@ describe('seedAllHr', () => {
 
     await seedAllHr(db);
 
-    // 23 permissions + 4 templates + 2 servers = 29 inserts (was 18+4+2=24
-    // before S18-B2 added hr/candidate.export, contract.view/export,
-    // employee.view/export)
-    expect(db._insertedValues).toHaveLength(29);
+    // 25 permissions + 4 templates + 2 servers = 31 inserts (was 23+4+2=29
+    // before S18-B2 slice 5 added hr/onboarding.view to recruiter +
+    // hiring-manager)
+    expect(db._insertedValues).toHaveLength(31);
   });
 });
 
@@ -328,7 +329,7 @@ describe('seed idempotency', () => {
     await seedAllHr(db);
     await seedAllHr(db);
 
-    // 29 * 2 = 58 total inserts (onConflictDoNothing handles duplicates)
-    expect(db._insertedValues).toHaveLength(58);
+    // 31 * 2 = 62 total inserts (onConflictDoNothing handles duplicates)
+    expect(db._insertedValues).toHaveLength(62);
   });
 });

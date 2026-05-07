@@ -42,6 +42,8 @@ import { createTokenBlacklistService } from './auth/token-blacklist.js';
 // S18-B1: crypto live-trade infrastructure
 import { createDailyLossCircuitBreaker } from './crypto/daily-loss-circuit-breaker.js';
 import { createInMemoryExchangeMcp } from './crypto/exchange-mcp-adapter.js';
+// S18-B2: HR consent enforcement (FR-HR-CM-005)
+import { createRequireConsent } from './hr/require-consent.js';
 import type { RedisClient } from './auth/token-blacklist.js';
 
 // session limits (ID2-05)
@@ -1011,6 +1013,45 @@ export const getInterviewStore = lazy(() =>
 // S18-B2: HR onboarding state + task store (Epic 5)
 export const getHrOnboardingStore = lazy(() =>
   createDrizzleHrOnboardingStore(db() as unknown as Parameters<typeof createDrizzleHrOnboardingStore>[0]),
+);
+
+// S18-B2: requireConsent middleware (FR-HR-CM-005). Looks up
+// `consent_records` for active consents on a candidate; falls open
+// only on the self-access exemption (candidate's email matches the
+// requesting user's email).
+export const getRequireConsent = lazy(() =>
+  createRequireConsent({
+    findActiveConsent: async (candidateId, consentType) => {
+      const drizzle = db() as unknown as {
+        execute: (sql: unknown) => Promise<{ rows?: Array<{
+          consent_type: string;
+          consent_date: Date;
+          withdrawn_at: Date | null;
+        }> } | Array<{
+          consent_type: string;
+          consent_date: Date;
+          withdrawn_at: Date | null;
+        }>>;
+      };
+      // raw SQL to avoid coupling to schema-table imports here; the
+      // consentRecords table shape is stable per @aptivo/database
+      const { sql } = await import('drizzle-orm');
+      const result = await drizzle.execute(
+        sql`SELECT consent_type, consent_date, withdrawn_at FROM consent_records
+            WHERE candidate_id = ${candidateId} AND consent_type = ${consentType}
+              AND withdrawn_at IS NULL
+            ORDER BY consent_date DESC LIMIT 1`,
+      );
+      const rows = Array.isArray(result) ? result : (result.rows ?? []);
+      if (rows.length === 0) return null;
+      const r = rows[0]!;
+      return {
+        consentType: r.consent_type,
+        consentDate: r.consent_date,
+        withdrawnAt: r.withdrawn_at,
+      };
+    },
+  }),
 );
 
 // ---------------------------------------------------------------------------
