@@ -20,6 +20,8 @@ export const HR_PERMISSIONS = [
   { role: 'recruiter', permission: 'hr/interview.create' },
   { role: 'recruiter', permission: 'hr/interview.view' },
   { role: 'recruiter', permission: 'hr/offer.create' },
+  // S18-B2: bulk PII export — recruiter only (compliance-sensitive)
+  { role: 'recruiter', permission: 'hr/candidate.export' },
   // hiring-manager role
   { role: 'hiring-manager', permission: 'hr/candidate.view' },
   { role: 'hiring-manager', permission: 'hr/application.view' },

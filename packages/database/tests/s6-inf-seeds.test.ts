@@ -184,23 +184,23 @@ describe('seedAllCrypto', () => {
 // ---------------------------------------------------------------------------
 
 describe('seedHrRoles', () => {
-  it('inserts all 18 hr role-permission pairs', async () => {
+  it('inserts all 19 hr role-permission pairs (was 18 — added hr/candidate.export in S18-B2)', async () => {
     const db = createMockDb();
 
     const result = await seedHrRoles(db);
 
-    expect(result.insertedCount).toBe(18);
-    expect(db._insertedValues).toHaveLength(18);
-    expect(HR_PERMISSIONS).toHaveLength(18);
+    expect(result.insertedCount).toBe(19);
+    expect(db._insertedValues).toHaveLength(19);
+    expect(HR_PERMISSIONS).toHaveLength(19);
   });
 
-  it('inserts correct permissions for recruiter role', async () => {
+  it('inserts correct permissions for recruiter role (9 — added hr/candidate.export in S18-B2)', async () => {
     const db = createMockDb();
 
     await seedHrRoles(db);
 
     const recruiterPerms = db._insertedValues.filter((v) => v.role === 'recruiter');
-    expect(recruiterPerms).toHaveLength(8);
+    expect(recruiterPerms).toHaveLength(9);
 
     const permNames = recruiterPerms.map((v) => v.permission);
     expect(permNames).toContain('hr/candidate.create');
@@ -300,8 +300,9 @@ describe('seedAllHr', () => {
 
     await seedAllHr(db);
 
-    // 18 permissions + 4 templates + 2 servers = 24 inserts
-    expect(db._insertedValues).toHaveLength(24);
+    // 19 permissions + 4 templates + 2 servers = 25 inserts (was 18+4+2=24
+    // before S18-B2 added hr/candidate.export)
+    expect(db._insertedValues).toHaveLength(25);
   });
 });
 
@@ -326,7 +327,7 @@ describe('seed idempotency', () => {
     await seedAllHr(db);
     await seedAllHr(db);
 
-    // 24 * 2 = 48 total inserts (onConflictDoNothing handles duplicates)
-    expect(db._insertedValues).toHaveLength(48);
+    // 25 * 2 = 50 total inserts (onConflictDoNothing handles duplicates)
+    expect(db._insertedValues).toHaveLength(50);
   });
 });

@@ -1292,12 +1292,26 @@ export const getReplayDlqEventsFn = lazy(() =>
 // pii read audit middleware (OBS-04)
 // ---------------------------------------------------------------------------
 
+/**
+ * S18-B2 (Codex/Gemini multi-review-style fix): the prior wiring
+ * hardcoded `actor.type: 'system'` regardless of caller, which
+ * defeats the entire point of S18-A1's anomaly-gate observability
+ * fix on the HR scope — `audit_logs.user_id` is only populated when
+ * `actor.type === 'user'` per audit-service.ts:61, and the anomaly
+ * aggregate's `WHERE user_id = $actor` filter doesn't match
+ * 'system'-tagged rows. Now the actor type defaults to 'user'
+ * because every PII read DOES have a real user attribution
+ * (route handlers must extract authenticated user before calling
+ * auditPiiReadBulk/Export). The very limited 'system' case (an
+ * automated reconciliation scan reading PII) can be added with a
+ * type-discriminated emit shape later if needed.
+ */
 export const getPiiReadAuditMiddleware = lazy(() =>
   createPiiReadAuditMiddleware({
     emit: async (event) => {
       const auditService = getAuditService();
       await auditService.emit({
-        actor: { id: event.actor, type: 'system' },
+        actor: { id: event.actor, type: 'user' },
         action: event.action,
         resource: event.resource,
         metadata: event.metadata,

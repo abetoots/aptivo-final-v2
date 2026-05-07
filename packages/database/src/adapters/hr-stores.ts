@@ -28,6 +28,20 @@ export interface CandidateStore {
   findById(id: string): Promise<CandidateRecord | null>;
   findByEmail(email: string): Promise<CandidateRecord | null>;
   updateStatus(id: string, status: string): Promise<void>;
+  /**
+   * S18-B2: paginated list for the /api/hr/candidates and
+   * /api/hr/employees endpoints. `status` filter is optional —
+   * omitted means all statuses; supplied filters by exact match.
+   * Hard cap of 200 rows per page to bound memory + the audit
+   * `recordCount` magnitude (the anomaly gate's per-actor volume
+   * scoring is meaningful only when each emit reflects a bounded
+   * read).
+   */
+  list(params?: {
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<readonly CandidateRecord[]>;
 }
 
 export interface CandidateRecord {
@@ -139,6 +153,33 @@ export function createDrizzleCandidateStore(db: DrizzleClient): CandidateStore {
         .update(candidates)
         .set({ status, updatedAt: new Date() })
         .where(eq(candidates.id, id));
+    },
+
+    async list(params) {
+      const limit = Math.min(params?.limit ?? 50, 200);
+      const offset = params?.offset ?? 0;
+      const rows = params?.status
+        ? await db
+            .select()
+            .from(candidates)
+            .where(eq(candidates.status, params.status))
+            .limit(limit)
+            .offset(offset)
+        : await db
+            .select()
+            .from(candidates)
+            .limit(limit)
+            .offset(offset);
+      return rows.map((r: typeof candidates.$inferSelect) => ({
+        id: r.id,
+        name: r.name,
+        email: r.email,
+        phone: r.phone,
+        resumeFileId: r.resumeFileId,
+        skills: r.skills,
+        status: r.status,
+        consentStatus: r.consentStatus,
+      }));
     },
   };
 }
