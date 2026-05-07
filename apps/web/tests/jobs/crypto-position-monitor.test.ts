@@ -394,6 +394,11 @@ describe('S18-B1: position monitor cron — orchestration', () => {
   });
 
   it('batches getCurrentPrices on distinct tokens only (no duplicate calls)', async () => {
+    // Round-2 review fix (Gemini MEDIUM): both prices are between
+    // SL (2950) and TP (3100) so no position triggers close.
+    // Previously BTC was at 60000 — far above TP — which triggered a
+    // close that called executeOrder without a mock return, producing
+    // a stderr TypeError. Test asserts batching behaviour only.
     mockStore.findOpen.mockResolvedValue([
       makePosition({ id: 'pos-1', token: 'ETH' }),
       makePosition({ id: 'pos-2', token: 'ETH' }),
@@ -402,7 +407,7 @@ describe('S18-B1: position monitor cron — orchestration', () => {
     mockMcp.getCurrentPrices.mockResolvedValue(
       Result.ok([
         { symbol: 'ETH', price: '3000.00', observedAt: 't' },
-        { symbol: 'BTC', price: '60000.00', observedAt: 't' },
+        { symbol: 'BTC', price: '3000.00', observedAt: 't' },
       ]),
     );
 
@@ -412,6 +417,8 @@ describe('S18-B1: position monitor cron — orchestration', () => {
     const tokens = mockMcp.getCurrentPrices.mock.calls[0]![0] as readonly string[];
     expect(tokens).toEqual(expect.arrayContaining(['ETH', 'BTC']));
     expect(tokens).toHaveLength(2); // not 3 — distinct
+    // none of the prices crossed; executeOrder must not be called
+    expect(mockMcp.executeOrder).not.toHaveBeenCalled();
   });
 
   it('skips a position when its token has no quote in the batch', async () => {

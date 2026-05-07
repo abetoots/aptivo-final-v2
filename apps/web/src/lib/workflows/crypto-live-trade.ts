@@ -133,23 +133,28 @@ export const liveTradeFn = inngest.createFunction(
     // and tpPrice would let an obviously-malformed order reach HITL,
     // where a distracted approver could let it through. Validating
     // the band here rejects mathematical impossibilities before any
-    // cost is incurred. The band invariant:
+    // cost is incurred. Invariants:
     //   long:  slPrice < tpPrice (else position is "stop above
     //          target", which exits with reason='sl' on entry)
     //   short: tpPrice < slPrice (mirror)
-    // Numbers parsed once; failure surfaces a structured rejection.
+    // Plus positivity (round-2 Gemini LOW): crypto prices and trade
+    // sizes are always > 0; negative or zero values are nonsensical
+    // even though the math wouldn't NaN.
     const slNum = parseFloat(slPrice);
     const tpNum = parseFloat(tpPrice);
+    const sizeNum = parseFloat(sizeUsd);
     const bandValid = direction === 'long' ? slNum < tpNum : tpNum < slNum;
-    if (Number.isNaN(slNum) || Number.isNaN(tpNum) || !bandValid) {
-      const reason = `malformed SL/TP band: direction=${direction}, slPrice=${slPrice}, tpPrice=${tpPrice}`;
+    const positiveNumbers =
+      slNum > 0 && tpNum > 0 && sizeNum > 0 && Number.isFinite(slNum) && Number.isFinite(tpNum) && Number.isFinite(sizeNum);
+    if (!positiveNumbers || !bandValid) {
+      const reason = `malformed inputs: direction=${direction}, slPrice=${slPrice}, tpPrice=${tpPrice}, sizeUsd=${sizeUsd}`;
       await step.run('audit-band-invalid', () =>
         emitAudit({
           actor: { id: requestedBy, type: 'user' },
           action: 'crypto.trade.live-band-invalid',
           resource: { type: 'trade-signal', id: signalId },
           domain: 'crypto',
-          metadata: { reason, token, direction, departmentId, slPrice, tpPrice },
+          metadata: { reason, token, direction, departmentId, slPrice, tpPrice, sizeUsd },
         }),
       );
       return { status: 'rejected', signalId, reason };

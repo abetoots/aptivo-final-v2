@@ -202,7 +202,7 @@ describe('S18-B1: crypto live-trade workflow', () => {
 
     expect(result).toMatchObject({
       status: 'rejected',
-      reason: expect.stringContaining('malformed SL/TP band'),
+      reason: expect.stringContaining('malformed inputs'),
     });
     expect(mockLlmGateway.complete).not.toHaveBeenCalled();
     expect(mockAuditService.emit).toHaveBeenCalledWith(
@@ -231,6 +231,29 @@ describe('S18-B1: crypto live-trade workflow', () => {
     const { result } = await engine.execute();
 
     expect(result).toMatchObject({ status: 'rejected', reason: expect.stringContaining('malformed') });
+  });
+
+  it('rejects with band-invalid on non-positive prices (Gemini round-2 LOW fix)', async () => {
+    // crypto prices are physically > 0; negative or zero is malformed
+    const engine = engineFor({
+      events: triggerEvent({ slPrice: '-100.00', tpPrice: '3100.00' }),
+    });
+
+    const { result } = await engine.execute();
+
+    expect(result).toMatchObject({ status: 'rejected', reason: expect.stringContaining('malformed') });
+    expect(mockLlmGateway.complete).not.toHaveBeenCalled();
+  });
+
+  it('rejects with band-invalid on zero or negative sizeUsd', async () => {
+    const engine = engineFor({
+      events: triggerEvent({ sizeUsd: '0' }),
+    });
+
+    const { result } = await engine.execute();
+
+    expect(result).toMatchObject({ status: 'rejected', reason: expect.stringContaining('malformed') });
+    expect(mockLlmGateway.complete).not.toHaveBeenCalled();
   });
 
   it('errors out when the LLM analyze step fails', async () => {

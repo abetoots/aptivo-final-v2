@@ -45,6 +45,7 @@ import {
   timestamp,
   numeric,
   index,
+  uniqueIndex,
 } from 'drizzle-orm/pg-core';
 import { tradeSignals } from './crypto-domain.js';
 import { departments } from './departments.js';
@@ -125,5 +126,21 @@ export const cryptoPositions = pgTable(
     index('crypto_positions_dept_closed_idx').on(table.departmentId, table.closedAt),
     // monitor cron groups by token for batch price lookup
     index('crypto_positions_token_idx').on(table.token),
+    // Round-2 multi-model review (Gemini HIGH): a workflow re-run
+    // (manual re-trigger or Inngest replay) would dedupe the venue
+    // entry fill via `clientOrderId='live-${signalId}'` but still
+    // create a SECOND position row with a fresh UUID. The cron would
+    // then see two open positions and emit two DIFFERENT exit orders
+    // (`clientOrderId='exit-${positionId}-${reason}'` differs because
+    // positionId differs) — double-sell at the venue.
+    //
+    // The unique index on signal_id closes this. PostgreSQL UNIQUE
+    // allows multiple NULLs by default (standard SQL semantics: two
+    // NULLs are not equal), so admin-driven manual positions without
+    // a backing signal can still coexist; only repeat-signalId rows
+    // are blocked. The store's `create()` will surface the unique
+    // violation as an error to the workflow's `store-position` step,
+    // which is the correct behaviour for a defensive constraint.
+    uniqueIndex('crypto_positions_signal_unique_idx').on(table.signalId),
   ],
 );
