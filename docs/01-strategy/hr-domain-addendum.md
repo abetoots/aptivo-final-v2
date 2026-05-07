@@ -405,4 +405,29 @@ AI-augmented HR operations platform for an outsourcing digital agency, automatin
 
 ---
 
+## 13. Re-validation 2026-05
+
+> **UPDATED 2026-05-07 (post-stress-test disclosure)**: original NEEDS-PIVOT verdict below assumed an existing client base that does not actually exist. The HR domain addendum was speculative ("built on spec hoping to find a buyer"); the team's real expertise is GHL agency operations + RE/business brokerage VA support, not HR-recruiting. **The HR domain is hereby RETIRED as a commercial wedge** — see `market-revalidation-2026-05.md` §6.6. The platform primitives built under HR (Sprint 4 hash-chain, Sprint 11 multi-approver HITL, Sprint 12 anomaly detection, Sprint 18 PII audit) remain valuable cross-domain infrastructure and are reusable across G (GHL overlay), D (RE/brokerage), and A' (dermatology) plays. The HR-recruiting go-to-market specifically is dropped.
+
+**Original verdict (preserved as historical record)**:
+
+**Verdict (May 2026)**: **NEEDS PIVOT** — confidence HIGH. The HR-tooling thesis is *strengthened* by Q1–Q2 2026 vendor-AI litigation (Mobley v. Workday class certified May 2025; 1.1B applications disclosed) and a stack of 2026 regulatory deadlines (NPC Advisory 2024-04, EU AI Act Annex III/Article 14 effective 2026-08-02, CA CRC effective 2025-10-01, Colorado SB 24-205 effective 2026-06-30, Texas TRAIGA + Illinois HB 3773 effective 2026-01-01). The agency-business-model thesis ("supply low-cost VA labor to foreign SMBs") is materially weakening as the small-PH-VA-agency × foreign-SMB-client cohort contracts (Athena 270 VAs terminated 2026-01-18 to -01-20; Wipro Cebu 400+ on floating status from 2025-12-15; IBPAP's own contraction warning 2026-02-25; Upwork writing/translation in negative growth; Fiverr buyer count down to 2.9M with +15% per-buyer spend), while GCCs and higher-value managed-outcomes work grow.
+
+**Operator decision 2026-05-07**: all corrections below are APPROVED for implementation. The Feb-2026 baseline (sections 1–12) is preserved as historical record; this section captures the May-2026 amendments that supersede where they conflict.
+
+**Specific corrections approved** (doc-level, no engineering):
+- §1.4 — reframe agency thesis from "VA labor for foreign SMBs" to "AI-augmented managed outcomes for clients exposed to vendor-AI liability + AI-recruitment compliance."
+- §3.3 — correct PII retention legal basis (consent is not the only lawful basis under DPA; employment records can rest on contract / legal-obligation).
+- §5.1 — add NPC Advisory No. 2024-04 (issued 2024-12-19) as the central PH-AI-recruitment compliance hook (mandatory documented decision controls + meaningful human intervention + bias monitoring + data-accuracy via candidate confirmation).
+- §5.4 — correct GDPR framing: the Philippines does NOT have an adequacy decision; cross-border transfers from EU controllers require SCCs or other Article 46 mechanism.
+- §9 — replace BO-HR-003 "90% candidate retention within 2 years" KPI with a pipeline-quality KPI (e.g., candidate-stage-velocity SLA or rejection-decision audit-trail completeness) — the original KPI conflates employment retention with pipeline performance.
+
+**Operator priority — TTFR (time-to-first-revenue)**: per `market-revalidation-2026-05.md` §6.5, the agency reframe is also the **first-revenue play** under TTFR criterion. Multi-model ranking C > B > A (both Codex and Gemini 3 Pro converged): the HR-existing-clients managed-outcomes pivot is estimated 0.5–2 months to first paying customer (vs. 9–15 months for Healthcare PA). The next 2–4 weeks: run a "Shadow Audit & SLA Upsell" sprint on 3 best existing clients — Vendor-AI Liability Audit leveraging the existing Sprint 4 hash-chain + Sprint 11 multi-approver + Sprint 18 PII audit, pitched as a managed-outcomes SLA at ~30% premium. 30-day gate: 2 paid upgrades or 1 client at $1.5K+ MRR.
+
+**Full evidence + repositioning rationale**: see `docs/01-strategy/market-revalidation-2026-05.md` §3 (HR Domain Verdict), §6.1 (recommended actions), and §6.5 (TTFR-prioritized decision). Source citations are consolidated in §7 of that document.
+
+**What this section is NOT**: a rewrite of the Feb-2026 baseline. Section history is preserved deliberately so the diff between Feb and May 2026 views remains readable.
+
+---
+
 **END OF HR DOMAIN ADDENDUM**

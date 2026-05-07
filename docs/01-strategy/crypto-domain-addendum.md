@@ -317,4 +317,24 @@ A semi-autonomous, LLM-agnostic AI agent ecosystem designed to transform crypto 
 
 ---
 
+## 12. Re-validation 2026-05
+
+**Verdict (May 2026)**: **NEEDS PIVOT** (not sunset) — confidence HIGH. The information-edge moat thesis (smart-money tracking + narrative scouting + L2-First + on-chain replacement of social) is materially obsolete by Q2 2026; the platform-engineering investment is intact, but the trading-edge framing must reposition. The crypto landscape has bifurcated into a clarified, institutional-friendly base layer (MiCA hard cutoff 2026-07-01; SEC interpretive release 2026-03-17 with 5-category taxonomy) plus a ferociously efficient retail-speculation layer (Solana 30.6% Q1 2026 DEX spot share; Hyperliquid ~70% on-chain perp share by April 2026 ≈ $2T annualized). The data-cost moat that justified the original information-edge thesis has narrowed in the wrong direction — Arkham free entity labels, Nansen $99/mo, Dune $75/mo make retail tooling parity higher than ever.
+
+**Operator decision 2026-05-07**: all corrections below are APPROVED for implementation, alongside extending this domain into Stablecoin/PPSI compliance under the GENIUS Act NPRM as the "Crypto v2" personal track (see `market-revalidation-2026-05.md` §5.2 #2 and §6.5). The Feb-2026 baseline is preserved as historical record.
+
+**Specific corrections approved** (doc-level + small MCP-tool extension):
+- §1.3 / §2.1 BO-CRYPTO-001 — qualify the "40h → 10–20h via AI" claim as conditional on HITL-gated execution + venue automation, not raw screen-time substitution. AI-agent saturation has pushed arbitrage decay into seconds-not-minutes.
+- §6 / §6.1 — add explicit MiCA + US-SEC + (if applicable) GENIUS Act NPRM compliance posture; do not rely solely on exchange KYC/AML. Verify USDT MiCA status before any EU-routed-pair work (one search snippet contradicted primary sources; treat as unverified).
+- §7.1 — extend MCP venue coverage from `Etherscan/Basescan/Arbiscan + CoinGecko + Binance/Coinbase` to include Solana RPC + Helius (or equivalent) + Hyperliquid API + Jupiter/Raydium DEX data. Estimated ~5 SP for connector-only.
+- §7.2 — replace "L2-First" thesis: Base/Arbitrum/Optimism remain leaders for *institutional* TVL, but speculation-heavy retail flow has migrated to Solana (Pump.fun crossed $1B revenue Feb 2026 with 11M+ tokens) and Hyperliquid for perps.
+- §7.2 — replace "Twitter/X replacement: DEX volume + on-chain flows" sole-substitute framing. X went pay-per-use 2026-02-06 with 2M post-read/mo cap; URL-post surcharge reportedly +1,900% — comprehensive X ingestion is unaffordable on the budget. **But** decentralized social did NOT step in (Farcaster <20K DAU late 2025; founders stepped back Jan 2026; Lens transitioned ownership Jan 2026). Multi-source signal model required: third-party X aggregators (snippet-priced) + Telegram/Discord scrapers + on-chain whale-confirmation, with HITL gating any social-signal-driven decision.
+- §9.1 — tighten phrasing from "information edge via smart-money tracking + narrative scouting" to "smart-money convergence and exchange-inflow as context indicators" — the durable 2026 patterns (3+ historically-profitable wallets converging on same token within a week; exchange-inflow-from-known-wallets → 24–72h selling pressure), not the obsolete ones.
+
+**Full evidence + repositioning rationale**: see `docs/01-strategy/market-revalidation-2026-05.md` §4 (Crypto Domain Verdict) and §6.2 (recommended actions). The May-2026 doc also surfaces a "Crypto v2" adjacent niche — Stablecoin / PPSI compliance under GENIUS Act NPRM (NPRM 2026-04-08, comment closes 2026-06-09) — that extends this domain rather than competes with it.
+
+**What this section is NOT**: a rewrite of the Feb-2026 baseline. Section history is preserved deliberately so the diff between Feb and May 2026 views remains readable.
+
+---
+
 **END OF CRYPTO DOMAIN ADDENDUM**
