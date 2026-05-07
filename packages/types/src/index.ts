@@ -71,6 +71,11 @@ export type {
   HitlDecisionRecorded,
 } from './events/hitl.js';
 
+// S18-C1b: canonical UsageRecord + UsageStore — gateway and database
+// adapter both reference this single source of truth (was duplicated
+// with manual drift-mirroring across two packages).
+export type { UsageRecord, UsageStore } from './usage-record.js';
+
 // Auth types (ID2-02: shared across OIDC + SAML adapters)
 export { ClaimMappingSchema, SamlAssertionSchema } from './auth.js';
 export type {

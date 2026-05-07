@@ -183,3 +183,13 @@ export type {
   WebAuthnCredentialStore as DrizzleWebAuthnCredentialStore,
   WebAuthnCredential as DrizzleWebAuthnCredential,
 } from './webauthn-store.js';
+
+// S18-C1d: approval-SLA queries (replaces the services.ts stub
+// `getRequests: () => []`); joins approval_policies for policyType
+// per AD-S18-7 (avoids hot-table migration).
+export { createApprovalSlaQueries } from './approval-sla-queries.js';
+export type {
+  ApprovalSlaQueries,
+  ApprovalSlaRequestRow,
+  ApprovalSlaQueriesFilters,
+} from './approval-sla-queries.js';

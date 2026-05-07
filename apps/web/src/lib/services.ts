@@ -1116,18 +1116,19 @@ export const getMetricService = lazy(() =>
 // ---------------------------------------------------------------------------
 
 export const getApprovalSlaService = lazy(() => {
-  const requestStore = createDrizzleHitlRequestStore(
-    db() as unknown as Parameters<typeof createDrizzleHitlRequestStore>[0],
+  // S18-C1d: real impl replacing the stub `getRequests: () => []`.
+  // Per AD-S18-7 the policyType is derived via a left-join on
+  // approval_policies — avoids a denormalised column on the hot
+  // hitl_requests table. Legacy single-approver requests with null
+  // policy_id fall back to 'single' so SLA-target lookup hits a
+  // configured target.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createApprovalSlaQueries } = require('@aptivo/database/adapters') as typeof import('@aptivo/database/adapters');
+  const queries = createApprovalSlaQueries(
+    db() as unknown as Parameters<typeof createApprovalSlaQueries>[0],
   );
-
   return createApprovalSlaService({
-    getRequests: async (filters) => {
-      // delegate to hitl request store — maps stored records to the shape
-      // expected by the sla service. in production the store would support
-      // filtering by status/date; here we provide a best-effort shim.
-      void filters;
-      return [];
-    },
+    getRequests: (filters) => queries.getRequestsForSla(filters),
   });
 });
 
@@ -1784,11 +1785,63 @@ export const getTicketEscalationService = lazy(() => {
       if (!r.ok) appLog.warn('ticket_audit_emit_failed', { action: input.action });
     },
     logger: { warn: (event, ctx) => appLog.warn(event, ctx) },
-    // notifications: deferred to S18 — CT-3 ships the service contract
-    // and audit emission. Tier-change notifications wire in alongside
-    // FA3-02 budget notifications as a single notification-adapter pass.
+    // S18-C1c: tier-change notifications wired with the AD-S18-6
+    // SET-NX-EX dedupe pattern from S18-B3. Notifier returns null
+    // when neither the platform NotificationAdapter nor the dedupe
+    // primitive is configured (test/dev environments); the
+    // escalation service treats `notifications: undefined` as
+    // "skip notify" so the advance flow continues normally.
+    notifications: getTicketEscalationNotifier(),
   });
 });
+
+// S18-C1c: builder for the tier-change notification adapter. Wraps
+// the platform NotificationAdapter (Novu/SMTP failover) with the
+// AD-S18-6 dedupe primitive scoped per (ticketId, fromTier, toTier).
+// Returns undefined in environments without session-Redis (the
+// dedupe backing) — the escalation service treats undefined as
+// "no notifications" and the advance flow is unaffected.
+function getTicketEscalationNotifier():
+  | ReturnType<typeof import('./case-tracking/ticket-escalation-notifier.js').createTicketEscalationNotifier>
+  | undefined {
+  const sessionRedis = getSessionRedis();
+  if (!sessionRedis) {
+    appLog.info('ticket_escalation_notifier_disabled', {
+      reason: 'no session Redis configured (test/dev)',
+    });
+    return undefined;
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { createTicketEscalationNotifier } = require('./case-tracking/ticket-escalation-notifier.js') as typeof import('./case-tracking/ticket-escalation-notifier.js');
+
+  const dedupeRedis = {
+    async set(key: string, value: string, options: { onlyIfNotExists: true; expirySeconds: number }) {
+      const r = sessionRedis as unknown as {
+        set: (k: string, v: string, opts: { nx?: boolean; ex?: number }) => Promise<unknown>;
+      };
+      const result = await r.set(key, value, {
+        nx: options.onlyIfNotExists,
+        ex: options.expirySeconds,
+      });
+      return result === 'OK';
+    },
+    async del(key: string) {
+      const r = sessionRedis as unknown as { del: (k: string) => Promise<number> };
+      return r.del(key);
+    },
+  };
+
+  return createTicketEscalationNotifier({
+    platformAdapter: getNotificationAdapter(),
+    dedupeRedis,
+    recipientId: process.env.TICKET_ESCALATION_RECIPIENT_ID ?? null,
+    logger: {
+      warn: (event, ctx) => appLog.warn(event, ctx),
+      info: (event, ctx) => appLog.info(event, ctx),
+    },
+  });
+}
 
 export const getTicketService = lazy(() => {
   // import lazily to avoid pulling case-tracking into every services

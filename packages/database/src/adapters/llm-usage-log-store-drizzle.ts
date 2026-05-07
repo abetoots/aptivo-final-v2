@@ -9,45 +9,15 @@
 import type { DrizzleClient } from './types.js';
 import { llmUsageLogs } from '../schema/llm-usage.js';
 
-// -- local types (mirroring @aptivo/llm-gateway UsageStore) --
-//
-// DRIFT RISK: this interface is intentionally duplicated from
-// `packages/llm-gateway/src/usage/usage-logger.ts` so the database
-// package doesn't depend on llm-gateway (architectural layering:
-// database is a leaf of domain packages). Any widening of the
-// gateway's `requestType` union (e.g. adding 'safety_inference' in
-// LLM3-02) must be mirrored here manually.
-//
-// S17 task: move `UsageRecord` to `@aptivo/types` so one definition
-// serves both sides. Until then, any PR that touches the gateway's
-// UsageRecord must also touch this file.
-
-export interface UsageRecord {
-  workflowId?: string;
-  workflowStepId?: string;
-  domain: string;
-  provider: string;
-  model: string;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  costUsd: number;
-  // 'safety_inference' added in LLM3-02 for the ML injection classifier so
-  // its spend is attributed alongside completion/embedding traffic. The DB
-  // column is varchar(50) with no check constraint — TS union is authoritative.
-  requestType: 'completion' | 'embedding' | 'vision' | 'safety_inference';
-  latencyMs: number;
-  wasFallback: boolean;
-  primaryProvider?: string;
-  // S17-B1: department attribution. Mirrors the gateway's UsageRecord
-  // field (full @aptivo/types consolidation remains an S18 refactor).
-  // Column on llm_usage_logs is nullable; unstamped rows write null.
-  departmentId?: string;
-}
-
-export interface UsageStore {
-  insert(record: UsageRecord): Promise<void>;
-}
+// S18-C1b: UsageRecord + UsageStore now live in @aptivo/types so the
+// gateway and the database adapter share one definition instead of
+// mirroring the shape across two packages with drift-risk comments.
+// The earlier "DRIFT RISK / S17 task" comment block here documented
+// exactly this consolidation as the next step; that step is now done.
+// Re-exported for back-compat with anyone who imported from
+// '@aptivo/database/adapters'.
+export type { UsageRecord, UsageStore } from '@aptivo/types';
+import type { UsageRecord, UsageStore } from '@aptivo/types';
 
 // -- factory --
 

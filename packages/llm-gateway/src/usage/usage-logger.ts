@@ -5,52 +5,20 @@
  * @reuse SP-08 CostLedger rewritten as DB-backed
  */
 
-import type { CompletionRequest, CompletionResponse, Domain } from '../providers/types.js';
+import type { CompletionRequest, CompletionResponse } from '../providers/types.js';
 import { calculateTotalCost } from '../cost/calculator.js';
 import type { PricingLogger } from '../cost/pricing.js';
 
 // ---------------------------------------------------------------------------
-// usage record
+// S18-C1b: UsageRecord + UsageStore now live in @aptivo/types so the
+// gateway and the database adapter share one source of truth instead
+// of mirroring the shape across two packages with drift-risk comments.
+// Re-exported here for back-compat with any caller that imported from
+// '@aptivo/llm-gateway'.
 // ---------------------------------------------------------------------------
 
-export interface UsageRecord {
-  workflowId?: string;
-  workflowStepId?: string;
-  domain: Domain;
-  provider: string;
-  model: string;
-  promptTokens: number;
-  completionTokens: number;
-  totalTokens: number;
-  costUsd: number;
-  /**
-   * Request type. `safety_inference` added in LLM3-02 for the ML injection
-   * classifier so its spend is attributed alongside completion/embedding
-   * traffic. The DB column is a varchar(50) with no check constraint — the
-   * TS union is the source of truth.
-   */
-  requestType: 'completion' | 'embedding' | 'vision' | 'safety_inference';
-  latencyMs: number;
-  wasFallback: boolean;
-  primaryProvider?: string;
-  /**
-   * S17-B1: department attribution. Stamped by the gateway from the
-   * resolved actor (`ActorContext.departmentId`). When unset the row
-   * goes in unstamped — the column on `llm_usage_logs` is nullable.
-   * `DepartmentBudgetService.getSpendReport` reports `coverageLevel:
-   * 'none'` for ranges where every row is unstamped.
-   */
-  departmentId?: string;
-}
-
-// ---------------------------------------------------------------------------
-// usage store interface (dependency injection for DB)
-// ---------------------------------------------------------------------------
-
-export interface UsageStore {
-  /** inserts a usage record (idempotent by request context) */
-  insert(record: UsageRecord): Promise<void>;
-}
+export type { UsageRecord, UsageStore } from '@aptivo/types';
+import type { UsageRecord, UsageStore } from '@aptivo/types';
 
 // ---------------------------------------------------------------------------
 // usage logger
@@ -107,9 +75,11 @@ export class UsageLogger {
    * LLM3-02: Records a safety-inference call (e.g. the ML injection
    * classifier). These calls don't produce tokens or completions — only
    * a per-call cost and latency — so the token fields are zeroed.
-   * `domain` is typed as `string` (not the narrow providers.Domain union)
-   * so the safety package's `SafetyInferenceRecord` — which uses `string`
-   * for cross-boundary compatibility — can be forwarded without a cast.
+   *
+   * Post-S18-C1b: `UsageRecord.domain` is `string` in the canonical
+   * @aptivo/types definition, so this method's `domain: string` input
+   * can be forwarded directly with no cast. The earlier `as Domain`
+   * narrowing was a TS-level constraint that the runtime never enforced.
    */
   async logSafetyInference(input: {
     domain: string;
@@ -119,11 +89,7 @@ export class UsageLogger {
     latencyMs: number;
   }): Promise<void> {
     await this.store.insert({
-      // cast at the boundary: `UsageRecord.domain` is the narrow
-      // providers.Domain union; the safety package (and the DB column
-      // itself) accept any string. The narrow type is a conservative
-      // TS-level constraint, not a runtime enforcement.
-      domain: input.domain as Domain,
+      domain: input.domain,
       provider: input.provider,
       model: input.model,
       promptTokens: 0,
