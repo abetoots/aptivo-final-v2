@@ -1,0 +1,28 @@
+{
+  "name": "@aptivo/redis",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@aptivo/types": "workspace:*"
+  },
+  "optionalDependencies": {
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "@aptivo/typescript-config": "workspace:*",
+    "typescript": "^5.7.3",
+    "vitest": "^4.0.18"
+  }
+}
