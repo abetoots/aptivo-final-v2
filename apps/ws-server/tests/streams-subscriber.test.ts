@@ -66,7 +66,7 @@ describe('S18-A2: createStreamsSubscriber — factory validation', () => {
     expect(() =>
       createStreamsSubscriber({
         redis,
-        dedupeStore: createDedupeStore(redis),
+        dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
         bridge,
         logger: makeLogger(),
         instanceId: '',
@@ -80,7 +80,7 @@ describe('S18-A2: createStreamsSubscriber — factory validation', () => {
     expect(() =>
       createStreamsSubscriber({
         redis,
-        dedupeStore: createDedupeStore(redis),
+        dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
         bridge,
         logger: makeLogger(),
         instanceId: '   ',
@@ -94,7 +94,7 @@ describe('S18-A2: createStreamsSubscriber — factory validation', () => {
     expect(() =>
       createStreamsSubscriber({
         redis,
-        dedupeStore: createDedupeStore(redis),
+        dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
         bridge,
         logger: makeLogger(),
         instanceId: 'A',
@@ -113,7 +113,7 @@ describe('S18-A2: createStreamsSubscriber — start creates per-instance consume
     const { bridge } = makeBridge();
     const sub = createStreamsSubscriber({
       redis,
-      dedupeStore: createDedupeStore(redis),
+      dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
       bridge,
       logger: makeLogger(),
       instanceId: 'inst-A',
@@ -134,7 +134,7 @@ describe('S18-A2: createStreamsSubscriber — start creates per-instance consume
     const logger = makeLogger();
     const sub = createStreamsSubscriber({
       redis,
-      dedupeStore: createDedupeStore(redis),
+      dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
       bridge,
       logger,
       instanceId: 'inst-B',
@@ -158,7 +158,7 @@ describe('S18-A2: createStreamsSubscriber — consumes entries, dedupes, feeds b
     const { bridge, published } = makeBridge();
     const sub = createStreamsSubscriber({
       redis,
-      dedupeStore: createDedupeStore(redis),
+      dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
       bridge,
       logger: makeLogger(),
       instanceId: 'inst-A',
@@ -182,7 +182,7 @@ describe('S18-A2: createStreamsSubscriber — consumes entries, dedupes, feeds b
     const { bridge, published } = makeBridge();
     const sub = createStreamsSubscriber({
       redis,
-      dedupeStore: createDedupeStore(redis),
+      dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
       bridge,
       logger: makeLogger(),
       instanceId: 'inst-A',
@@ -201,20 +201,23 @@ describe('S18-A2: createStreamsSubscriber — consumes entries, dedupes, feeds b
     expect(published).toHaveLength(1); // dedupe collapsed to one publish
   });
 
-  it('AD-S18-2 invariant: TWO subscribers with distinct instanceIds both receive every entry (broadcast fan-out)', async () => {
-    // The load-bearing test for A2 — what S17 list+polling could not provide.
+  it('AD-S18-2 invariant: TWO subscribers against the SAME Redis both receive every entry (broadcast fan-out, per-instance dedupe)', async () => {
+    // Load-bearing for A2. Earlier draft used SEPARATE in-memory Redis
+    // instances for each subscriber's dedupe store, which masked
+    // Codex round-2's catch: a global `ws:dedupe:<eventId>` key would
+    // have one instance suppress the others' publishes. Post-fix the
+    // dedupe key is `ws:dedupe:<instanceId>:<eventId>`, so two
+    // instances against the SHARED Redis still both fan out.
     const redis = createInMemoryWsRedis();
 
     const a = makeBridge();
     const b = makeBridge();
 
-    // Each subscriber has its OWN dedupe store so they don't suppress
-    // each other's publishes. (In production both share the same TCP
-    // Redis, but the dedupe is per-eventId across instances; for this
-    // test, separate stores avoids cross-contamination.)
     const subA = createStreamsSubscriber({
       redis,
-      dedupeStore: createDedupeStore(createInMemoryWsRedis()),
+      // SAME redis backing each dedupe store; distinct instanceIds
+      // keep their keyspaces independent.
+      dedupeStore: createDedupeStore(redis, { instanceId: 'A' }),
       bridge: a.bridge,
       logger: makeLogger(),
       instanceId: 'A',
@@ -223,7 +226,7 @@ describe('S18-A2: createStreamsSubscriber — consumes entries, dedupes, feeds b
     });
     const subB = createStreamsSubscriber({
       redis,
-      dedupeStore: createDedupeStore(createInMemoryWsRedis()),
+      dedupeStore: createDedupeStore(redis, { instanceId: 'B' }),
       bridge: b.bridge,
       logger: makeLogger(),
       instanceId: 'B',
@@ -256,7 +259,7 @@ describe('S18-A2: createStreamsSubscriber — consumes entries, dedupes, feeds b
     const logger = makeLogger();
     const sub = createStreamsSubscriber({
       redis,
-      dedupeStore: createDedupeStore(redis),
+      dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
       bridge,
       logger,
       instanceId: 'inst-A',
@@ -286,7 +289,7 @@ describe('S18-A2: createStreamsSubscriber — consumes entries, dedupes, feeds b
     const logger = makeLogger();
     const sub = createStreamsSubscriber({
       redis,
-      dedupeStore: createDedupeStore(redis),
+      dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
       bridge,
       logger,
       instanceId: 'inst-A',
@@ -308,12 +311,46 @@ describe('S18-A2: createStreamsSubscriber — consumes entries, dedupes, feeds b
     expect(published).toHaveLength(0);
   });
 
+  it('S18-A2 R1: subscriber passes noAck:true to xreadgroup so the PEL stays empty', async () => {
+    // post-A2 round-1 fix: without NOACK or an XACK call the PEL grows
+    // unbounded for healthy groups (Codex+Gemini both flagged this).
+    // The in-memory stub now models the PEL so we can assert the fix.
+    const redis = createInMemoryWsRedis();
+    const xreadgroupSpy = vi.spyOn(redis, 'xreadgroup');
+    const { bridge } = makeBridge();
+    const sub = createStreamsSubscriber({
+      redis,
+      dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
+      bridge,
+      logger: makeLogger(),
+      instanceId: 'inst-A',
+      blockMs: 0,
+      idleIntervalMs: 30,
+    });
+    await sub.start();
+
+    await redis.xadd('ws:events', { envelope: envelopeJson('evt-1'), eventId: 'evt-1' });
+    await redis.xadd('ws:events', { envelope: envelopeJson('evt-2'), eventId: 'evt-2' });
+
+    await flushTicks(80);
+    await sub.stop();
+
+    // every xreadgroup call passed noAck:true
+    expect(xreadgroupSpy).toHaveBeenCalled();
+    for (const call of xreadgroupSpy.mock.calls) {
+      const opts = call[3] as { noAck?: boolean } | undefined;
+      expect(opts?.noAck).toBe(true);
+    }
+    // PEL is empty because NOACK skipped pending-entry tracking
+    expect(redis._pendingEntryCount('ws:events', 'ws-instance-inst-A')).toBe(0);
+  });
+
   it('stop() awaits in-flight tick + clears the polling timer', async () => {
     const redis = createInMemoryWsRedis();
     const { bridge } = makeBridge();
     const sub = createStreamsSubscriber({
       redis,
-      dedupeStore: createDedupeStore(redis),
+      dedupeStore: createDedupeStore(redis, { instanceId: 'test-inst' }),
       bridge,
       logger: makeLogger(),
       instanceId: 'inst-A',

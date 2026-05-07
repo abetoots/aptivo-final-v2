@@ -177,6 +177,55 @@ describe('S17-WS-PUB: createRedisSubscriber', () => {
     expect(bridge.published).toHaveLength(0);
   });
 
+  it('S18-A2: dual-mode shared dedupeStore suppresses cross-transport duplicates', async () => {
+    // post-A2 round-1 fix: when the ws-server runs both transports
+    // (list + streams) the SAME DedupeStore is passed to both. An
+    // event arriving via the list path that the streams subscriber
+    // already published must NOT fan out a second time. Earlier
+    // implementation used the in-process ring on this side and the
+    // Redis SET ring on the streams side — they didn't share state,
+    // so duplicates leaked.
+    const redis = makeRedis([validEnvelope('e1'), validEnvelope('e2')]);
+
+    // Stub DedupeStore: e1 has already been observed via streams; e2
+    // is fresh. The list subscriber should publish e2 only.
+    const observed = new Set<string>(['e1']);
+    const dedupeStore = {
+      isFirstObservation: vi.fn(async (eventId: string) => {
+        if (observed.has(eventId)) return false;
+        observed.add(eventId);
+        return true;
+      }),
+    };
+    const sub = createRedisSubscriber({ redis, bridge, logger, dedupeStore });
+
+    sub.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(bridge.published.map((e) => e.eventId)).toEqual(['e2']);
+    expect(dedupeStore.isFirstObservation).toHaveBeenCalledWith('e1');
+    expect(dedupeStore.isFirstObservation).toHaveBeenCalledWith('e2');
+    await sub.stop();
+  });
+
+  it('S18-A2: dual-mode dedupeStore is consulted only after the local ring misses', async () => {
+    // optimization sanity: an event already in the local ring shouldn't
+    // hit Redis at all. Saves a round-trip on the hot path.
+    const redis = makeRedis([validEnvelope('e1'), validEnvelope('e1')]);
+    const dedupeStore = { isFirstObservation: vi.fn(async () => true) };
+    const sub = createRedisSubscriber({ redis, bridge, logger, dedupeStore });
+
+    sub.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
+
+    // local ring caught the duplicate — only ONE call to the SET ring
+    expect(bridge.published).toHaveLength(1);
+    expect(dedupeStore.isFirstObservation).toHaveBeenCalledTimes(1);
+    await sub.stop();
+  });
+
   it('evicts the oldest dedupe entry when the ring fills', async () => {
     // ring size 2 → after 3 distinct IDs, the oldest (e1) is no longer remembered
     const redis = makeRedis([

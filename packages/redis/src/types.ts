@@ -68,6 +68,15 @@ export interface XReadGroupOptions {
   readonly count?: number;
   /** Block for up to this many milliseconds when the stream is empty. Default 100ms. */
   readonly blockMs?: number;
+  /**
+   * When true, pass `NOACK` to XREADGROUP so delivered entries skip
+   * the Pending Entry List (PEL). Per AD-S18-2 the ws-server uses
+   * at-most-once semantics — losing a few entries on crash is the
+   * same trade-off as the S17 list subscriber, so NOACK is correct.
+   * Without NOACK the PEL grows unbounded for healthy groups.
+   * Default `false` (matches Redis default; explicit XACK required).
+   */
+  readonly noAck?: boolean;
 }
 
 export interface SetOptions {

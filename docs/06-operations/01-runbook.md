@@ -2133,7 +2133,7 @@ Signed: _________________________ Date: ___________
 
 Per AD-S18-2 (sprint-18-plan §8): `apps/web` publishes `EventFrame` envelopes to TCP Redis Streams via `XADD ws:events MAXLEN ~ 50000`; each `apps/ws-server` instance creates its OWN consumer group (`ws-instance-<WS_INSTANCE_ID>`) and reads via `XREADGROUP`. Single XADD writes once; every consumer group reads it independently → broadcast fan-out (the load-bearing claim that S17 list+polling could not satisfy because RPOP is single-consumer per item).
 
-A shared Redis-SET dedupe ring (`SET ws:dedupe:<eventId> 1 NX EX 3600`) handles cross-transport dedupe during the `dual` cutover window: each instance subscribes to BOTH transports, the SET succeeds for the first writer and fails for the second, so each logical event fans out exactly once even when both transports deliver it.
+A per-instance Redis-SET dedupe ring (`SET ws:dedupe:<WS_INSTANCE_ID>:<eventId> 1 NX EX 3600`) handles cross-transport dedupe during the `dual` cutover window: each instance subscribes to BOTH transports, the SET succeeds for the first writer and fails for the second within THAT instance's keyspace, so each logical event fans out exactly once per instance even when both transports deliver it. **Per-instance scope is mandatory** — a global `ws:dedupe:<eventId>` key would have one ws-server suppress the others' broadcasts (caught by Codex+Gemini A2 round-2 multi-model review). Each ws-server's dedupe keyspace is independent of every other; the streams subscriber feeds its own keyspace, and in `dual` mode the list subscriber consults the SAME store so list+streams arrivals at THIS instance collapse to one fan-out.
 
 ### 17.2 Required env vars (production)
 

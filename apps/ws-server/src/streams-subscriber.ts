@@ -33,11 +33,15 @@
  *      on first observation
  *   3. Loop continues unless stop() flipped the running flag
  *
- * Note on XACK: the per-instance group has only one consumer, and
- * messages are auto-acked because we never call XACK explicitly.
- * If the consumer crashes mid-batch, those entries are lost from
- * this group's perspective — same trade-off as the S17 list
- * subscriber, documented as acceptable for S18.
+ * Note on PEL/ACK semantics (post-A2 round-1 review): XREADGROUP does
+ * NOT auto-ack. Without explicit XACK calls, the Pending Entry List
+ * (PEL) for healthy groups grows unbounded, eventually exhausting
+ * Redis memory. Per AD-S18-2 ws-server uses at-most-once delivery
+ * (lost-during-crash events accept the same trade-off as the S17 list
+ * subscriber), so we pass `NOACK` to XREADGROUP instead of XACK-ing
+ * each entry — Redis skips the PEL entirely. The earlier draft of
+ * this file claimed "auto-acked"; that was wrong, and Codex+Gemini
+ * round-1 multi-model review caught it before TCP Redis went live.
  *
  * Cleanup: stop() clears the polling timer + awaits any in-flight
  * tick. Group cleanup (XGROUP DESTROY for orphaned groups) is the
@@ -140,6 +144,9 @@ export function createStreamsSubscriber(deps: StreamsSubscriberDeps): StreamsSub
       const result = await deps.redis.xreadgroup(streamName, groupName, 'consumer-default', {
         count: batchSize,
         blockMs,
+        // NOACK — at-most-once per AD-S18-2; without it the PEL
+        // grows unbounded for healthy groups (Codex+Gemini A2 R1).
+        noAck: true,
       });
       if (result === null || result.entries.length === 0) return;
 

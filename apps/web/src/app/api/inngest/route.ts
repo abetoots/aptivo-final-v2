@@ -92,9 +92,12 @@ const anomalyBaselineBuilderFn = createAnomalyBaselineBuilder({
 //   - `dual`: writes both transports for the cutover window;
 //     subscribers dedupe by eventId via shared Redis SET ring
 //
-// Streams binding uses @aptivo/redis createTcpRedis with ioredis
-// (optionalDependency); falls back to disabling the streams path if
-// ioredis isn't installed and mode requires it.
+// Fail-fast policy (post-A2 round-1 review): when the configured mode
+// requires the streams transport and TCP Redis is missing OR ioredis
+// init fails, the route module throws so the deploy crashes. Silent
+// fallback to list-only would mean streams subscribers never see the
+// events they're configured to consume — WS fan-out goes dark in
+// production. Crashing the deploy surfaces the misconfig immediately.
 const wsPublisherFunctions = await (async () => {
   const modeRaw = (process.env.WS_TRANSPORT_MODE ?? 'list').toLowerCase();
   const mode = (modeRaw === 'list' || modeRaw === 'dual' || modeRaw === 'streams')
@@ -102,40 +105,49 @@ const wsPublisherFunctions = await (async () => {
     : 'list';
 
   const listRedis = getJobsRedis();
+  const streamsRequired = mode === 'streams' || mode === 'dual';
 
-  // streams binding — only constructed when needed
+  // streams binding — only constructed when needed; failures here are
+  // fatal when streams are required by mode (post-A2 R1 review).
   let streamsRedis: Awaited<ReturnType<typeof import('@aptivo/redis').createTcpRedis>> | null = null;
-  if (mode === 'streams' || mode === 'dual') {
+  if (streamsRequired) {
     const tcpUrl = process.env.WS_REDIS_TCP_URL;
     if (!tcpUrl) {
-      appLog.warn('ws_event_publisher_streams_disabled', {
-        reason: 'WS_TRANSPORT_MODE requires streams but WS_REDIS_TCP_URL is missing',
-        mode,
-      });
-    } else {
-      try {
-        const { createTcpRedis } = await import('@aptivo/redis');
-        streamsRedis = await createTcpRedis({
-          url: tcpUrl,
-          connectionName: 'aptivo-web-publisher',
-        });
-      } catch (cause) {
-        appLog.warn('ws_event_publisher_streams_init_failed', {
-          cause: cause instanceof Error ? cause.message : String(cause),
-        });
-      }
+      throw new Error(
+        `ws_event_publisher: WS_TRANSPORT_MODE=${mode} requires the streams transport ` +
+        'but WS_REDIS_TCP_URL is missing. Provision TCP Redis and set WS_REDIS_TCP_URL, ' +
+        'or run with WS_TRANSPORT_MODE=list.',
+      );
     }
+    const { createTcpRedis } = await import('@aptivo/redis');
+    streamsRedis = await createTcpRedis({
+      url: tcpUrl,
+      connectionName: 'aptivo-web-publisher',
+    });
   }
 
-  // disabled cases — log + skip the function registration entirely
-  const listOk = (mode === 'list' || mode === 'dual') ? !!listRedis : true;
-  const streamsOk = (mode === 'streams' || mode === 'dual') ? !!streamsRedis : true;
-  if (!listOk || !streamsOk) {
+  // dual mode requires the list transport too — we'd LPUSH AND XADD,
+  // and a missing Upstash means dual-write degrades to streams-only,
+  // which is a misconfig rather than a graceful fallback (the cutover
+  // window is meaningless without dual writes).
+  if (mode === 'dual' && !listRedis) {
+    throw new Error(
+      'ws_event_publisher: WS_TRANSPORT_MODE=dual requires the list transport ' +
+      'but Upstash credentials (jobs Redis) are not configured. Set the Upstash credentials ' +
+      'or switch to WS_TRANSPORT_MODE=streams for streams-only.',
+    );
+  }
+
+  // list mode (default) with no Upstash configured = local dev / test
+  // environment. Skip publisher registration — workflow + HITL events
+  // still fire normally, just without the WS fan-out side-effect.
+  // Production list-mode deployments must have Upstash; the operator
+  // is responsible for that, and we don't crash here because
+  // module-load-time crashes break the entire route handler chain.
+  if (mode === 'list' && !listRedis) {
     appLog.info('ws_event_publisher_disabled', {
-      reason: 'transport requirements not met for the configured WS_TRANSPORT_MODE',
+      reason: 'list mode with no Upstash credentials (local dev / test)',
       mode,
-      listAvailable: !!listRedis,
-      streamsAvailable: !!streamsRedis,
     });
     return [] as ReturnType<typeof createWsEventPublisherFunctions>;
   }

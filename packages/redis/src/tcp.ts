@@ -127,13 +127,19 @@ function wrapIoRedis(client: IoRedisLike): WsRedisClient {
     async xreadgroup(stream, group, consumer, options) {
       const count = options?.count ?? 32;
       const blockMs = options?.blockMs ?? 100;
-      // XREADGROUP GROUP <group> <consumer> COUNT <n> BLOCK <ms> STREAMS <stream> >
-      const result = await client.xreadgroup(
+      const noAck = options?.noAck ?? false;
+      // XREADGROUP GROUP <group> <consumer> COUNT <n> BLOCK <ms> [NOACK] STREAMS <stream> >
+      // NOACK is required for at-most-once consumers (per AD-S18-2);
+      // without it the PEL grows unbounded for healthy groups even
+      // though we never call XACK.
+      const args: unknown[] = [
         'GROUP', group, consumer,
         'COUNT', count,
         'BLOCK', blockMs,
-        'STREAMS', stream, '>',
-      );
+      ];
+      if (noAck) args.push('NOACK');
+      args.push('STREAMS', stream, '>');
+      const result = await client.xreadgroup(...args);
 
       if (result === null || !Array.isArray(result) || result.length === 0) {
         return null;

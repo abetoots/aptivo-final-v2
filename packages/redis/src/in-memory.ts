@@ -40,8 +40,21 @@ interface StoredStream {
   entries: { id: string; data: Record<string, string> }[];
   /** monotonic counter for entry IDs — opaque cursor per AD-S18-2 */
   nextSeq: number;
-  /** group → last-delivered-entry-index map. -1 means "from $", i.e. no historical entries */
+  /**
+   * group → last-delivered-entry-index map. -1 means "from $", i.e. no historical entries.
+   * Cursors are absolute indices into `entries`; on MAXLEN trim we shift them down by the
+   * trim count so a trim doesn't skip undelivered entries for any group (Codex+Gemini A2 R1).
+   */
   groupCursors: Map<string, number>;
+  /**
+   * Per-group delivered-but-unacked count. Real Redis tracks the
+   * Pending Entry List per (stream, group); we model only the count
+   * because the streams subscriber uses NOACK so the PEL is always
+   * empty in production. This counter lets future tests assert that a
+   * subscriber configured WITHOUT NOACK + WITHOUT XACK calls accumulates
+   * pending entries (the bug that motivated the AD-S18-2 round-1 fix).
+   */
+  groupPel: Map<string, number>;
 }
 
 interface StoredKey {
@@ -65,6 +78,13 @@ export interface InMemoryWsRedis extends WsRedisClient {
   _groupCount(stream: string): number;
   /** Test-only inspection: pending key count (post-expiry filter). */
   _keyCount(): number;
+  /**
+   * Test-only inspection: how many entries are pending (delivered but
+   * not yet acked) for `(stream, group)`? Always 0 when consumers
+   * pass `noAck: true`. Lets tests assert that omitting NOACK without
+   * an XACK path causes unbounded growth.
+   */
+  _pendingEntryCount(stream: string, group: string): number;
 }
 
 export function createInMemoryWsRedis(opts: InMemoryWsRedisOptions = {}): InMemoryWsRedis {
@@ -75,7 +95,12 @@ export function createInMemoryWsRedis(opts: InMemoryWsRedisOptions = {}): InMemo
   function getOrCreateStream(name: string): StoredStream {
     let s = streams.get(name);
     if (!s) {
-      s = { entries: [], nextSeq: 1, groupCursors: new Map() };
+      s = {
+        entries: [],
+        nextSeq: 1,
+        groupCursors: new Map(),
+        groupPel: new Map(),
+      };
       streams.set(name, s);
     }
     return s;
@@ -96,6 +121,15 @@ export function createInMemoryWsRedis(opts: InMemoryWsRedisOptions = {}): InMemo
       if (options?.maxLen !== undefined && s.entries.length > options.maxLen) {
         const trimCount = s.entries.length - options.maxLen;
         s.entries.splice(0, trimCount);
+        // shift per-group cursors down by trimCount so the cursor still
+        // points at the same logical entry post-trim (or clamps to -1
+        // when the entry it pointed to was trimmed off the head).
+        // Without this fix MAXLEN evictions could skip undelivered
+        // entries for any group whose cursor was inside the trim window
+        // (Codex+Gemini A2 R1).
+        for (const [group, cursor] of s.groupCursors) {
+          s.groupCursors.set(group, Math.max(-1, cursor - trimCount));
+        }
       }
       return id;
     },
@@ -109,48 +143,56 @@ export function createInMemoryWsRedis(opts: InMemoryWsRedisOptions = {}): InMemo
       // '0' means "deliver from the beginning" (rarely used; here for completeness)
       const cursor = startId === '0' ? -1 : s.entries.length - 1;
       s.groupCursors.set(group, cursor);
+      s.groupPel.set(group, 0);
     },
 
     async xgroupDelete(stream, group) {
       const s = streams.get(stream);
       if (!s) return;
       s.groupCursors.delete(group);
+      s.groupPel.delete(group);
     },
 
     async xreadgroup(stream, group, _consumer, options) {
       const s = streams.get(stream);
-      if (!s) return null;
+      if (!s) {
+        // Real Redis errors with NOGROUP when the stream doesn't exist
+        // OR when the group doesn't exist on it. The earlier stub
+        // returned null which masked group-creation bugs in tests.
+        throw new Error(
+          `NOGROUP No such key '${stream}' or consumer group '${group}' in XREADGROUP`,
+        );
+      }
       const cursor = s.groupCursors.get(group);
       if (cursor === undefined) {
-        // group doesn't exist — Redis would error with NOGROUP. We
-        // mirror that here as null (consumer's defensive null check
-        // is the correct response either way).
-        return null;
+        throw new Error(
+          `NOGROUP No such key '${stream}' or consumer group '${group}' in XREADGROUP`,
+        );
       }
       const count = options?.count ?? 32;
       const blockMs = options?.blockMs ?? 100;
+      const noAck = options?.noAck ?? false;
 
       // entries strictly after the cursor index
       const startIdx = cursor + 1;
-      const available = s.entries.slice(startIdx, startIdx + count);
+      let available = s.entries.slice(startIdx, startIdx + count);
 
-      if (available.length === 0) {
+      if (available.length === 0 && blockMs > 0) {
         // simulate BLOCK by waiting blockMs then re-checking once.
         // Tests can override `now()` but blockMs is real wall time —
         // tests typically pass blockMs: 0 to skip the wait.
-        if (blockMs > 0) {
-          await new Promise((resolve) => setTimeout(resolve, Math.min(blockMs, 500)));
-        }
-        const retryAvailable = s.entries.slice(startIdx, startIdx + count);
-        if (retryAvailable.length === 0) return null;
-        s.groupCursors.set(group, startIdx + retryAvailable.length - 1);
-        return {
-          stream,
-          entries: retryAvailable.map((e): StreamEntry => ({ id: e.id, data: { ...e.data } })),
-        } satisfies StreamReadResult;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(blockMs, 500)));
+        available = s.entries.slice(startIdx, startIdx + count);
       }
+      if (available.length === 0) return null;
 
       s.groupCursors.set(group, startIdx + available.length - 1);
+      // PEL semantics: without NOACK, every delivered entry is added
+      // to the per-group pending list. Real callers must XACK to
+      // remove. With NOACK Redis skips the PEL entirely.
+      if (!noAck) {
+        s.groupPel.set(group, (s.groupPel.get(group) ?? 0) + available.length);
+      }
       return {
         stream,
         entries: available.map((e): StreamEntry => ({ id: e.id, data: { ...e.data } })),
@@ -205,6 +247,12 @@ export function createInMemoryWsRedis(opts: InMemoryWsRedisOptions = {}): InMemo
         if (!isExpired(stored)) count++;
       }
       return count;
+    },
+
+    _pendingEntryCount(stream, group) {
+      const s = streams.get(stream);
+      if (!s) return 0;
+      return s.groupPel.get(group) ?? 0;
     },
   };
 }

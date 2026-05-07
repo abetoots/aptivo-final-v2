@@ -30,6 +30,7 @@
 import type { EventFrame } from '@aptivo/types';
 import { EventFrameSchema } from '@aptivo/types';
 import type { EventBridge } from './event-bridge.js';
+import type { DedupeStore } from './redis-dedupe-store.js';
 
 // ---------------------------------------------------------------------------
 // thin Redis surface — same shape as @upstash/redis `rpop` (string return)
@@ -83,8 +84,19 @@ export interface RedisSubscriberDeps {
   readonly pollIntervalMs?: number;
   /** Items to drain per poll tick. Default 32. */
   readonly batchSize?: number;
-  /** EventId ring size for dedupe. Default 1024. */
+  /** EventId ring size for the per-process dedupe ring. Default 1024. */
   readonly dedupeRingSize?: number;
+  /**
+   * Optional cross-transport dedupe store. When the ws-server runs in
+   * `dual` mode (S18-A2 cutover) the SAME `DedupeStore` instance is
+   * passed here AND to the streams subscriber so an event arriving via
+   * either transport collapses to one fan-out. The local in-process
+   * ring still runs first (cheap fast path); the shared SET ring is
+   * consulted only when the ring misses. Without this wiring, dual
+   * mode silently double-fanned-out every event — caught by Codex +
+   * Gemini A2 round-1 review.
+   */
+  readonly dedupeStore?: DedupeStore;
 }
 
 export interface RedisSubscriber {
@@ -139,6 +151,15 @@ export function createRedisSubscriber(deps: RedisSubscriberDeps): RedisSubscribe
         const envelope = parseEnvelope(raw);
         if (!envelope) continue;
         if (dedupeRing.seen(envelope.eventId)) continue;
+        // dual-mode cross-transport dedupe: when the ws-server runs both
+        // transports (list + streams) the shared SET ring is the only
+        // way to suppress the same eventId arriving via both paths. The
+        // streams subscriber consults the same store; whichever transport
+        // observes the event first wins, the other skips publish.
+        if (deps.dedupeStore) {
+          const isFirst = await deps.dedupeStore.isFirstObservation(envelope.eventId);
+          if (!isFirst) continue;
+        }
         deps.bridge.publish(envelope);
         drained++;
       }

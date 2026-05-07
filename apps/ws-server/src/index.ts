@@ -24,7 +24,8 @@
 import { createWsServer } from './server.js';
 import { createRedisSubscriber, type RedisSubscriber, type WsSubscriberRedis } from './redis-subscriber.js';
 import { createStreamsSubscriber, type StreamsSubscriber } from './streams-subscriber.js';
-import { createDedupeStore } from './redis-dedupe-store.js';
+import { createDedupeStore, type DedupeStore } from './redis-dedupe-store.js';
+import type { WsRedisClient } from '@aptivo/redis';
 
 export { createWsServer } from './server.js';
 export type { WsServer, ServerConfig } from './server.js';
@@ -68,6 +69,7 @@ function requireEnv(name: string): string {
  */
 async function buildRedisSubscriber(
   server: ReturnType<typeof createWsServer>,
+  dedupeStore?: DedupeStore,
 ): Promise<RedisSubscriber | null> {
   const url = process.env.WS_REDIS_URL;
   const token = process.env.WS_REDIS_TOKEN;
@@ -103,6 +105,11 @@ async function buildRedisSubscriber(
       // eslint-disable-next-line no-console
       warn: (event, ctx) => console.warn(`[ws-server] ${event}`, ctx ?? {}),
     },
+    // dual-mode cross-transport dedupe — same DedupeStore as the
+    // streams subscriber so events arriving via either path collapse
+    // to one fan-out. In list-only mode this is undefined and the
+    // subscriber relies on its in-process ring alone.
+    dedupeStore,
   });
 }
 
@@ -117,21 +124,48 @@ async function buildRedisSubscriber(
  * dependency is `optionalDependencies` so the package ships in
  * environments that haven't provisioned TCP Redis.
  */
-async function buildStreamsSubscriber(
+interface StreamsResources {
+  readonly redis: WsRedisClient;
+  readonly dedupeStore: DedupeStore;
+  readonly subscriber: StreamsSubscriber;
+}
+
+/**
+ * Boots the TCP-Redis client + DedupeStore + StreamsSubscriber as one
+ * unit so dual-mode bootstrap can pass the SAME `dedupeStore` to the
+ * list subscriber. Returns null when streams are not configured.
+ *
+ * Fail-fast policy (post-A2 round-1 review): when the caller requires
+ * streams (mode='streams' or 'dual') but the TCP URL is missing or the
+ * client cannot connect, this throws — the caller exits the process.
+ * Silent fallback to list-only would mean WS fan-out goes dark in
+ * production; better to crash the deploy than ship a broken cluster.
+ */
+async function buildStreamsResources(
   server: ReturnType<typeof createWsServer>,
-): Promise<StreamsSubscriber | null> {
+  required: boolean,
+): Promise<StreamsResources | null> {
   const tcpUrl = process.env.WS_REDIS_TCP_URL;
-  if (!tcpUrl) return null;
+  if (!tcpUrl) {
+    if (required) {
+      throw new Error(
+        'WS_TRANSPORT_MODE requires the streams transport but WS_REDIS_TCP_URL is missing. ' +
+        'Provision TCP Redis and set WS_REDIS_TCP_URL, or run with WS_TRANSPORT_MODE=list.',
+      );
+    }
+    return null;
+  }
 
   const instanceId = process.env.WS_INSTANCE_ID;
   if (!instanceId || instanceId.trim() === '') {
-    // eslint-disable-next-line no-console
-    console.error(
-      '[ws-server] WS_REDIS_TCP_URL is set but WS_INSTANCE_ID is missing or empty. ' +
+    // fatal even outside `required` because once tcp URL is set we
+    // intend to run streams; partitioning traffic across instances is
+    // worse than crashing the deploy.
+    throw new Error(
+      'WS_REDIS_TCP_URL is set but WS_INSTANCE_ID is missing or empty. ' +
       'Per-instance consumer groups require a unique instance id; refusing to start ' +
-      'the streams subscriber to avoid partitioning traffic across instances.',
+      'the streams subscriber to avoid partitioning traffic across instances (AD-S18-2).',
     );
-    process.exit(1);
   }
 
   // dynamic import via @aptivo/redis — that package handles the
@@ -143,13 +177,17 @@ async function buildStreamsSubscriber(
   });
 
   const dedupeStore = createDedupeStore(redis, {
+    // post-A2 R2: dedupe key MUST be per-instance — global per-eventId
+    // would have one instance suppress all the others' publishes,
+    // breaking AD-S18-2 broadcast.
+    instanceId,
     logger: {
       // eslint-disable-next-line no-console
       warn: (event, ctx) => console.warn(`[ws-server] ${event}`, ctx ?? {}),
     },
   });
 
-  return createStreamsSubscriber({
+  const subscriber = createStreamsSubscriber({
     redis,
     dedupeStore,
     bridge: server.bridge,
@@ -162,6 +200,8 @@ async function buildStreamsSubscriber(
       info: (event, ctx) => console.log(`[ws-server] ${event}`, ctx ?? {}),
     },
   });
+
+  return { redis, dedupeStore, subscriber };
 }
 
 // only run as a script when invoked directly (not when imported by tests)
@@ -181,39 +221,63 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     // eslint-disable-next-line no-console
     console.log(`[ws-server] transport mode: ${mode}`);
 
-    // S17 list subscriber — runs when mode is 'list' or 'dual'
+    // S18-A2 streams resources first — when mode is 'streams' or
+    // 'dual' the TCP-Redis-backed DedupeStore is the single source of
+    // truth for cross-transport dedupe. Build it here so the list
+    // subscriber can share it.
+    const streamsRequired = mode === 'streams' || mode === 'dual';
+    const streamsResources = streamsRequired
+      ? await buildStreamsResources(server, streamsRequired)
+      : null;
+
+    // S17 list subscriber — runs when mode is 'list' or 'dual'.
+    // In 'dual' mode the streams resources MUST be present (we throw
+    // above when they're not), so passing the shared dedupeStore is
+    // safe. In 'list' mode the dedupeStore is undefined and the
+    // subscriber falls back to its in-process ring alone.
     let listSubscriber: RedisSubscriber | null = null;
     if (mode === 'list' || mode === 'dual') {
-      listSubscriber = await buildRedisSubscriber(server);
+      const sharedDedupe = mode === 'dual' ? streamsResources?.dedupeStore : undefined;
+      listSubscriber = await buildRedisSubscriber(server, sharedDedupe);
       if (listSubscriber) {
         listSubscriber.start();
         // eslint-disable-next-line no-console
-        console.log('[ws-server] list subscriber started');
+        console.log(
+          `[ws-server] list subscriber started (cross-transport dedupe: ${sharedDedupe ? 'shared' : 'local-only'})`,
+        );
+      } else if (mode === 'dual') {
+        // dual mode requires both transports — list missing here means
+        // ops set MODE=dual but didn't provision Upstash. Fail loudly.
+        throw new Error(
+          'WS_TRANSPORT_MODE=dual requires both transports but WS_REDIS_URL/WS_REDIS_TOKEN are missing. ' +
+          'Set the Upstash credentials or switch to MODE=streams for streams-only.',
+        );
       } else {
         // eslint-disable-next-line no-console
         console.log('[ws-server] list subscriber disabled (WS_REDIS_URL/TOKEN missing)');
       }
     }
 
-    // S18-A2 streams subscriber — runs when mode is 'streams' or 'dual'
-    let streamsSubscriber: StreamsSubscriber | null = null;
-    if (mode === 'streams' || mode === 'dual') {
-      streamsSubscriber = await buildStreamsSubscriber(server);
-      if (streamsSubscriber) {
-        await streamsSubscriber.start();
-        // eslint-disable-next-line no-console
-        console.log('[ws-server] streams subscriber started');
-      } else {
-        // eslint-disable-next-line no-console
-        console.log('[ws-server] streams subscriber disabled (WS_REDIS_TCP_URL missing)');
-      }
+    if (streamsResources) {
+      await streamsResources.subscriber.start();
+      // eslint-disable-next-line no-console
+      console.log('[ws-server] streams subscriber started');
+    } else if (mode === 'streams') {
+      // unreachable — buildStreamsResources(server, true) throws if
+      // streams aren't available. Defensive log only.
+      // eslint-disable-next-line no-console
+      console.error('[ws-server] streams mode requested but resources missing — bug in bootstrap');
+      process.exit(1);
     }
 
     const shutdown = async (signal: string) => {
       // eslint-disable-next-line no-console
       console.log(`[ws-server] received ${signal}, stopping`);
       if (listSubscriber) await listSubscriber.stop();
-      if (streamsSubscriber) await streamsSubscriber.stop();
+      if (streamsResources) {
+        await streamsResources.subscriber.stop();
+        await streamsResources.redis.disconnect();
+      }
       await server.stop('deployment', 5000);
       process.exit(0);
     };
