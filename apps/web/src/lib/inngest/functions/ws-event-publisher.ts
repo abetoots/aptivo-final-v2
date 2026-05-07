@@ -1,38 +1,65 @@
 /**
- * S17-WS-PUB: Inngest → Redis publisher for WebSocket fan-out.
+ * S17-WS-PUB + S18-A2: Inngest → Redis publisher for WebSocket
+ * fan-out, with multi-instance support via TCP Redis Streams.
  *
  * Reads selected platform events (workflow + HITL today; ticket
  * events arrive with Epic 4) and publishes them as `EventFrame`
- * envelopes onto a single Redis list (`ws:events` by default). The
- * `apps/ws-server` polling subscriber drains the list and feeds each
- * envelope into its in-process EventBridge for fan-out to subscribed
- * clients. Closes Sprint-16 enablement gate #6.
+ * envelopes. Two transports, mode-selected via `WS_TRANSPORT_MODE`:
  *
- * Why list-based and not pub/sub: Upstash Redis (this repo's REST
- * client) does not support persistent SUBSCRIBE connections. A list
- * with LPUSH (publisher) + RPOP (subscriber polling) gives FIFO
- * semantics that work over plain HTTP. Single-instance ws-server
- * fan-out is correct; multi-instance horizontal scaling is a known
- * limitation tracked for S18.
+ *   - `list` (S17 default): LPUSH onto the `ws:events` list. Single-
+ *     consumer per item — broken multi-instance fan-out, but works
+ *     against Upstash REST.
+ *   - `streams` (S18-A2 target): XADD onto the `ws:events` stream.
+ *     Per-instance consumer groups in apps/ws-server give every
+ *     instance its own cursor → broadcast fan-out (per AD-S18-2).
+ *   - `dual` (S18-A2 cutover): writes to BOTH for a 24h window.
+ *     Subscribers read both transports and dedupe by `eventId` via
+ *     the shared Redis-SET dedupe ring (1h TTL). After 24h, ops
+ *     flips to `streams`. Default zero-downtime cutover path.
  *
- * Dedupe is the subscriber's responsibility (eventId ring) — the
- * publisher writes an envelope per Inngest invocation, and Inngest's
- * own retry semantics may cause the same logical event to land in
- * the queue more than once.
+ * Why list-based was the S17 only path: Upstash Redis (this repo's
+ * REST client) does not support persistent SUBSCRIBE connections or
+ * Streams. A list with LPUSH + RPOP gave FIFO semantics over plain
+ * HTTP but couldn't fan out to multiple ws-server instances. S18 adds
+ * TCP Redis (ioredis-backed) for the streams path; the list path
+ * stays for environments still on Upstash REST.
+ *
+ * Dedupe is the subscriber's responsibility (eventId ring + Redis
+ * SET during cutover) — the publisher writes an envelope per Inngest
+ * invocation, and Inngest's own retry semantics may cause the same
+ * logical event to land in either transport more than once.
  */
 
 import { randomUUID } from 'node:crypto';
 import type { Inngest } from 'inngest';
 import type { EventFrame } from '@aptivo/types';
+import type { WsRedisClient } from '@aptivo/redis';
 
 // ---------------------------------------------------------------------------
-// thin Redis surface — only what the publisher uses, so tests can stub
-// without pulling the full @upstash/redis client shape
+// transport surface — `WsPublisherRedis` is the legacy LPUSH-only
+// shape (S17, kept for back-compat); `WsRedisClient` from @aptivo/redis
+// is the streams-capable shape used in `dual` and `streams` modes.
 // ---------------------------------------------------------------------------
 
 export interface WsPublisherRedis {
   lpush(key: string, value: string): Promise<number>;
 }
+
+/**
+ * Transport mode selected by `WS_TRANSPORT_MODE` env var. Default
+ * `list` preserves S17 behaviour. `dual` is the recommended
+ * production cutover path (zero-downtime); `streams` is the post-
+ * cutover steady state once ops verifies fan-out via the staging
+ * smoke test.
+ */
+export type WsTransportMode = 'list' | 'dual' | 'streams';
+
+/**
+ * MAXLEN cap on the streams transport. Per AD-S18-2, ~50000 entries
+ * bounds memory while leaving plenty of headroom for retry storms.
+ */
+export const WS_STREAM_MAXLEN = 50_000;
+export const WS_STREAM_NAME_DEFAULT = 'ws:events';
 
 // ---------------------------------------------------------------------------
 // envelope helpers
@@ -108,10 +135,28 @@ const DESCRIPTORS: readonly PublisherDescriptor[] = [
 
 export interface WsEventPublisherDeps {
   readonly inngest: Inngest;
-  readonly redis: WsPublisherRedis;
+  /**
+   * Legacy LPUSH transport. Required when `mode` is `list` or
+   * `dual`. Optional when `mode` is `streams`-only.
+   */
+  readonly redis?: WsPublisherRedis;
+  /**
+   * Streams transport (TCP Redis via @aptivo/redis). Required when
+   * `mode` is `streams` or `dual`. Optional when `mode` is `list`.
+   */
+  readonly streams?: WsRedisClient;
+  /**
+   * Transport mode. Default `list` preserves S17 behaviour. `dual`
+   * writes both transports for the cutover window; `streams` is the
+   * post-cutover steady state. Typically derived from
+   * `process.env.WS_TRANSPORT_MODE` at the composition root.
+   */
+  readonly mode?: WsTransportMode;
   readonly logger: { warn(event: string, ctx?: Record<string, unknown>): void };
-  /** Redis list key. Default `ws:events`. */
+  /** Redis list key (LPUSH path). Default `ws:events`. */
   readonly queueKey?: string;
+  /** Redis stream name (XADD path). Default `ws:events`. */
+  readonly streamName?: string;
   /** Test-only override; defaults to `() => new Date()`. */
   readonly now?: () => Date;
 }
@@ -124,9 +169,39 @@ const DEFAULT_QUEUE_KEY = 'ws:events';
  * throws so Inngest retries the function (default 3 retries with
  * exponential backoff). The structured warn is emitted on every
  * failure attempt so ops can see throughput drops in logs.
+ *
+ * Mode semantics (controlled by `deps.mode`):
+ *   - `list`: LPUSH only (S17 path; back-compat)
+ *   - `dual`: LPUSH + XADD (cutover window; subscribers dedupe by
+ *     eventId via shared Redis SET ring)
+ *   - `streams`: XADD only (post-cutover steady state)
+ *
+ * In `dual` mode, a failure on either transport throws and Inngest
+ * retries — the subscriber's eventId dedupe handles the case where
+ * the first transport succeeded and the retry attempts it again.
+ * Both transports are awaited sequentially (LPUSH first); reordering
+ * to parallel-write is a S20+ optimization once production data
+ * shows the latency matters.
  */
 export function createWsEventPublisherFunctions(deps: WsEventPublisherDeps) {
+  const mode: WsTransportMode = deps.mode ?? 'list';
   const queueKey = deps.queueKey ?? DEFAULT_QUEUE_KEY;
+  const streamName = deps.streamName ?? WS_STREAM_NAME_DEFAULT;
+
+  // Validate the deps shape against the requested mode at factory
+  // time so misconfiguration fails loudly at startup rather than on
+  // the first event.
+  if ((mode === 'list' || mode === 'dual') && !deps.redis) {
+    throw new Error(
+      `ws-event-publisher: mode='${mode}' requires deps.redis (LPUSH transport)`,
+    );
+  }
+  if ((mode === 'streams' || mode === 'dual') && !deps.streams) {
+    throw new Error(
+      `ws-event-publisher: mode='${mode}' requires deps.streams (XADD transport)`,
+    );
+  }
+
   return DESCRIPTORS.map((desc) =>
     deps.inngest.createFunction(
       { id: desc.id, retries: 3 },
@@ -143,22 +218,41 @@ export function createWsEventPublisherFunctions(deps: WsEventPublisherDeps) {
         const eventId = ((event as { id?: string }).id ?? randomUUID());
 
         const envelope = buildEnvelope({ topic, eventId, data, now: deps.now });
+        const envelopeJson = JSON.stringify(envelope);
 
         await step.run('publish-to-redis', async () => {
           try {
-            await deps.redis.lpush(queueKey, JSON.stringify(envelope));
+            // `list` and `dual` modes write the LPUSH transport first
+            // for ordering parity with S17 — subscribers running
+            // older code paths see the event via RPOP without delay.
+            if (mode === 'list' || mode === 'dual') {
+              await deps.redis!.lpush(queueKey, envelopeJson);
+            }
+            if (mode === 'streams' || mode === 'dual') {
+              // Stream entries carry the structured envelope as a
+              // single field for symmetry with the list payload —
+              // subscribers parse JSON regardless of transport. The
+              // alternative (one stream field per envelope key) would
+              // bloat the on-the-wire shape and complicate dedupe.
+              await deps.streams!.xadd(
+                streamName,
+                { envelope: envelopeJson, eventId },
+                { maxLen: WS_STREAM_MAXLEN },
+              );
+            }
           } catch (cause) {
             deps.logger.warn('ws_event_publish_failed', {
               eventId,
               topic,
               event: desc.event,
+              mode,
               cause: cause instanceof Error ? cause.message : String(cause),
             });
             throw cause; // propagate so Inngest retries
           }
         });
 
-        return { topic, eventId, queueKey };
+        return { topic, eventId, queueKey, mode };
       },
     ),
   );

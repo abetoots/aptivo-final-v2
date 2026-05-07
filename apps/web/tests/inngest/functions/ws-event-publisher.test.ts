@@ -86,3 +86,83 @@ describe('S17-WS-PUB: createWsEventPublisherFunctions', () => {
     ).not.toThrow();
   });
 });
+
+// ---------------------------------------------------------------------------
+// S18-A2: WS_TRANSPORT_MODE switch — list | dual | streams
+// ---------------------------------------------------------------------------
+
+import { createInMemoryWsRedis } from '@aptivo/redis';
+
+describe('S18-A2: createWsEventPublisherFunctions — transport mode validation', () => {
+  function makeInngest() {
+    return new Inngest({ id: 'test-mode-validation', schemas: new EventSchemas() });
+  }
+  function makeRedis(): WsPublisherRedis {
+    return { lpush: vi.fn().mockResolvedValue(1) };
+  }
+
+  it("default mode='list' requires deps.redis (legacy back-compat)", () => {
+    expect(() =>
+      createWsEventPublisherFunctions({
+        inngest: makeInngest(),
+        // redis omitted
+        logger: { warn: vi.fn() },
+      }),
+    ).toThrow(/mode='list' requires deps\.redis/);
+  });
+
+  it("mode='streams' requires deps.streams (XADD transport)", () => {
+    expect(() =>
+      createWsEventPublisherFunctions({
+        inngest: makeInngest(),
+        mode: 'streams',
+        // streams omitted
+        logger: { warn: vi.fn() },
+      }),
+    ).toThrow(/mode='streams' requires deps\.streams/);
+  });
+
+  it("mode='streams' does NOT require deps.redis (post-cutover steady state)", () => {
+    expect(() =>
+      createWsEventPublisherFunctions({
+        inngest: makeInngest(),
+        mode: 'streams',
+        streams: createInMemoryWsRedis(),
+        logger: { warn: vi.fn() },
+      }),
+    ).not.toThrow();
+  });
+
+  it("mode='dual' requires BOTH deps.redis and deps.streams (cutover)", () => {
+    expect(() =>
+      createWsEventPublisherFunctions({
+        inngest: makeInngest(),
+        mode: 'dual',
+        redis: makeRedis(),
+        // streams omitted
+        logger: { warn: vi.fn() },
+      }),
+    ).toThrow(/mode='dual' requires deps\.streams/);
+
+    expect(() =>
+      createWsEventPublisherFunctions({
+        inngest: makeInngest(),
+        mode: 'dual',
+        streams: createInMemoryWsRedis(),
+        // redis omitted
+        logger: { warn: vi.fn() },
+      }),
+    ).toThrow(/mode='dual' requires deps\.redis/);
+
+    // both supplied: ok
+    expect(() =>
+      createWsEventPublisherFunctions({
+        inngest: makeInngest(),
+        mode: 'dual',
+        redis: makeRedis(),
+        streams: createInMemoryWsRedis(),
+        logger: { warn: vi.fn() },
+      }),
+    ).not.toThrow();
+  });
+});

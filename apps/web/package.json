@@ -22,6 +22,7 @@
     "@aptivo/llm-gateway": "workspace:*",
     "@aptivo/mcp-layer": "workspace:*",
     "@aptivo/notifications": "workspace:*",
+    "@aptivo/redis": "workspace:*",
     "@aptivo/types": "workspace:*",
     "@novu/node": "^2.6.6",
     "@supabase/ssr": "^0.9.0",
