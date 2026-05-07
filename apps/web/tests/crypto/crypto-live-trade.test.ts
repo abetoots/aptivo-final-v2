@@ -479,14 +479,13 @@ describe('S18-B1: crypto live-trade workflow', () => {
     );
   });
 
-  it('fails closed (orphan-then-reconcile) when decision payload lacks approverId post-HITL', async () => {
-    // Round-1 multi-model review fix: previously the workflow fell
-    // back to requestedBy. That was an accountability hole — a live
-    // venue fill could be attributed to someone who didn't approve it.
-    // The corrected behaviour: emit an `execution-orphaned` audit
-    // and exit `execution-failed`. The venue order already filled
-    // (per the in-memory exchange MCP), so operations reconciles via
-    // the deterministic clientOrderId.
+  it('rejects BEFORE execute-live when decision payload lacks approverId (no venue fill)', async () => {
+    // Round-2 review fix (Codex): the previous implementation rejected
+    // AFTER execute-live, which still produced a real venue fill
+    // followed by an orphan-reconcile audit. The corrected behaviour
+    // validates `decisionData.approverId` immediately after
+    // waitForEvent and BEFORE the exchange call — a malformed HITL
+    // payload never reaches the venue.
     const engine = engineFor({
       events: triggerEvent(),
       steps: [
@@ -498,7 +497,7 @@ describe('S18-B1: crypto live-trade workflow', () => {
               requestId: 'hitl-req-1',
               decision: 'approved',
               decidedAt: '2026-04-29T12:00:00Z',
-              // approverId omitted — fail closed
+              // approverId omitted — should reject before venue call
             },
           }),
         },
@@ -508,24 +507,22 @@ describe('S18-B1: crypto live-trade workflow', () => {
     const { result } = await engine.execute();
 
     expect(result).toMatchObject({
-      status: 'execution-failed',
-      reason: 'missing-approver-id-post-execution',
+      status: 'rejected',
+      reason: 'malformed approval payload (missing approverId)',
     });
-    // CRITICAL: no position record created — the venue fill is orphaned
-    // pending operations reconciliation
+    // CRITICAL: the venue exchange MUST NOT have been called
+    expect(mockMcpAdapter.executeOrder).not.toHaveBeenCalled();
+    // no position record either
     expect(mockPositionStore.create).not.toHaveBeenCalled();
-    // signal NOT flipped to executed (correctly reflects the failed
-    // record-keeping; ops can re-drive after manual reconcile)
+    // signal NOT flipped to executed
     expect(mockSignalStore.updateStatus).not.toHaveBeenCalled();
-    // orphan audit emitted with reconciliation hint (clientOrderId)
+    // audit emitted with `crypto.trade.live-malformed-approval`
+    // attributed to system (no human to attribute to since the
+    // approval payload was malformed)
     expect(mockAuditService.emit).toHaveBeenCalledWith(
       expect.objectContaining({
         actor: { id: 'system', type: 'system' },
-        action: 'crypto.trade.live-execution-orphaned',
-        metadata: expect.objectContaining({
-          clientOrderId: `live-${SIGNAL_ID}`,
-          orderId: 'order-1',
-        }),
+        action: 'crypto.trade.live-malformed-approval',
       }),
     );
   });

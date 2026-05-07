@@ -389,6 +389,35 @@ export const liveTradeFn = inngest.createFunction(
       return { status: 'rejected', signalId, reason: 'rejected by approver' };
     }
 
+    // Round-2 multi-model review (Codex HIGH): the approverId check
+    // must happen BEFORE execute-live, not after. Otherwise a missing
+    // approverId produces a real venue fill with no position record
+    // for the cron to monitor — a financial-harm scenario worse than
+    // simply rejecting the malformed approval. Validating here means
+    // a malformed HITL payload never reaches the venue.
+    if (!decisionData.approverId) {
+      await step.run('audit-malformed-approval', () =>
+        emitAudit({
+          actor: { id: 'system', type: 'system' },
+          action: 'crypto.trade.live-malformed-approval',
+          resource: { type: 'trade-signal', id: signalId },
+          domain: 'crypto',
+          metadata: {
+            reason: 'HITL payload claimed approval but lacked approverId; refused to execute. Operations should investigate the gateway emit path.',
+            requestId: hitlResult.requestId,
+            token,
+            direction,
+            departmentId,
+          },
+        }),
+      );
+      return {
+        status: 'rejected',
+        signalId,
+        reason: 'malformed approval payload (missing approverId)',
+      };
+    }
+
     // step 6: execute-live — call the exchange MCP adapter. If the
     // venue rejects (rate limit, insufficient liquidity, etc.) we
     // emit an audit with the failure tag and exit with
@@ -424,9 +453,10 @@ export const liveTradeFn = inngest.createFunction(
       const reason = `${execResult.error._tag}`;
       await step.run('audit-execution-failed', () =>
         emitAudit({
-          actor: decisionData.approverId
-            ? { id: decisionData.approverId, type: 'user' as const }
-            : { id: 'system', type: 'system' as const },
+          // approverId is guaranteed present here — the pre-execute
+          // validation above rejects malformed approval payloads
+          // before reaching this branch.
+          actor: { id: decisionData.approverId!, type: 'user' as const },
           action: 'crypto.trade.live-execution-failed',
           resource: { type: 'trade-signal', id: signalId },
           domain: 'crypto',
@@ -438,43 +468,10 @@ export const liveTradeFn = inngest.createFunction(
 
     // step 7: record the position. executedBy carries the approver's
     // userId so the position-close audit (in the monitor cron) and
-    // any downstream reporting attribute correctly.
-    //
-    // Round-1 multi-model review (Codex HIGH + Gemini HIGH): the
-    // prior fallback `decisionData.approverId ?? requestedBy` was an
-    // accountability hole. Live-trade attribution must be absolute —
-    // a missing approverId means the gateway emitted an incomplete
-    // decision and we should NOT proceed with the trade record. Fail
-    // closed: the entry already filled at the venue, so we emit a
-    // failure audit and exit `execution-failed`. Operations can
-    // reconcile manually via the orphan venue order — `clientOrderId`
-    // = `live-${signalId}` provides the dedupe key.
-    if (!decisionData.approverId) {
-      await step.run('audit-missing-approver-id', () =>
-        emitAudit({
-          actor: { id: 'system', type: 'system' },
-          action: 'crypto.trade.live-execution-orphaned',
-          resource: { type: 'trade-signal', id: signalId },
-          domain: 'crypto',
-          metadata: {
-            reason: 'decision payload missing approverId; live execution succeeded at the venue but the position was NOT recorded. Reconcile via clientOrderId.',
-            clientOrderId: `live-${signalId}`,
-            orderId: execResult.fill.orderId,
-            fillPrice: execResult.fill.fillPrice,
-            token,
-            direction,
-            departmentId,
-            exchange,
-          },
-        }),
-      );
-      return {
-        status: 'execution-failed',
-        signalId,
-        reason: 'missing-approver-id-post-execution',
-      };
-    }
-
+    // any downstream reporting attribute correctly. approverId is
+    // guaranteed non-null here per the pre-execute validation above
+    // (Codex round-2 finding moved that check ahead of execute-live
+    // so a missing approverId never reaches the venue).
     const positionResult = await step.run('store-position', async () => {
       const positionStore = getCryptoPositionStore();
       const executedBy = decisionData.approverId!;
