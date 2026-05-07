@@ -22,6 +22,14 @@ export const HR_PERMISSIONS = [
   { role: 'recruiter', permission: 'hr/offer.create' },
   // S18-B2: bulk PII export — recruiter only (compliance-sensitive)
   { role: 'recruiter', permission: 'hr/candidate.export' },
+  // S18-B2: contracts + employees view/export. Contracts gate is
+  // tighter than candidates (salary/benefits/personalTerms PII) —
+  // recruiter alone has bulk access; hiring-manager sees individual
+  // records via single-record reads (FR-HR-CM scope).
+  { role: 'recruiter', permission: 'hr/contract.view' },
+  { role: 'recruiter', permission: 'hr/contract.export' },
+  { role: 'recruiter', permission: 'hr/employee.view' },
+  { role: 'recruiter', permission: 'hr/employee.export' },
   // hiring-manager role
   { role: 'hiring-manager', permission: 'hr/candidate.view' },
   { role: 'hiring-manager', permission: 'hr/application.view' },

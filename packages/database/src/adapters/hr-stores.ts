@@ -266,6 +266,16 @@ export interface ContractStore {
   }): Promise<{ id: string }>;
   findById(id: string): Promise<ContractRecord | null>;
   updateStatus(id: string, status: string): Promise<void>;
+  /**
+   * S18-B2: paginated list for /api/hr/contracts. Same hard cap of
+   * 200 rows as CandidateStore.list — the audit `recordCount`
+   * magnitude must stay bounded for anomaly-gate per-actor scoring.
+   */
+  list(params?: {
+    status?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<readonly ContractRecord[]>;
 }
 
 export interface ContractRecord {
@@ -313,6 +323,33 @@ export function createDrizzleContractStore(db: DrizzleClient): ContractStore {
         .update(contracts)
         .set({ status, updatedAt: new Date() })
         .where(eq(contracts.id, id));
+    },
+
+    async list(params) {
+      const limit = Math.min(params?.limit ?? 50, 200);
+      const offset = params?.offset ?? 0;
+      const rows = params?.status
+        ? await db
+            .select()
+            .from(contracts)
+            .where(eq(contracts.status, params.status))
+            .limit(limit)
+            .offset(offset)
+        : await db
+            .select()
+            .from(contracts)
+            .limit(limit)
+            .offset(offset);
+      return rows.map((r: typeof contracts.$inferSelect) => ({
+        id: r.id,
+        candidateId: r.candidateId,
+        templateSlug: r.templateSlug,
+        terms: r.terms,
+        version: r.version,
+        status: r.status,
+        complianceFlags: r.complianceFlags,
+        createdAt: r.createdAt,
+      }));
     },
   };
 }
