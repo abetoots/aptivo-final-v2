@@ -134,38 +134,66 @@ export const onboardingFn = inngest.createFunction(
       return store.findOrCreate({ candidateId, contractId });
     });
 
-    // emit started event so downstream consumers (admin dashboards) react
-    await step.run('emit-started', () =>
-      inngest.send({
-        name: 'hr/onboarding.started',
-        data: {
-          onboardingId: onboardingRow.id,
-          candidateId,
-          contractId,
-          initiatedBy: approverId,
-          startedAt: signedAt,
-        },
-      }),
-    );
+    // Round-1 multi-model review (Codex HIGH + Gemini CRITICAL +
+    // test-quality-assessor MEDIUM): the prior version had a single
+    // short-circuit only at `state === 'onboarded'`. Re-triggering at
+    // any intermediate state (docs_collected, manager_assigned,
+    // approved) replayed earlier transitions, REWINDING state and
+    // creating duplicate HITL requests + duplicate emit-started
+    // events. The fix uses a state-rank ordering: each transition
+    // (and its preceding emit/audit) only runs when the row's
+    // current state is strictly earlier in the sequence.
+    //
+    // STATE_RANK encodes the linear progression. recordStepFailure
+    // does NOT change state, so a row at any rank can re-enter from
+    // its own rank (recordStepFailure is the documented retry
+    // surface).
+    const STATE_RANK: Record<string, number> = {
+      pending: 0,
+      docs_collected: 1,
+      manager_assigned: 2,
+      approved: 3,
+      onboarded: 4,
+      cancelled: 99,
+    };
+    const currentRank = STATE_RANK[onboardingRow.state] ?? 0;
+    const past = (target: keyof typeof STATE_RANK) => currentRank >= STATE_RANK[target]!;
 
-    // S18-A1: emit started audit attributed to the contract approver.
-    // The approver IS the user-of-record at this point — they signed
-    // the contract that triggered onboarding.
-    await step.run('audit-started', () =>
-      emitAudit({
-        actor: { id: approverId, type: 'user' },
-        action: 'hr.onboarding.started',
-        resource: { type: 'hr-onboarding', id: onboardingRow.id },
-        domain: 'hr',
-        metadata: { candidateId, contractId, signedAt },
-      }),
-    );
+    // emit-started + audit-started are idempotent in their own right
+    // (event-broker dedupe + audit-trail append), but skipping them on
+    // re-trigger keeps the audit log free of spurious "started"
+    // entries that don't reflect new lifecycle activity. Run only
+    // when the row is brand-new (state === 'pending').
+    if (!past('docs_collected')) {
+      await step.run('emit-started', () =>
+        inngest.send({
+          name: 'hr/onboarding.started',
+          data: {
+            onboardingId: onboardingRow.id,
+            candidateId,
+            contractId,
+            initiatedBy: approverId,
+            startedAt: signedAt,
+          },
+        }),
+      );
 
-    // Idempotency short-circuit: if the row was already past `pending`,
-    // a previous run got further. Re-driving from this point would
-    // duplicate work; resume by reading the current state and
-    // returning the appropriate result.
-    if (onboardingRow.state === 'onboarded') {
+      // S18-A1: emit started audit attributed to the contract approver.
+      // The approver IS the user-of-record at this point — they signed
+      // the contract that triggered onboarding.
+      await step.run('audit-started', () =>
+        emitAudit({
+          actor: { id: approverId, type: 'user' },
+          action: 'hr.onboarding.started',
+          resource: { type: 'hr-onboarding', id: onboardingRow.id },
+          domain: 'hr',
+          metadata: { candidateId, contractId, signedAt },
+        }),
+      );
+    }
+
+    // Terminal idempotency: existing onboarded row → return immediately.
+    if (past('onboarded')) {
       return {
         status: 'onboarded',
         onboardingId: onboardingRow.id,
@@ -173,22 +201,27 @@ export const onboardingFn = inngest.createFunction(
       };
     }
 
-    // step 2: docs-collected — seed the default task checklist
-    const docsResult = await step.run('docs-collected', async () => {
-      const store = getHrOnboardingStore();
-      try {
-        await store.seedTasks(onboardingRow.id, DEFAULT_TASKS);
-        await store.transitionState(onboardingRow.id, 'docs_collected');
-        return { success: true as const };
-      } catch (err: unknown) {
-        const reason = err instanceof Error ? err.message : String(err);
-        await store.recordStepFailure(onboardingRow.id, `docs-collected: ${reason}`);
-        return { success: false as const, error: reason };
-      }
-    });
+    // step 2: docs-collected — seed the default task checklist.
+    // seedTasks is itself idempotent (onConflictDoNothing on the
+    // (onboardingId, slug) unique index), but we still gate on rank
+    // so transitionState doesn't rewind a row already past this stage.
+    if (!past('docs_collected')) {
+      const docsResult = await step.run('docs-collected', async () => {
+        const store = getHrOnboardingStore();
+        try {
+          await store.seedTasks(onboardingRow.id, DEFAULT_TASKS);
+          await store.transitionState(onboardingRow.id, 'docs_collected');
+          return { success: true as const };
+        } catch (err: unknown) {
+          const reason = err instanceof Error ? err.message : String(err);
+          await store.recordStepFailure(onboardingRow.id, `docs-collected: ${reason}`);
+          return { success: false as const, error: reason };
+        }
+      });
 
-    if (!docsResult.success) {
-      return { status: 'error', step: 'docs-collected', error: docsResult.error };
+      if (!docsResult.success) {
+        return { status: 'error', step: 'docs-collected', error: docsResult.error };
+      }
     }
 
     // step 3: manager-assigned. Manager lookup is a placeholder for
@@ -196,28 +229,86 @@ export const onboardingFn = inngest.createFunction(
     // assume the contract's department head is the manager;
     // approverId acts as a stand-in. Real RBAC-driven manager
     // resolution is a S19+ task.
-    const managerResult = await step.run('manager-assigned', async () => {
-      const store = getHrOnboardingStore();
-      try {
-        // placeholder: approverId stands in for the manager
-        await store.transitionState(onboardingRow.id, 'manager_assigned', {
-          managerId: approverId,
-        });
-        return { success: true as const, managerId: approverId };
-      } catch (err: unknown) {
-        const reason = err instanceof Error ? err.message : String(err);
-        await store.recordStepFailure(onboardingRow.id, `manager-assigned: ${reason}`);
-        return { success: false as const, error: reason };
-      }
-    });
+    //
+    // Resumption: when the row is already past `manager_assigned`,
+    // pull the persisted managerId off the row (or fall back to
+    // approverId if it's somehow null on the persisted row — the
+    // workflow always writes managerId at this transition, so the
+    // fallback is purely defensive).
+    type ManagerStepResult =
+      | { readonly success: true; readonly managerId: string }
+      | { readonly success: false; readonly error: string };
+    let managerResult: ManagerStepResult;
+    if (past('manager_assigned')) {
+      managerResult = {
+        success: true,
+        managerId: onboardingRow.managerId ?? approverId,
+      };
+    } else {
+      managerResult = await step.run('manager-assigned', async () => {
+        const store = getHrOnboardingStore();
+        try {
+          // placeholder: approverId stands in for the manager
+          await store.transitionState(onboardingRow.id, 'manager_assigned', {
+            managerId: approverId,
+          });
+          return { success: true as const, managerId: approverId };
+        } catch (err: unknown) {
+          const reason = err instanceof Error ? err.message : String(err);
+          await store.recordStepFailure(onboardingRow.id, `manager-assigned: ${reason}`);
+          return { success: false as const, error: reason };
+        }
+      });
 
-    if (!managerResult.success) {
-      return { status: 'error', step: 'manager-assigned', error: managerResult.error };
+      if (!managerResult.success) {
+        return { status: 'error', step: 'manager-assigned', error: managerResult.error };
+      }
     }
 
     // step 4: hitl-request — manager + HR head sign-off via the
     // gateway's single-approver flow. The S20+ HR admin UI may
     // promote this to a multi-approver chain.
+    //
+    // Resumption short-circuit: if the row is already past `approved`,
+    // a previous run successfully completed the HITL gate. Skip
+    // straight to the onboarded transition. Approval-stage rows
+    // resume into the wait-for-decision phase using the persisted
+    // hitl_request_id.
+    if (past('approved')) {
+      // jump to the onboarded transition + emit-completed below
+      await step.run('onboarded-transition', async () => {
+        const store = getHrOnboardingStore();
+        await store.transitionState(onboardingRow.id, 'onboarded');
+      });
+
+      const approvedBy = onboardingRow.approvedBy ?? approverId;
+      await step.run('emit-completed', () =>
+        inngest.send({
+          name: 'hr/onboarding.completed',
+          data: {
+            onboardingId: onboardingRow.id,
+            candidateId,
+            approvedBy,
+            completedAt: new Date().toISOString(),
+          },
+        }),
+      );
+      await step.run('audit-onboarded', () =>
+        emitAudit({
+          actor: { id: approvedBy, type: 'user' },
+          action: 'hr.onboarding.completed',
+          resource: { type: 'hr-onboarding', id: onboardingRow.id },
+          domain: 'hr',
+          metadata: { candidateId, contractId, resumedFromState: onboardingRow.state },
+        }),
+      );
+      return {
+        status: 'onboarded',
+        onboardingId: onboardingRow.id,
+        candidateId,
+      };
+    }
+
     const hitlResult = await step.run('hitl-request', async () => {
       try {
         const deps = getHitlRequestDeps();
@@ -311,21 +402,28 @@ export const onboardingFn = inngest.createFunction(
 
     // S18-A1 + B1 round-2 pattern: pre-acceptance check on
     // approverId. A malformed HITL payload should fail-closed before
-    // we transition the state row. surface via recordStepFailure so
-    // ops can investigate.
-    if (decisionData.decision === 'approved' && !decisionData.approverId) {
+    // we transition the state row. Round-1 review fix
+    // (test-quality-assessor): the previous version only guarded
+    // `decision === 'approved' && !approverId`. A rejection with
+    // missing approverId fell through to the rejection branch with
+    // `actor: { id: 'system', type: 'system' }`, breaking the
+    // S18-A1 attribution claim for rejection terminals. Both
+    // approved AND rejected outcomes require approverId now.
+    if (!decisionData.approverId) {
       const store = getHrOnboardingStore();
-      await store.recordStepFailure(
-        onboardingRow.id,
-        'HITL approval payload missing approverId; refused to mark onboarding approved',
-      );
+      const reason = `HITL ${decisionData.decision} payload missing approverId; refused to record terminal`;
+      await store.recordStepFailure(onboardingRow.id, reason);
       await step.run('audit-malformed-approval', () =>
         emitAudit({
           actor: { id: 'system', type: 'system' },
           action: 'hr.onboarding.malformed-approval',
           resource: { type: 'hr-onboarding', id: onboardingRow.id },
           domain: 'hr',
-          metadata: { candidateId, requestId: hitlResult.requestId },
+          metadata: {
+            candidateId,
+            requestId: hitlResult.requestId,
+            decision: decisionData.decision,
+          },
         }),
       );
       return {

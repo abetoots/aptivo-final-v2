@@ -36,17 +36,27 @@ export async function GET(request: Request) {
     );
   }
 
+  // Round-1 review fix: fail closed on null extractUser.
+  const user = await extractUser(request);
+  if (!user) {
+    return NextResponse.json(
+      {
+        type: '/errors/auth-required',
+        title: 'Authenticated user required for PII export',
+        status: 401,
+      },
+      { status: 401, headers: { 'content-type': 'application/problem+json' } },
+    );
+  }
+
   const store = getContractStore();
   const records = await store.list({ status, limit, offset });
 
-  const user = await extractUser(request);
-  if (user) {
-    const audit = getPiiReadAuditMiddleware();
-    audit
-      .auditPiiReadExport(user.userId, 'contract', records.length, format)
-      .catch(() => {
-        // fire-and-forget
-      });
+  const audit = getPiiReadAuditMiddleware();
+  try {
+    await audit.auditPiiReadExport(user.userId, 'contract', records.length, format);
+  } catch {
+    // factory-level throws only
   }
 
   return NextResponse.json({

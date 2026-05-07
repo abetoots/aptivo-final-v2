@@ -305,6 +305,52 @@ describe('S18-B2: HR onboarding workflow', () => {
     );
   });
 
+  it('malformed REJECTION (decision=rejected but no approverId) → fail-closed (round-1 review fix)', async () => {
+    // test-quality-assessor HIGH #4: prior to the round-1 fix the
+    // workflow's malformed-payload guard only fired on
+    // `decision === 'approved' && !approverId`. Rejections with
+    // missing approverId fell through to the rejection branch with
+    // `actor: { id: 'system', type: 'system' }`, breaking the
+    // S18-A1 attribution claim for rejection terminals.
+    const engine = engineFor({
+      events: triggerEvent(),
+      steps: [
+        {
+          id: 'wait-for-onboarding-decision',
+          handler: () => ({
+            name: 'hitl/decision.recorded',
+            data: {
+              requestId: 'hitl-req-1',
+              decision: 'rejected',
+              decidedAt: '2026-04-29T13:00:00Z',
+              // approverId omitted
+            },
+          }),
+        },
+      ],
+    });
+
+    const { result } = await engine.execute();
+
+    expect(result).toMatchObject({
+      status: 'error',
+      step: 'wait-for-decision',
+      error: expect.stringContaining('missing approverId'),
+    });
+    // critical: no transition to approved or rejected
+    const calls = mockOnboardingStore.transitionState.mock.calls.map(
+      (c) => c[1] as string,
+    );
+    expect(calls).not.toContain('approved');
+    expect(calls).not.toContain('onboarded');
+
+    // recordStepFailure surfaces the malformed payload to admins
+    expect(mockOnboardingStore.recordStepFailure).toHaveBeenCalledWith(
+      'onb-1',
+      expect.stringContaining('missing approverId'),
+    );
+  });
+
   it('malformed approval (decision=approved but no approverId) → fail-closed', async () => {
     const engine = engineFor({
       events: triggerEvent(),
@@ -368,6 +414,134 @@ describe('S18-B2: HR onboarding workflow', () => {
     expect(mockOnboardingStore.transitionState).not.toHaveBeenCalled();
     // no HITL request or wait
     expect(vi.mocked(createRequest)).not.toHaveBeenCalled();
+  });
+
+  // Round-1 multi-model review (Codex HIGH + Gemini CRITICAL +
+  // test-quality-assessor): the original implementation only
+  // short-circuited at state==='onboarded'. Re-trigger at any
+  // intermediate state replayed earlier transitions, REWINDING the
+  // state row and creating duplicate HITL requests. The fix uses a
+  // STATE_RANK ordering so completed transitions are skipped.
+  // These tests pin the new no-rewind invariants.
+  describe('idempotency: re-trigger at intermediate states must NOT rewind', () => {
+    it.each([
+      ['docs_collected'],
+      ['manager_assigned'],
+    ])('re-trigger when row is in %s does not call seedTasks or replay docs_collected/manager_assigned transitions', async (existingState) => {
+      mockOnboardingStore.findOrCreate.mockResolvedValueOnce(
+        onboardingRow({ state: existingState, managerId: APPROVER_ID }),
+      );
+
+      const engine = engineFor({
+        events: triggerEvent(),
+        steps: [
+          {
+            id: 'wait-for-onboarding-decision',
+            handler: () => ({
+              name: 'hitl/decision.recorded',
+              data: {
+                requestId: 'hitl-req-1',
+                decision: 'approved',
+                approverId: HITL_APPROVER,
+                decidedAt: '2026-04-29T13:00:00Z',
+              },
+            }),
+          },
+        ],
+      });
+
+      await engine.execute();
+
+      // critical: seedTasks NOT called when row already past docs_collected
+      expect(mockOnboardingStore.seedTasks).not.toHaveBeenCalled();
+
+      // No transition that would rewind: never call transitionState with
+      // 'docs_collected' on a row that's already at docs_collected or later.
+      const STATE_ORDER = ['pending', 'docs_collected', 'manager_assigned', 'approved', 'onboarded'];
+      const currentIdx = STATE_ORDER.indexOf(existingState);
+      for (const call of mockOnboardingStore.transitionState.mock.calls) {
+        const targetState = call[1] as string;
+        const targetIdx = STATE_ORDER.indexOf(targetState);
+        // Allow record-hitl-request-id step which transitions to the
+        // SAME state with metadata (manager_assigned with hitlRequestId).
+        // Reject any rewind to a strictly earlier rank.
+        expect(targetIdx).toBeGreaterThanOrEqual(currentIdx);
+      }
+    });
+
+    it('re-trigger when row is already approved skips HITL flow entirely and goes straight to onboarded', async () => {
+      mockOnboardingStore.findOrCreate.mockResolvedValueOnce(
+        onboardingRow({
+          state: 'approved',
+          managerId: APPROVER_ID,
+          approvedBy: HITL_APPROVER,
+          hitlRequestId: 'prior-hitl-req',
+        }),
+      );
+
+      const engine = engineFor({ events: triggerEvent() });
+
+      const { result } = await engine.execute();
+
+      expect(result).toMatchObject({ status: 'onboarded', onboardingId: 'onb-1' });
+
+      // critical: no new HITL request created on resumption
+      expect(vi.mocked(createRequest)).not.toHaveBeenCalled();
+      expect(mockOnboardingStore.seedTasks).not.toHaveBeenCalled();
+
+      // exactly one transitionState call: 'approved' → 'onboarded'
+      const transitions = mockOnboardingStore.transitionState.mock.calls.map((c) => c[1]);
+      expect(transitions).toEqual(['onboarded']);
+
+      // completion event emitted with the persisted approvedBy
+      expect(mockSend).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'hr/onboarding.completed',
+          data: expect.objectContaining({ approvedBy: HITL_APPROVER }),
+        }),
+      );
+    });
+
+    it('emit-started + audit-started are skipped on re-trigger of a non-pending row', async () => {
+      // round-1 finding: the prior implementation emitted started
+      // events BEFORE checking state, producing duplicate "started"
+      // entries on every re-trigger.
+      mockOnboardingStore.findOrCreate.mockResolvedValueOnce(
+        onboardingRow({ state: 'manager_assigned' }),
+      );
+
+      const engine = engineFor({
+        events: triggerEvent(),
+        steps: [
+          {
+            id: 'wait-for-onboarding-decision',
+            handler: () => ({
+              name: 'hitl/decision.recorded',
+              data: {
+                requestId: 'hitl-req-1',
+                decision: 'approved',
+                approverId: HITL_APPROVER,
+                decidedAt: '2026-04-29T13:00:00Z',
+              },
+            }),
+          },
+        ],
+      });
+
+      await engine.execute();
+
+      // hr/onboarding.started should NOT have been emitted
+      const startedEmits = mockSend.mock.calls.filter(
+        (c) => (c[0] as { name?: string }).name === 'hr/onboarding.started',
+      );
+      expect(startedEmits).toHaveLength(0);
+
+      // hr.onboarding.started audit should NOT have been emitted
+      const startedAudits = mockAuditService.emit.mock.calls.filter(
+        (c) => (c[0] as { action?: string }).action === 'hr.onboarding.started',
+      );
+      expect(startedAudits).toHaveLength(0);
+    });
   });
 
   it('docs-collected step failure → records the failure and returns error', async () => {

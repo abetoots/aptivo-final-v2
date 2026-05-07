@@ -41,21 +41,37 @@ export async function GET(request: Request) {
   const offset = Math.max(0, parseInt(url.searchParams.get('offset') ?? '0', 10) || 0);
   const status = url.searchParams.get('status') ?? undefined;
 
+  // Round-1 review fix (Codex MEDIUM): RBAC may pass via dev-mode
+  // x-user-role header even when extractUser returns null. Reading
+  // PII without an authenticated identity means the audit emit
+  // can't attribute (anomaly aggregate stays inert) — fail closed.
+  const user = await extractUser(request);
+  if (!user) {
+    return NextResponse.json(
+      {
+        type: '/errors/auth-required',
+        title: 'Authenticated user required for PII read',
+        status: 401,
+      },
+      { status: 401, headers: { 'content-type': 'application/problem+json' } },
+    );
+  }
+
   const store = getCandidateStore();
   const records = await store.list({ status, limit, offset });
 
   // S18-B2 PII audit emit — load-bearing for the anomaly-gate-matches-
-  // HR claim. Fire-and-forget: a failed audit emit must not block the
-  // response (the audit-service path itself handles its own retries
-  // via the DLQ).
-  const user = await extractUser(request);
-  if (user) {
-    const audit = getPiiReadAuditMiddleware();
-    audit
-      .auditPiiReadBulk(user.userId, 'candidate', records.length)
-      .catch(() => {
-        // swallow — audit emit failures don't block the response
-      });
+  // HR claim. Awaited (round-1 review fix from Codex + Gemini): the
+  // prior fire-and-forget pattern using detached promises could be
+  // dropped on serverless teardown before the emit completed,
+  // silently losing compliance-critical audit rows.
+  const audit = getPiiReadAuditMiddleware();
+  try {
+    await audit.auditPiiReadBulk(user.userId, 'candidate', records.length);
+  } catch {
+    // Factory-level throws only; middleware itself returns Result
+    // and won't throw. Bounded swallow keeps reads non-blocking on
+    // catastrophic init failures.
   }
 
   return NextResponse.json({

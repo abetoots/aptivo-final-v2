@@ -42,17 +42,29 @@ export async function GET(request: Request) {
     );
   }
 
+  // Round-1 review fix: fail closed when extractUser returns null
+  // (RBAC may have passed via dev-mode x-user-role header).
+  const user = await extractUser(request);
+  if (!user) {
+    return NextResponse.json(
+      {
+        type: '/errors/auth-required',
+        title: 'Authenticated user required for PII export',
+        status: 401,
+      },
+      { status: 401, headers: { 'content-type': 'application/problem+json' } },
+    );
+  }
+
   const store = getCandidateStore();
   const records = await store.list({ status, limit, offset });
 
-  const user = await extractUser(request);
-  if (user) {
-    const audit = getPiiReadAuditMiddleware();
-    audit
-      .auditPiiReadExport(user.userId, 'candidate', records.length, format)
-      .catch(() => {
-        // fire-and-forget; audit-service handles its own retries via DLQ
-      });
+  // Round-1 review fix: awaited audit emit; see /api/hr/candidates.
+  const audit = getPiiReadAuditMiddleware();
+  try {
+    await audit.auditPiiReadExport(user.userId, 'candidate', records.length, format);
+  } catch {
+    // factory-level throws only; middleware itself returns Result
   }
 
   return NextResponse.json({

@@ -1016,9 +1016,18 @@ export const getHrOnboardingStore = lazy(() =>
 );
 
 // S18-B2: requireConsent middleware (FR-HR-CM-005). Looks up
-// `consent_records` for active consents on a candidate; falls open
+// `consent_records` for the candidate's consent state; falls open
 // only on the self-access exemption (candidate's email matches the
 // requesting user's email).
+//
+// Round-1 multi-model review (Codex MEDIUM + test-quality-assessor
+// HIGH): the prior SQL filtered `WHERE withdrawn_at IS NULL`, which
+// made the `consent-withdrawn` branch in require-consent.ts dead
+// code in production. Withdrawn-vs-never-granted produced the same
+// `consent-required` user-facing reason. The fix returns the most
+// recent record regardless of withdrawn_at; the middleware
+// distinguishes the two cases via the `withdrawnAt` field for
+// audit/UX clarity.
 export const getRequireConsent = lazy(() =>
   createRequireConsent({
     findActiveConsent: async (candidateId, consentType) => {
@@ -1034,12 +1043,13 @@ export const getRequireConsent = lazy(() =>
         }>>;
       };
       // raw SQL to avoid coupling to schema-table imports here; the
-      // consentRecords table shape is stable per @aptivo/database
+      // consentRecords table shape is stable per @aptivo/database.
+      // NO `withdrawn_at IS NULL` clause — middleware needs the row
+      // even if withdrawn so it can surface the distinct deny reason.
       const { sql } = await import('drizzle-orm');
       const result = await drizzle.execute(
         sql`SELECT consent_type, consent_date, withdrawn_at FROM consent_records
             WHERE candidate_id = ${candidateId} AND consent_type = ${consentType}
-              AND withdrawn_at IS NULL
             ORDER BY consent_date DESC LIMIT 1`,
       );
       const rows = Array.isArray(result) ? result : (result.rows ?? []);

@@ -31,9 +31,15 @@ export const HR_PERMISSIONS = [
   { role: 'recruiter', permission: 'hr/employee.view' },
   { role: 'recruiter', permission: 'hr/employee.export' },
   // S18-B2: onboarding read endpoint. Recruiter + hiring-manager can
-  // view onboarding state (admin tooling); the candidate themselves
-  // gets through via the requireConsent self-access exemption rather
-  // than a role-based grant.
+  // view onboarding state (admin tooling).
+  //
+  // Note: candidates do NOT have an auth path to the onboarding read
+  // endpoint today — there's no candidate→user mapping, no candidate
+  // portal, and the dev-mode RBAC stub doesn't accept a `candidate`
+  // role. The `requireConsent` middleware's self-access exemption
+  // remains a forward-looking primitive (see require-consent.ts) but
+  // is unreachable through this endpoint until the candidate portal
+  // lands in Phase 3.5.
   { role: 'recruiter', permission: 'hr/onboarding.view' },
   // hiring-manager role
   { role: 'hiring-manager', permission: 'hr/candidate.view' },

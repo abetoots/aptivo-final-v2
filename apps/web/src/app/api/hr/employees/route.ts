@@ -32,17 +32,27 @@ export async function GET(request: Request) {
   const limit = Math.min(200, Math.max(1, parseInt(url.searchParams.get('limit') ?? '50', 10) || 50));
   const offset = Math.max(0, parseInt(url.searchParams.get('offset') ?? '0', 10) || 0);
 
+  // Round-1 review fix: fail closed on null extractUser.
+  const user = await extractUser(request);
+  if (!user) {
+    return NextResponse.json(
+      {
+        type: '/errors/auth-required',
+        title: 'Authenticated user required for PII read',
+        status: 401,
+      },
+      { status: 401, headers: { 'content-type': 'application/problem+json' } },
+    );
+  }
+
   const store = getCandidateStore();
   const records = await store.list({ status: 'hired', limit, offset });
 
-  const user = await extractUser(request);
-  if (user) {
-    const audit = getPiiReadAuditMiddleware();
-    audit
-      .auditPiiReadBulk(user.userId, 'employee', records.length)
-      .catch(() => {
-        // fire-and-forget
-      });
+  const audit = getPiiReadAuditMiddleware();
+  try {
+    await audit.auditPiiReadBulk(user.userId, 'employee', records.length);
+  } catch {
+    // factory-level throws only
   }
 
   return NextResponse.json({
