@@ -16,6 +16,9 @@ export * from './websocket-events.js';
 // S17-CT-1: ticket lifecycle Inngest event schemas (Epic 4)
 export * from './events/ticket.js';
 
+// S18-B2: HR onboarding lifecycle Inngest event schemas (Epic 5)
+export * from './events/hr.js';
+
 // Tagged union error types and factory functions
 export type {
   ValidationError,

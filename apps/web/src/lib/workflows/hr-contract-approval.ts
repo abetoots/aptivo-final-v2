@@ -367,7 +367,7 @@ export const contractApprovalFn = inngest.createFunction(
       };
     }
 
-    // emit domain event for downstream consumers
+    // emit domain event for downstream consumers (back-compat)
     await step.run('emit-contract-approved', async () => {
       await inngest.send({
         name: 'hr/contract.approved',
@@ -379,6 +379,27 @@ export const contractApprovalFn = inngest.createFunction(
         },
       });
     });
+
+    // S18-B2: new `hr/contract.signed` emit triggers the onboarding
+    // workflow (separate event from `hr.contract.approved` because the
+    // onboarding flow needs the approverId for S18-A1 audit
+    // attribution; the legacy event lacks that field). Emitted only
+    // when the approverId is present — without it the onboarding
+    // would have no user to attribute to and the trigger event would
+    // be malformed.
+    if (decisionData.approverId) {
+      await step.run('emit-contract-signed', async () => {
+        await inngest.send({
+          name: 'hr/contract.signed',
+          data: {
+            contractId: draftResult.contractId,
+            candidateId,
+            approverId: decisionData.approverId!,
+            signedAt: new Date().toISOString(),
+          },
+        });
+      });
+    }
 
     return {
       status: 'signed',

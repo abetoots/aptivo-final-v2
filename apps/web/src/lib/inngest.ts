@@ -17,6 +17,10 @@ import { DATA_DELETION_EVENT } from '@aptivo/mcp-layer/workflows';
 // in-domain. Including approverId in the schema means step.waitForEvent
 // infers it directly; consumers no longer cast.
 import type { HitlDecisionPayload, HitlDecisionRecorded } from '@aptivo/types';
+// S18-B2: HR onboarding lifecycle event types — register with Inngest
+// so the workflow's `step.sendEvent` and `step.waitForEvent` calls
+// get type narrowing without `as` casts.
+import type { HrOnboardingEvents } from '@aptivo/types';
 
 // -- spike event schemas (backward compatibility) --
 
@@ -302,7 +306,7 @@ type HitlV2Events = {
 
 export const inngest = new Inngest({
   id: 'aptivo-platform',
-  schemas: new EventSchemas().fromRecord<SpikeEvents & PlatformEvents & DemoEvents & CryptoEvents & HrEvents & SloEvents & OrchestrationEvents & HitlV2Events & ConsentEvents>(),
+  schemas: new EventSchemas().fromRecord<SpikeEvents & PlatformEvents & DemoEvents & CryptoEvents & HrEvents & HrOnboardingEvents & SloEvents & OrchestrationEvents & HitlV2Events & ConsentEvents>(),
 });
 
 // -- SP-01 functions --
